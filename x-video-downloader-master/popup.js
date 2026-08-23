@@ -1,13 +1,20 @@
+// ==========================================================================
+// popup.js — Bulk controls: max items, media filter, scroll speed, start/stop
+// ==========================================================================
+
 const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
 const statusEl = document.getElementById("status");
-const maxVideosInput = document.getElementById("maxVideos");
+const warningEl = document.getElementById("warning");
+const maxMediaInput = document.getElementById("maxMedia");
+const mediaFilterSelect = document.getElementById("mediaFilter");
 const scrollSpeedSelect = document.getElementById("scrollSpeed");
 
 // Load saved settings
-chrome.storage.local.get(["maxVideos", "scrollSpeed"], (data) => {
-  if (data.maxVideos) maxVideosInput.value = data.maxVideos;
+chrome.storage.local.get(["maxMedia", "scrollSpeed", "mediaFilter"], (data) => {
+  if (data.maxMedia) maxMediaInput.value = data.maxMedia;
   if (data.scrollSpeed) scrollSpeedSelect.value = data.scrollSpeed;
+  if (data.mediaFilter) mediaFilterSelect.value = data.mediaFilter;
 });
 
 // Poll status from content script
@@ -25,11 +32,20 @@ function pollStatus() {
 setInterval(pollStatus, 1000);
 pollStatus();
 
+// Start button
 startBtn.addEventListener("click", () => {
-  const maxVideos = parseInt(maxVideosInput.value) || 100;
+  const maxMedia = parseInt(maxMediaInput.value) || 100;
   const scrollSpeed = scrollSpeedSelect.value;
+  const mediaFilter = mediaFilterSelect.value;
 
-  chrome.storage.local.set({ maxVideos, scrollSpeed });
+  chrome.storage.local.set({ maxMedia, scrollSpeed, mediaFilter });
+
+  // Show warning for fast speed
+  warningEl.style.display = "none";
+  if (scrollSpeed === "fast") {
+    warningEl.textContent = "Fast speed may trigger rate limits. Use slow/medium for reliability.";
+    warningEl.style.display = "block";
+  }
 
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     if (!tabs[0]) return;
@@ -39,11 +55,15 @@ startBtn.addEventListener("click", () => {
       statusEl.className = "status stopped";
       return;
     }
-    chrome.tabs.sendMessage(tabs[0].id, {
+
+    const payload = {
       action: "start",
-      maxVideos,
-      scrollSpeed
-    }, (resp) => {
+      maxMedia,
+      scrollSpeed,
+      mediaFilter
+    };
+
+    chrome.tabs.sendMessage(tabs[0].id, payload, (resp) => {
       if (chrome.runtime.lastError) {
         statusEl.textContent = "Reloading page to inject script...";
         chrome.scripting.executeScript({
@@ -51,13 +71,14 @@ startBtn.addEventListener("click", () => {
           files: ["content.js"]
         }, () => {
           setTimeout(() => {
-            chrome.tabs.sendMessage(tabs[0].id, {
-              action: "start",
-              maxVideos,
-              scrollSpeed
-            });
+            chrome.tabs.sendMessage(tabs[0].id, payload);
           }, 500);
         });
+        return;
+      }
+      if (resp && !resp.ok) {
+        statusEl.textContent = resp.reason || "Could not start";
+        statusEl.className = "status stopped";
         return;
       }
       pollStatus();
@@ -68,6 +89,7 @@ startBtn.addEventListener("click", () => {
   statusEl.className = "status running";
 });
 
+// Stop button
 stopBtn.addEventListener("click", () => {
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     if (!tabs[0]) return;
@@ -75,4 +97,5 @@ stopBtn.addEventListener("click", () => {
   });
   statusEl.textContent = "Stopped";
   statusEl.className = "status stopped";
+  warningEl.style.display = "none";
 });
