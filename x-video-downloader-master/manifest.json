@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "X Video Downloader",
-  "version": "2.0",
-  "description": "Auto-scroll and download videos from X/Twitter feed",
+  "name": "X Media Downloader",
+  "version": "3.0",
+  "description": "Download videos and photos from X/Twitter — single click or bulk auto-scroll",
   "permissions": [
     "downloads",
     "storage",
@@ -15,6 +15,7 @@
     "https://x.com/*",
     "https://twitter.com/*",
     "https://video.twimg.com/*",
+    "https://pbs.twimg.com/*",
     "https://api.x.com/*"
   ],
   "background": {

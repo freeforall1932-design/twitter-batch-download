@@ -1,4 +1,8 @@
-// Content script — runs in ISOLATED world, has chrome.* APIs
+// ==========================================================================
+// content.js — DOM observer, button injection, bulk scroll loop
+// Runs in ISOLATED world on x.com / twitter.com
+// ==========================================================================
+
 (() => {
   if (window.__xdl_active !== undefined) {
     console.log("[X-DL] Already injected");
@@ -7,14 +11,18 @@
   window.__xdl_active = false;
   console.log("[X-DL] Content script loaded on:", window.location.href);
 
+  // --- State ---
   let downloaded = 0;
-  let maxVideos = 100;
+  let maxMedia = 100;
   let scrollSpeed = "medium";
+  let mediaFilter = "all"; // "all" | "video" | "photo"
+  let useZip = false;
   let running = false;
   let statusText = "Ready";
   let statusState = "";
   const processedTweets = new Set();
   let envReady = false;
+  let bulkId = 0; // unique ID for each bulk session
 
   const SCROLL_CONFIG = {
     slow: { distance: 400, interval: 3500 },
@@ -22,9 +30,10 @@
     fast: { distance: 900, interval: 1400 }
   };
 
-  // ---------------------------------------------------------------
-  // Styles for the download button injected into tweets
-  // ---------------------------------------------------------------
+  // ==========================================================================
+  // UI STYLES — Download button styling
+  // ==========================================================================
+
   const style = document.createElement("style");
   style.textContent = `
     .xdl-btn {
@@ -70,6 +79,10 @@
   const DOWNLOAD_SVG = `<svg viewBox="0 0 24 24"><path d="M12 2a1 1 0 0 1 1 1v10.59l3.3-3.3a1 1 0 1 1 1.4 1.42l-5 5a1 1 0 0 1-1.4 0l-5-5a1 1 0 1 1 1.4-1.42l3.3 3.3V3a1 1 0 0 1 1-1zM5 20a1 1 0 1 0 0 2h14a1 1 0 1 0 0-2H5z"/></svg>`;
   const CHECK_SVG = `<svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>`;
 
+  // ==========================================================================
+  // UTILITIES
+  // ==========================================================================
+
   function sanitizeFilename(text) {
     return text
       .replace(/https?:\/\/\S+/g, "")
@@ -78,17 +91,23 @@
       .replace(/#(\w+)/g, "$1")
       .replace(/\s+/g, " ")
       .trim()
-      .substring(0, 80) || "video";
+      .substring(0, 80) || "media";
   }
 
   function sleep(ms) {
     return new Promise((r) => setTimeout(r, ms));
   }
 
+  // ==========================================================================
+  // DOM — Extract tweet info from article node
+  // ==========================================================================
+
   function getTweetInfo(article) {
+    // Tweet text
     const tweetTextEl = article.querySelector('[data-testid="tweetText"]');
     const tweetText = tweetTextEl ? tweetTextEl.innerText : "";
 
+    // Author handle — find first link matching /username pattern
     let handle = "";
     const allLinks = article.querySelectorAll('a[role="link"]');
     for (const link of allLinks) {
@@ -99,6 +118,7 @@
       }
     }
 
+    // Tweet ID from the timestamp link
     const timeEl = article.querySelector("time");
     const tweetLink = timeEl ? timeEl.closest("a") : null;
     const tweetHref = tweetLink ? tweetLink.getAttribute("href") : null;
@@ -109,47 +129,47 @@
       if (match) tweetId = match[1];
     }
 
+    // Detect media types present in this tweet
     const hasVideo =
       article.querySelector("video") !== null ||
       article.querySelector('[data-testid="videoPlayer"]') !== null ||
       article.querySelector('[data-testid="videoComponent"]') !== null;
 
-    return { tweetText, handle, tweetId, tweetHref, hasVideo };
+    // Photo detection — look for tweetPhoto testid or images within media containers
+    const photoElements = article.querySelectorAll('[data-testid="tweetPhoto"]');
+    const hasPhoto = photoElements.length > 0 && !hasVideo;
+
+    // Also check for images that aren't inside video players
+    let hasPhotoFallback = false;
+    if (!hasPhoto && !hasVideo) {
+      const images = article.querySelectorAll('img[src*="pbs.twimg.com/media"]');
+      hasPhotoFallback = images.length > 0;
+    }
+
+    return {
+      tweetText,
+      handle,
+      tweetId,
+      tweetHref,
+      hasVideo,
+      hasPhoto: hasPhoto || hasPhotoFallback,
+      hasMedia: hasVideo || hasPhoto || hasPhotoFallback
+    };
   }
 
-  function getVideoUrl(tweetId) {
+  // ==========================================================================
+  // API COMMUNICATION — Talk to background.js
+  // ==========================================================================
+
+  function sendMessage(action, data = {}) {
     return new Promise((resolve) => {
-      chrome.runtime.sendMessage({ action: "getVideoUrl", tweetId }, (resp) => {
+      chrome.runtime.sendMessage({ action, ...data }, (resp) => {
         if (chrome.runtime.lastError) {
-          console.error("[X-DL] getVideoUrl error:", chrome.runtime.lastError.message);
+          console.error(`[X-DL] ${action} error:`, chrome.runtime.lastError.message);
           resolve(null);
           return;
         }
-        if (resp?.error && resp.error !== "protected_or_deleted") {
-          console.error("[X-DL] API error for tweet:", tweetId, "->", resp.error);
-        } else if (resp?.error) {
-          console.log("[X-DL] Skipping protected/deleted tweet:", tweetId);
-        }
-        resolve(resp?.url || null);
-      });
-    });
-  }
-
-  function downloadVideo(url, filename) {
-    return new Promise((resolve) => {
-      chrome.runtime.sendMessage({ action: "downloadVideo", url, filename }, (resp) => {
-        if (chrome.runtime.lastError) {
-          console.error("[X-DL] download error:", chrome.runtime.lastError.message);
-          resolve(false);
-          return;
-        }
-        if (resp?.success) {
-          console.log("[X-DL] Downloaded:", filename, "(" + resp.sizeMB + " MB)");
-          resolve(true);
-        } else {
-          console.warn("[X-DL] Download failed:", resp?.error);
-          resolve(false);
-        }
+        resolve(resp);
       });
     });
   }
@@ -169,9 +189,18 @@
     });
   }
 
-  // ---------------------------------------------------------------
-  // Individual download button on each video tweet
-  // ---------------------------------------------------------------
+  function getTweetMedia(tweetId) {
+    return sendMessage("getTweetMedia", { tweetId });
+  }
+
+  function downloadFile(url, filename) {
+    return sendMessage("downloadFile", { url, filename });
+  }
+
+  // ==========================================================================
+  // SINGLE DOWNLOAD — Handle click on a tweet's download button
+  // ==========================================================================
+
   async function handleSingleDownload(btn, article) {
     if (btn.classList.contains("xdl-loading")) return;
 
@@ -183,9 +212,9 @@
     }
 
     btn.classList.add("xdl-loading");
-    btn.innerHTML = `${DOWNLOAD_SVG} Getting URL...`;
+    btn.innerHTML = `${DOWNLOAD_SVG} Fetching...`;
 
-    // Init env if not ready yet
+    // Init auth if needed
     if (!envReady) {
       const ok = await initEnv();
       if (!ok) {
@@ -197,27 +226,56 @@
       }
     }
 
-    const videoUrl = await getVideoUrl(info.tweetId);
-    if (!videoUrl) {
+    const media = await getTweetMedia(info.tweetId);
+    if (!media || media.error) {
       btn.classList.remove("xdl-loading");
-      btn.classList.add("xdl-error");
-      btn.innerHTML = `${DOWNLOAD_SVG} Protected/N/A`;
+      if (media?.error === "protected_or_deleted") {
+        btn.classList.add("xdl-error");
+        btn.innerHTML = `${DOWNLOAD_SVG} Protected/N/A`;
+      } else {
+        btn.classList.add("xdl-error");
+        btn.innerHTML = `${DOWNLOAD_SVG} No media`;
+      }
       setTimeout(() => resetBtn(btn), 3000);
       return;
     }
 
-    btn.innerHTML = `${DOWNLOAD_SVG} Downloading...`;
+    const safeName = sanitizeFilename(info.tweetText || media.tweetText);
+    const handle = info.handle || media.username || "unknown";
 
-    const safeName = sanitizeFilename(info.tweetText);
-    const handle = info.handle || "unknown";
-    const filename = `x-videos/${handle}_${safeName}.mp4`;
+    // Download videos
+    let successCount = 0;
+    if (media.videos && media.videos.length > 0) {
+      for (let i = 0; i < media.videos.length; i++) {
+        const v = media.videos[i];
+        const suffix = media.videos.length > 1 ? `_vid${i + 1}` : "";
+        const filename = `x-media/${handle}_${safeName}${suffix}.mp4`;
 
-    const success = await downloadVideo(videoUrl, filename);
+        btn.innerHTML = `${DOWNLOAD_SVG} Video ${i + 1}/${media.videos.length}...`;
+        const result = await downloadFile(v.url, filename);
+        if (result?.success) successCount++;
+      }
+    }
+
+    // Download photos
+    if (media.photos && media.photos.length > 0) {
+      for (let i = 0; i < media.photos.length; i++) {
+        const p = media.photos[i];
+        // Determine extension from URL
+        const ext = getPhotoExtension(p.url);
+        const suffix = media.photos.length > 1 ? `_img${i + 1}` : "";
+        const filename = `x-media/${handle}_${safeName}${suffix}.${ext}`;
+
+        btn.innerHTML = `${DOWNLOAD_SVG} Photo ${i + 1}/${media.photos.length}...`;
+        const result = await downloadFile(p.url, filename);
+        if (result?.success) successCount++;
+      }
+    }
 
     btn.classList.remove("xdl-loading");
-    if (success) {
+    if (successCount > 0) {
       btn.classList.add("xdl-done");
-      btn.innerHTML = `${CHECK_SVG} Saved`;
+      btn.innerHTML = `${CHECK_SVG} Saved (${successCount})`;
     } else {
       btn.classList.add("xdl-error");
       btn.innerHTML = `${DOWNLOAD_SVG} Failed`;
@@ -225,10 +283,23 @@
     }
   }
 
+  function getPhotoExtension(url) {
+    // Twitter photo URLs like: pbs.twimg.com/media/xxx.jpg?name=orig
+    // or pbs.twimg.com/media/xxx.png?name=orig
+    const cleanUrl = url.split("?")[0];
+    if (cleanUrl.endsWith(".png")) return "png";
+    if (cleanUrl.endsWith(".webp")) return "webp";
+    return "jpg"; // default
+  }
+
   function resetBtn(btn) {
     btn.classList.remove("xdl-error", "xdl-done");
     btn.innerHTML = `${DOWNLOAD_SVG} Download`;
   }
+
+  // ==========================================================================
+  // BUTTON INJECTION — Add download buttons to tweet action bars
+  // ==========================================================================
 
   function injectDownloadButtons() {
     const articles = document.querySelectorAll('article[data-testid="tweet"]');
@@ -238,7 +309,7 @@
       if (article.querySelector(".xdl-btn")) continue;
 
       const info = getTweetInfo(article);
-      if (!info.hasVideo || !info.tweetId) continue;
+      if (!info.hasMedia || !info.tweetId) continue;
 
       // Find the action bar (like, retweet, reply, share row)
       const actionBar = article.querySelector('[role="group"]');
@@ -246,8 +317,15 @@
 
       const btn = document.createElement("button");
       btn.className = "xdl-btn";
-      btn.innerHTML = `${DOWNLOAD_SVG} Download`;
-      btn.title = "Download video";
+
+      // Label based on media type
+      let label = "Download";
+      if (info.hasVideo && info.hasPhoto) label = "Download all";
+      else if (info.hasVideo) label = "Download video";
+      else label = "Download photo";
+
+      btn.innerHTML = `${DOWNLOAD_SVG} ${label}`;
+      btn.title = "Download media from this tweet";
 
       btn.addEventListener("click", (e) => {
         e.preventDefault();
@@ -265,24 +343,27 @@
   });
   observer.observe(document.body, { childList: true, subtree: true });
 
-  // Initial injection + periodic fallback (React can remove injected elements)
+  // Initial injection + periodic fallback
   injectDownloadButtons();
   setInterval(injectDownloadButtons, 2000);
 
-  // ---------------------------------------------------------------
-  // Bulk auto-scroll download (triggered from popup)
-  // ---------------------------------------------------------------
-  function getVisibleVideoTweets() {
+  // ==========================================================================
+  // BULK SCROLL LOOP — Auto-scroll and download all media
+  // ==========================================================================
+
+  function getVisibleMediaTweets() {
     const articles = document.querySelectorAll('article[data-testid="tweet"]');
     const tweets = [];
 
     for (const article of articles) {
       const info = getTweetInfo(article);
-      if (!info.hasVideo || !info.tweetId) continue;
+      if (!info.hasMedia || !info.tweetId) continue;
       if (processedTweets.has(info.tweetId)) continue;
 
-      // Accept ALL video tweets in the DOM — X's virtualized list only keeps
-      // nearby tweets anyway, so everything in the DOM is fair game
+      // Apply media type filter
+      if (mediaFilter === "video" && !info.hasVideo) continue;
+      if (mediaFilter === "photo" && !info.hasPhoto) continue;
+
       tweets.push({ ...info, article });
     }
 
@@ -290,23 +371,23 @@
   }
 
   async function mainLoop() {
-    console.log("[X-DL] Initializing Twitter environment...");
+    console.log("[X-DL] Initializing auth environment...");
     statusText = "Initializing...";
+    bulkId++;
 
     const envOk = await initEnv();
     if (!envOk) {
-      console.error("[X-DL] Failed to initialize Twitter environment");
-      statusText = "Error: Could not get auth tokens. Try refreshing the page.";
+      console.error("[X-DL] Failed to initialize auth");
+      statusText = "Error: Could not get auth tokens. Refresh the page.";
       statusState = "stopped";
       running = false;
       return;
     }
-    console.log("[X-DL] Environment ready. Starting download loop.");
+    console.log("[X-DL] Auth ready. Starting bulk download loop.");
 
     const config = SCROLL_CONFIG[scrollSpeed] || SCROLL_CONFIG.medium;
     statusState = "running";
     let noNewCount = 0;
-    let lastDownloadedCount = 0;
     let stuckSinceScroll = 0;
 
     // Wait for new DOM content after scrolling
@@ -317,7 +398,6 @@
           if (!resolved) {
             resolved = true;
             obs.disconnect();
-            // Give React a moment to finish rendering
             setTimeout(resolve, 300);
           }
         });
@@ -332,79 +412,114 @@
       });
     }
 
-    while (running && downloaded < maxVideos) {
-      const tweets = getVisibleVideoTweets();
+    while (running && downloaded < maxMedia) {
+      const tweets = getVisibleMediaTweets();
 
       if (tweets.length > 0) {
         noNewCount = 0;
         for (const tweet of tweets) {
-          if (!running || downloaded >= maxVideos) break;
+          if (!running || downloaded >= maxMedia) break;
 
           processedTweets.add(tweet.tweetId);
-          statusText = `Getting video ${downloaded + 1}/${maxVideos}...`;
+          statusText = `Processing ${downloaded + 1}/${maxMedia}...`;
 
           console.log("[X-DL] Processing tweet:", tweet.tweetId, "by @" + tweet.handle);
 
-          const videoUrl = await getVideoUrl(tweet.tweetId);
-          if (!videoUrl) {
-            console.warn("[X-DL] No video URL for tweet:", tweet.tweetId);
+          const media = await getTweetMedia(tweet.tweetId);
+          if (!media || media.error) {
+            console.warn("[X-DL] No media for tweet:", tweet.tweetId, media?.error);
             continue;
           }
 
-          const safeName = sanitizeFilename(tweet.tweetText);
-          const handle = tweet.handle || "unknown";
-          const index = String(downloaded + 1).padStart(3, "0");
-          const filename = `x-videos/${index}_${handle}_${safeName}.mp4`;
+          const safeName = sanitizeFilename(media.tweetText || tweet.tweetText);
+          const handle = media.username || tweet.handle || "unknown";
 
-          statusText = `Downloading ${downloaded + 1}/${maxVideos}...`;
+          // Download videos
+          if (media.videos) {
+            for (let i = 0; i < media.videos.length; i++) {
+              if (!running || downloaded >= maxMedia) break;
 
-          const success = await downloadVideo(videoUrl, filename);
-          if (success) {
-            downloaded++;
-            statusText = `Downloaded ${downloaded}/${maxVideos}`;
+              const v = media.videos[i];
+              const suffix = media.videos.length > 1 ? `_vid${i + 1}` : "";
+              const index = String(downloaded + 1).padStart(3, "0");
+              const filename = `x-media/${index}_${handle}_${safeName}${suffix}.mp4`;
 
-            const btn = tweet.article.querySelector(".xdl-btn");
-            if (btn) {
-              btn.classList.add("xdl-done");
-              btn.innerHTML = `${CHECK_SVG} Saved`;
+              statusText = `Downloading video ${downloaded + 1}/${maxMedia}...`;
+              const result = await downloadFile(v.url, filename);
+              if (result?.success) {
+                downloaded++;
+                statusText = `Downloaded ${downloaded}/${maxMedia}`;
+
+                const btn = tweet.article.querySelector(".xdl-btn");
+                if (btn) {
+                  btn.classList.add("xdl-done");
+                  btn.innerHTML = `${CHECK_SVG} Saved`;
+                }
+              }
+
+              // Small delay between downloads
+              await sleep(500);
             }
           }
 
-          await sleep(500);
+          // Download photos
+          if (media.photos) {
+            for (let i = 0; i < media.photos.length; i++) {
+              if (!running || downloaded >= maxMedia) break;
+
+              const p = media.photos[i];
+              const ext = getPhotoExtension(p.url);
+              const suffix = media.photos.length > 1 ? `_img${i + 1}` : "";
+              const index = String(downloaded + 1).padStart(3, "0");
+              const filename = `x-media/${index}_${handle}_${safeName}${suffix}.${ext}`;
+
+              statusText = `Downloading photo ${downloaded + 1}/${maxMedia}...`;
+              const result = await downloadFile(p.url, filename);
+              if (result?.success) {
+                downloaded++;
+                statusText = `Downloaded ${downloaded}/${maxMedia}`;
+
+                const btn = tweet.article.querySelector(".xdl-btn");
+                if (btn) {
+                  btn.classList.add("xdl-done");
+                  btn.innerHTML = `${CHECK_SVG} Saved`;
+                }
+              }
+
+              await sleep(500);
+            }
+          }
         }
       } else {
         noNewCount++;
       }
 
-      if (!running || downloaded >= maxVideos) break;
+      if (!running || downloaded >= maxMedia) break;
 
-      // Always scroll forward
+      // Scroll forward
       const scrollAmount = noNewCount > 2
-        ? Math.min(800 + noNewCount * 400, 5000)  // increasingly aggressive
+        ? Math.min(800 + noNewCount * 400, 5000)
         : config.distance;
 
       window.scrollBy({ top: scrollAmount, behavior: noNewCount > 2 ? "instant" : "smooth" });
-      statusText = `Scrolling... ${downloaded}/${maxVideos} downloaded`;
+      statusText = `Scrolling... ${downloaded}/${maxMedia} downloaded`;
 
       if (noNewCount > 2) {
-        console.log("[X-DL] No new video tweets, aggressive scroll", scrollAmount + "px (attempt", noNewCount + ")");
-        // Wait for X to load new content (MutationObserver based)
+        console.log("[X-DL] Aggressive scroll", scrollAmount + "px (attempt " + noNewCount + ")");
         await waitForNewContent(4000);
       } else {
         await sleep(config.interval);
       }
 
-      // Check if we're truly stuck (no progress at all for many attempts)
-      // vs just scrolling through non-video tweets (which is normal)
+      // Give up after many attempts with no new media
       if (noNewCount > 50) {
-        console.log("[X-DL] No new video tweets after 50 scroll attempts, stopping");
+        console.log("[X-DL] No new media tweets after 50 scroll attempts, stopping");
         break;
       }
 
-      // Detect if page has truly reached the end
+      // Detect end of page
       const atBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 100;
       if (atBottom && noNewCount > 5) {
-        // Try one more time — scroll to trigger lazy load
         window.scrollBy({ top: -200, behavior: "instant" });
         await sleep(500);
         window.scrollBy({ top: 400, behavior: "instant" });
@@ -421,29 +536,34 @@
 
     running = false;
     window.__xdl_active = false;
-    statusState = downloaded >= maxVideos ? "done" : "stopped";
-    statusText = downloaded >= maxVideos
-      ? `Done! Downloaded ${downloaded} videos.`
-      : `Stopped at ${downloaded} videos.`;
+    statusState = downloaded >= maxMedia ? "done" : "stopped";
+    statusText = downloaded >= maxMedia
+      ? `Done! Downloaded ${downloaded} items.`
+      : `Stopped at ${downloaded} items.`;
     console.log("[X-DL]", statusText);
   }
 
-  // Listen for popup messages
+  // ==========================================================================
+  // MESSAGE LISTENER — Commands from popup.js
+  // ==========================================================================
+
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.action === "start") {
       if (running) {
         sendResponse({ ok: false, reason: "Already running" });
         return;
       }
-      maxVideos = msg.maxVideos || 100;
+      maxMedia = msg.maxMedia || msg.maxVideos || 100;
       scrollSpeed = msg.scrollSpeed || "medium";
+      mediaFilter = msg.mediaFilter || "all";
+      useZip = msg.useZip || false;
       downloaded = 0;
       running = true;
       window.__xdl_active = true;
       processedTweets.clear();
       statusText = "Starting...";
       statusState = "running";
-      console.log("[X-DL] STARTED. Max:", maxVideos, "Speed:", scrollSpeed);
+      console.log("[X-DL] STARTED. Max:", maxMedia, "Speed:", scrollSpeed, "Filter:", mediaFilter);
       sendResponse({ ok: true });
       mainLoop();
       return;
@@ -452,7 +572,7 @@
     if (msg.action === "stop") {
       running = false;
       window.__xdl_active = false;
-      statusText = `Stopped at ${downloaded} videos.`;
+      statusText = `Stopped at ${downloaded} items.`;
       statusState = "stopped";
       sendResponse({ ok: true });
       return;
@@ -464,5 +584,5 @@
     }
   });
 
-  console.log("[X-DL] Ready — download buttons active, waiting for start command");
+  console.log("[X-DL] Ready — download buttons active on video and photo tweets");
 })();
