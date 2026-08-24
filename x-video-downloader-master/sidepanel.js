@@ -2,6 +2,7 @@
 const $ = (id) => document.getElementById(id);
 const queueEl = $("queue"), filterEl = $("mediaFilter"), selectAllEl = $("selectAll");
 let state = { items: [], concurrency: 2, stopped: false };
+let discovery = { running: false, pages: 0, found: 0, status: "Ready to discover media", error: null };
 
 function send(message) {
   return new Promise((resolve) => chrome.runtime.sendMessage(message, (response) => resolve(response || { ok: false, error: chrome.runtime.lastError?.message })));
@@ -22,6 +23,10 @@ function render() {
   $("downloadSelectedBtn").disabled = selected.length === 0;
   $("downloadAllBtn").disabled = state.items.length === 0;
   $("stopBtn").disabled = !state.running;
+  $("discoverBtn").disabled = discovery.running;
+  $("stopDiscoveryBtn").disabled = !discovery.running;
+  $("discoveryHint").textContent = discovery.error ? discovery.error : discovery.status;
+  $("discoveryHint").classList.toggle("error", Boolean(discovery.error));
   $("engineStatus").textContent = state.running ? "Downloading" : state.stopped ? "Paused" : "Ready";
   $("engineStatus").className = "status-pill " + (state.running ? "running" : "idle");
   selectAllEl.checked = items.length > 0 && items.every((item) => item.selected);
@@ -36,7 +41,7 @@ function render() {
   }).join("");
 }
 
-async function refresh() { state = await send({ action: "queueGet" }); render(); }
+async function refresh() { [state, discovery] = await Promise.all([send({ action: "queueGet" }), send({ action: "discoveryGet" })]); render(); }
 async function updateSelection(id, selected) { state = await send({ action: "queueSelect", id, selected }); render(); }
 
 queueEl.addEventListener("change", (event) => { if (event.target.matches(".item-select")) updateSelection(event.target.dataset.id, event.target.checked); });
@@ -55,10 +60,17 @@ document.querySelectorAll("[data-concurrency]").forEach((button) => button.addEv
 $("useCurrentBtn").addEventListener("click", () => chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => { $("targetInput").value = tab?.url || ""; }));
 $("discoverBtn").addEventListener("click", async () => {
   const target = $("targetInput").value.trim();
-  const hint = $("discoveryHint");
-  if (!target) { hint.textContent = "Enter a profile URL or @username first."; return; }
-  await chrome.storage.local.set({ batchTarget: target, batchLimit: Math.min(9999, Math.max(1, Number($("discoveryLimit").value) || 9999)), includeRetweets: $("includeRetweets").checked });
-  hint.textContent = "Target saved. The profile-media discovery connector is the next implementation step.";
+  if (!target) { $("discoveryHint").textContent = "Enter a profile URL or @username first."; return; }
+  const options = { target, limit: Math.min(9999, Math.max(1, Number($("discoveryLimit").value) || 9999)), includeRetweets: $("includeRetweets").checked };
+  await chrome.storage.local.set({ batchTarget: options.target, batchLimit: options.limit, includeRetweets: options.includeRetweets });
+  discovery = await send({ action: "discoveryStart", ...options });
+  render();
 });
+$("stopDiscoveryBtn").addEventListener("click", async () => { discovery = await send({ action: "discoveryStop" }); render(); });
 chrome.runtime.onMessage.addListener((message) => { if (message.action === "queueChanged") refresh(); });
+chrome.storage.local.get(["batchTarget", "batchLimit", "includeRetweets"], (saved) => {
+  if (saved.batchTarget) $("targetInput").value = saved.batchTarget;
+  if (saved.batchLimit) $("discoveryLimit").value = saved.batchLimit;
+  if (saved.includeRetweets) $("includeRetweets").checked = true;
+});
 refresh();

@@ -25,7 +25,10 @@
         <label class="check-label"><input id="includeRetweets" type="checkbox"> Include reposts</label>
         <label>Limit <input id="discoveryLimit" class="limit-input" type="number" min="1" max="9999" value="9999"></label>
       </div>
-      <button id="discoverBtn" class="button primary">Discover media</button>
+      <div class="action-row">
+        <button id="discoverBtn" class="button primary">Discover media</button>
+        <button id="stopDiscoveryBtn" class="button secondary" disabled>Stop scan</button>
+      </div>
       <p id="discoveryHint" class="hint">Choose a profile, then discover its media into this queue.</p>
     </section>
 

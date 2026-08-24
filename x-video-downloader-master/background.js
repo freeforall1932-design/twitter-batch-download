@@ -473,11 +473,242 @@ async function handleQueueMessage(msg) {
 
 
 // ==========================================================================
+// PROFILE MEDIA DISCOVERY — current X operation IDs are read from its JS
+// ==========================================================================
+const DISCOVERY_STORAGE_KEY = "profileDiscoveryV1";
+const DEFAULT_DISCOVERY = { running: false, stopRequested: false, pages: 0, found: 0, status: "Ready to discover media", error: null, target: "" };
+let discoveryState = null;
+
+async function getDiscoveryState() {
+  if (discoveryState) return discoveryState;
+  const stored = await chrome.storage.local.get(DISCOVERY_STORAGE_KEY);
+  discoveryState = { ...DEFAULT_DISCOVERY, ...(stored[DISCOVERY_STORAGE_KEY] || {}) };
+  // A worker cannot safely resume an unknown in-flight request after suspension.
+  if (discoveryState.running) discoveryState = { ...discoveryState, running: false, stopRequested: true, status: "Discovery paused when the extension restarted." };
+  return discoveryState;
+}
+
+async function saveDiscoveryState() {
+  await chrome.storage.local.set({ [DISCOVERY_STORAGE_KEY]: discoveryState });
+  chrome.runtime.sendMessage({ action: "queueChanged" }).catch(() => {});
+}
+
+async function findXTab() {
+  const tabs = await chrome.tabs.query({});
+  return tabs.find((tab) => /^https:\/\/(x|twitter)\.com\//.test(tab.url || "")) || null;
+}
+
+function normalizeProfileTarget(rawTarget) {
+  const raw = String(rawTarget || "").trim();
+  if (!raw) throw new Error("Enter an X profile URL or @username.");
+  const candidate = raw.startsWith("@") ? raw.slice(1) : raw;
+  if (/^[A-Za-z0-9_]{1,15}$/.test(candidate)) return candidate;
+  let url;
+  try { url = new URL(/^https?:\/\//.test(candidate) ? candidate : `https://${candidate}`); } catch (_) { throw new Error("Use @username or an x.com profile URL."); }
+  if (!/(^|\.)((x)|(twitter))\.com$/i.test(url.hostname)) throw new Error("The target must be an x.com or twitter.com profile URL.");
+  const name = url.pathname.split("/").filter(Boolean)[0] || "";
+  if (!/^[A-Za-z0-9_]{1,15}$/.test(name) || ["i", "home", "search", "explore", "settings", "messages", "notifications"].includes(name.toLowerCase())) {
+    throw new Error("That URL is not an X profile.");
+  }
+  return name;
+}
+
+async function getOperationIds(tabId) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => Array.from(document.scripts).map((script) => script.src).filter((src) => /\.js(?:\?|$)/.test(src))
+  });
+  const urls = results?.[0]?.result || [];
+  const ids = {};
+  const operationNames = ["UserByScreenName", "UserMedia"];
+  // Query IDs change often. Read the bundle belonging to the currently open X UI
+  // instead of treating a copied ID as a durable API contract.
+  for (const url of urls.slice(0, 80)) {
+    if (Object.keys(ids).length === operationNames.length) break;
+    try {
+      const source = await (await fetch(url)).text();
+      for (const name of operationNames) {
+        if (ids[name] || !source.includes(name)) continue;
+        const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const patterns = [
+          new RegExp(`queryId[:=]\\s*["']([A-Za-z0-9_-]{8,})["'][\\s\\S]{0,500}?operationName[:=]\\s*["']${escaped}["']`),
+          new RegExp(`operationName[:=]\\s*["']${escaped}["'][\\s\\S]{0,500}?queryId[:=]\\s*["']([A-Za-z0-9_-]{8,})["']`),
+          new RegExp(`["']([A-Za-z0-9_-]{8,})["'][\\s\\S]{0,120}?["']${escaped}["']`),
+          new RegExp(`["']${escaped}["'][\\s\\S]{0,120}?["']([A-Za-z0-9_-]{8,})["']`)
+        ];
+        for (const pattern of patterns) {
+          const match = source.match(pattern);
+          if (match?.[1]) { ids[name] = match[1]; break; }
+        }
+      }
+    } catch (_) { /* An optional bundle may be unavailable; inspect the next one. */ }
+  }
+  const missing = operationNames.filter((name) => !ids[name]);
+  if (missing.length) throw new Error(`Could not find current X operation metadata: ${missing.join(", ")}. Open the target's X profile once, refresh it, then retry.`);
+  return ids;
+}
+
+function discoveryFeatures() {
+  return {
+    creator_subscriptions_tweet_preview_api_enabled: true,
+    tweetypie_unmention_optimization_enabled: true,
+    responsive_web_edit_tweet_api_enabled: true,
+    graphql_is_translatable_rweb_tweet_is_translatable_enabled: true,
+    view_counts_everywhere_api_enabled: true,
+    longform_notetweets_consumption_enabled: true,
+    longform_notetweets_rich_text_read_enabled: true,
+    longform_notetweets_inline_media_enabled: true,
+    responsive_web_graphql_exclude_directive_enabled: true,
+    responsive_web_graphql_timeline_navigation_enabled: true,
+    responsive_web_enhance_cards_enabled: false
+  };
+}
+
+async function callDiscoveryGraphQL(operationId, operationName, variables) {
+  const params = new URLSearchParams({ variables: JSON.stringify(variables), features: JSON.stringify(discoveryFeatures()) });
+  const response = await fetchWithRetry(`https://x.com/i/api/graphql/${operationId}/${operationName}?${params}`, makeHeaders());
+  if (!response) throw new Error("X rate limit retries were exhausted.");
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(response.status === 401 ? "Your X session has expired. Sign in to X and retry." : response.status === 403 ? "This profile is protected or unavailable to your account." : `X returned ${response.status}: ${body.slice(0, 120)}`);
+  }
+  const json = await response.json();
+  if (json.errors?.length) throw new Error(json.errors.map((entry) => entry.message).join(", "));
+  return json;
+}
+
+function unwrapTweet(result) {
+  if (!result || typeof result !== "object") return null;
+  if (result.__typename === "TweetWithVisibilityResults") return result.tweet || null;
+  return result.__typename === "Tweet" ? result : null;
+}
+
+function collectTweets(value, output, seen = new Set(), parentKey = "") {
+  if (!value || typeof value !== "object") return;
+  // Reposted media is resolved from its parent post below. Quoted results are
+  // deliberately excluded until an explicit Include quoted media option exists.
+  if (parentKey === "quoted_status_result" || parentKey === "retweeted_status_result") return;
+  const tweet = unwrapTweet(value);
+  if (tweet?.rest_id && !seen.has(tweet.rest_id)) { seen.add(tweet.rest_id); output.push(tweet); }
+  if (Array.isArray(value)) value.forEach((entry) => collectTweets(entry, output, seen, parentKey));
+  else Object.entries(value).forEach(([key, entry]) => collectTweets(entry, output, seen, key));
+}
+
+function findBottomCursor(value) {
+  if (!value || typeof value !== "object") return null;
+  if (Array.isArray(value)) {
+    for (const entry of value) { const cursor = findBottomCursor(entry); if (cursor) return cursor; }
+    return null;
+  }
+  const entryId = value.entryId || value.entry_id || "";
+  const cursorType = value.content?.cursorType || value.cursorType || "";
+  if ((String(entryId).includes("cursor-bottom") || cursorType === "Bottom") && value.content?.value) return value.content.value;
+  for (const child of Object.values(value)) { const cursor = findBottomCursor(child); if (cursor) return cursor; }
+  return null;
+}
+
+function mediaFromTweet(tweet, targetHandle, includeRetweets) {
+  const legacy = tweet.legacy || {};
+  const isRepost = Boolean(legacy.retweeted_status_result?.result || tweet.retweeted_status_result?.result);
+  if (isRepost && !includeRetweets) return [];
+  const source = unwrapTweet(legacy.retweeted_status_result?.result || tweet.retweeted_status_result?.result) || tweet;
+  const sourceLegacy = source.legacy || {};
+  const author = source.core?.user_results?.result?.legacy?.screen_name || tweet.core?.user_results?.result?.legacy?.screen_name || targetHandle;
+  const timestamp = sourceLegacy.created_at || legacy.created_at || "";
+  const text = sourceLegacy.full_text || sourceLegacy.text || "media";
+  const media = sourceLegacy.extended_entities?.media || sourceLegacy.entities?.media || [];
+  return media.map((item, index) => {
+    let url = "", type = item.type === "photo" ? "photo" : "video";
+    if (item.type === "photo") {
+      url = item.media_url_https || item.media_url || "";
+      if (url && !/[?&]name=/.test(url)) url += "?name=orig";
+    } else if (item.type === "video" || item.type === "animated_gif") {
+      const variants = (item.video_info?.variants || []).filter((variant) => variant.content_type === "video/mp4");
+      variants.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+      url = variants[0]?.url || "";
+    }
+    if (!url) return null;
+    const extension = type === "photo" ? ((url.match(/[?&]format=([^&]+)/)?.[1] || url.split("?")[0].split(".").pop() || "jpg").replace(/[^a-z0-9]/gi, "") || "jpg") : "mp4";
+    const mediaId = item.id_str || item.id || index;
+    const safeText = String(text).replace(/https?:\/\/\S+/g, "").replace(/[<>:"/\\|?*\x00-\x1f]/g, "").replace(/\s+/g, " ").trim().slice(0, 48) || "media";
+    return {
+      id: `${source.rest_id || tweet.rest_id}-${mediaId}`,
+      url, type, thumbnail: item.media_url_https || item.media_url || "", author: `@${author}`,
+      date: timestamp, tweetId: source.rest_id || tweet.rest_id, mediaId: String(mediaId), isRepost,
+      filename: `x-media/${String(source.rest_id || tweet.rest_id)}_${author}_${safeText}_${index + 1}.${extension}`
+    };
+  }).filter(Boolean);
+}
+
+async function runProfileDiscovery(options) {
+  const state = await getDiscoveryState();
+  try {
+    const username = normalizeProfileTarget(options.target);
+    const tab = await findXTab();
+    if (!tab?.id) throw new Error("Open x.com in this Chrome profile and sign in before discovering media.");
+    state.running = true; state.stopRequested = false; state.pages = 0; state.found = 0; state.target = `@${username}`; state.error = null;
+    state.status = "Reading current X session…"; await saveDiscoveryState();
+    await refreshAuth(tab.id);
+    if (!csrfToken || !cookieStr) throw new Error("No signed-in X session was found. Sign in to X in Chrome, then retry.");
+    state.status = "Reading current X page metadata…"; await saveDiscoveryState();
+    const operations = await getOperationIds(tab.id);
+    state.status = `Resolving @${username}…`; await saveDiscoveryState();
+    const userJson = await callDiscoveryGraphQL(operations.UserByScreenName, "UserByScreenName", { screen_name: username, withSafetyModeUserFields: true });
+    const user = userJson?.data?.user?.result;
+    const userId = user?.rest_id || user?.legacy?.id_str;
+    if (!userId) throw new Error("X did not return a profile for that username.");
+    let cursor = null, previousCursor = null;
+    const limit = Math.min(9999, Math.max(1, Number(options.limit) || 9999));
+    while (!state.stopRequested && state.found < limit) {
+      state.status = `Fetching page ${state.pages + 1} — ${state.found} media found…`; await saveDiscoveryState();
+      const variables = { userId, count: 40, includePromotedContent: false, withClientEventToken: false, withBirdwatchNotes: false, withVoice: false };
+      if (cursor) variables.cursor = cursor;
+      const page = await callDiscoveryGraphQL(operations.UserMedia, "UserMedia", variables);
+      const tweets = []; collectTweets(page?.data?.user?.result?.timeline?.timeline?.instructions || page, tweets);
+      const items = tweets.flatMap((tweet) => mediaFromTweet(tweet, username, Boolean(options.includeRetweets)));
+      const queue = await getQueueState();
+      const before = queue.items.length;
+      await handleQueueMessage({ action: "queueAdd", items });
+      state.found += Math.max(0, queueState.items.length - before);
+      state.pages++;
+      previousCursor = cursor;
+      cursor = findBottomCursor(page?.data?.user?.result?.timeline?.timeline?.instructions || page);
+      if (!cursor || cursor === previousCursor) break;
+    }
+    state.running = false;
+    state.status = state.stopRequested ? `Discovery stopped — ${state.found} media found.` : state.found >= limit ? `Reached the ${limit.toLocaleString()} media limit.` : `Discovery complete — ${state.found} media found.`;
+  } catch (error) {
+    state.running = false;
+    state.error = error.message || String(error);
+    state.status = "Discovery needs attention";
+  }
+  await saveDiscoveryState();
+}
+
+async function handleDiscoveryMessage(msg) {
+  const state = await getDiscoveryState();
+  if (msg.action === "discoveryGet") return state;
+  if (msg.action === "discoveryStop") { state.stopRequested = true; state.status = "Stopping after this page…"; await saveDiscoveryState(); return state; }
+  if (msg.action === "discoveryStart") {
+    if (state.running) return state;
+    runProfileDiscovery(msg).catch((error) => console.error("[X-DL BG] Discovery error", error));
+    return { ...state, running: true, status: "Starting discovery…" };
+  }
+  return null;
+}
+
+// ==========================================================================
 // MESSAGE HANDLER
 // ==========================================================================
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const tabId = sender.tab?.id;
+
+  // Side-panel discovery controls
+  if (typeof msg.action === "string" && msg.action.startsWith("discovery")) {
+    handleDiscoveryMessage(msg).then((result) => sendResponse(result));
+    return true;
+  }
 
   // Persistent side-panel queue controls
   if (typeof msg.action === "string" && msg.action.startsWith("queue")) {

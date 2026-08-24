@@ -21,10 +21,10 @@ No manual API key, password, `auth_token`, or cookie-pasting field will be added
 | Side Panel UI | Done | Target input, discovery cap defaulting to 9,999, queue view, media filter, individual selection, Select all, Download selected/all. |
 | Persistent queue | Done | `chrome.storage.local` queue state in `background.js`. |
 | 1–2 download scheduler | Done | A new item starts only after `chrome.downloads.onChanged` reports a prior item terminal; default 2. |
-| Side Panel profile-media discovery | Not implemented | The Discover control currently validates/saves its target but cannot yet populate the queue. This is the next feature. |
-| Full-profile pagination / end-of-timeline completion | Not implemented | Need cursor extraction, cursor requests, `no more results` completion, and Stop discovery. |
-| Original post / repost / reply / quote inclusion rules | Not implemented | Existing UI has an `Include reposts` setting only; no connector consumes it yet. |
-| Discovery progress and rate-limit status | Not implemented | Add resolving, page count, items found, retry countdown, completed / stopped state. |
+| Side Panel profile-media discovery | Implemented, requires live-X validation | The Discover control normalizes a profile target, reads current X bundle metadata, resolves the user, and pushes discovered media into the queue. |
+| Full-profile pagination / end-of-timeline completion | Implemented, requires live-X validation | Follows the bottom cursor until the cap, no/repeated cursor, or Stop discovery. |
+| Original post / repost / reply / quote inclusion rules | Partial | Original posts are scanned; the existing Include reposts option is now consumed. Replies and quoted media remain explicit future options. |
+| Discovery progress and rate-limit status | Partial | Resolving/page/found/completed/stopped/error states are shown. A visible retry countdown remains to be added. |
 | Queue filename metadata | Not implemented | Queue records need stable filename, author, post date, tweet ID, media index, thumbnail, source type. |
 | Queue retries / download byte progress | Not implemented | Add failed-item retry and progress from `chrome.downloads` deltas. |
 | ZIP from Side Panel queue | Not connected | ZIP writer exists; old `useZip` flag is unused by current UI. |
