@@ -3,6 +3,7 @@
 // ==========================================================================
 
 const startBtn = document.getElementById("startBtn");
+const openPanelBtn = document.getElementById("openPanelBtn");
 const stopBtn = document.getElementById("stopBtn");
 const statusEl = document.getElementById("status");
 const warningEl = document.getElementById("warning");
@@ -32,9 +33,13 @@ function pollStatus() {
 setInterval(pollStatus, 1000);
 pollStatus();
 
+openPanelBtn.addEventListener("click", () => {
+  chrome.windows.getCurrent((window) => chrome.sidePanel.open({ windowId: window.id }));
+});
+
 // Start button
 startBtn.addEventListener("click", () => {
-  const maxMedia = parseInt(maxMediaInput.value) || 100;
+  const maxMedia = parseInt(maxMediaInput.value) || 9999;
   const scrollSpeed = scrollSpeedSelect.value;
   const mediaFilter = mediaFilterSelect.value;
 

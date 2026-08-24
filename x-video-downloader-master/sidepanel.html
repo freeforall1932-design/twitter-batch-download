@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>X Media Downloader</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <p class="eyebrow">X MEDIA DOWNLOADER</p>
+      <h1>Batch queue</h1>
+    </div>
+    <span id="engineStatus" class="status-pill idle">Ready</span>
+  </header>
+
+  <main>
+    <section class="source-card" aria-label="Discovery source">
+      <label for="targetInput">Profile or media page</label>
+      <div class="target-row">
+        <input id="targetInput" type="text" placeholder="@username or https://x.com/user/media" autocomplete="off">
+        <button id="useCurrentBtn" class="icon-button" title="Use current X tab" aria-label="Use current X tab">⌁</button>
+      </div>
+      <div class="source-options">
+        <label class="check-label"><input id="includeRetweets" type="checkbox"> Include reposts</label>
+        <label>Limit <input id="discoveryLimit" class="limit-input" type="number" min="1" max="9999" value="9999"></label>
+      </div>
+      <div class="action-row">
+        <button id="discoverBtn" class="button primary">Discover media</button>
+        <button id="stopDiscoveryBtn" class="button secondary" disabled>Stop scan</button>
+      </div>
+      <p id="discoveryHint" class="hint">Choose a profile, then discover its media into this queue.</p>
+    </section>
+
+    <section class="summary" aria-label="Queue summary">
+      <div><strong id="discoveredCount">0</strong><span>discovered</span></div>
+      <div><strong id="selectedCount">0</strong><span>selected</span></div>
+      <div><strong id="completedCount">0</strong><span>completed</span></div>
+    </section>
+
+    <section class="toolbar" aria-label="Selection controls">
+      <label class="check-label"><input id="selectAll" type="checkbox"> Select all</label>
+      <select id="mediaFilter" aria-label="Filter queue">
+        <option value="all">All media</option>
+        <option value="video">Videos</option>
+        <option value="photo">Photos</option>
+      </select>
+      <button id="retryFailedBtn" class="text-button">Retry failed</button>
+      <button id="clearFinishedBtn" class="text-button">Clear finished</button>
+    </section>
+
+    <section id="queue" class="queue" aria-live="polite">
+      <div class="empty-state">
+        <div class="empty-icon">↓</div>
+        <h2>Your queue is empty</h2>
+        <p>Discovered media will appear here newest first. Tick exactly what you want, or use Download all.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="download-dock">
+    <div class="concurrency-control">
+      <span>Downloads at once</span>
+      <div class="segmented" role="group" aria-label="Concurrent downloads">
+        <button data-concurrency="1">1</button>
+        <button data-concurrency="2" class="selected">2</button>
+      </div>
+    </div>
+    <p id="downloadNotice" class="download-notice">New downloads wait until an active download finishes.</p>
+    <div class="action-row">
+      <button id="downloadSelectedBtn" class="button secondary" disabled>Download selected</button>
+      <button id="downloadAllBtn" class="button primary" disabled>Download all</button>
+    </div>
+    <button id="stopBtn" class="text-button stop-button" disabled>Stop after active downloads</button>
+  </footer>
+  <script src="sidepanel.js"></script>
+</body>
+</html>
