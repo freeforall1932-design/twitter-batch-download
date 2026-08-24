@@ -365,11 +365,125 @@ function downloadFile(url, filename) {
 }
 
 // ==========================================================================
+// PERSISTENT DOWNLOAD QUEUE — schedules only after prior downloads finish
+// ==========================================================================
+const QUEUE_STORAGE_KEY = "batchDownloadQueueV1";
+const QUEUE_DEFAULT = { items: [], concurrency: 2, running: false, stopped: false };
+let queueState = null;
+let queueSaving = Promise.resolve();
+
+async function getQueueState() {
+  if (queueState) return queueState;
+  const stored = await chrome.storage.local.get(QUEUE_STORAGE_KEY);
+  queueState = { ...QUEUE_DEFAULT, ...(stored[QUEUE_STORAGE_KEY] || {}) };
+  queueState.concurrency = queueState.concurrency === 1 ? 1 : 2;
+  // Service workers can stop while Chrome downloads continue. Reconcile stale states.
+  queueState.items = queueState.items.map((item) => item.status === "downloading"
+    ? { ...item, status: "queued", downloadId: null } : item);
+  await saveQueueState();
+  return queueState;
+}
+
+async function saveQueueState() {
+  if (!queueState) return;
+  queueSaving = queueSaving.then(() => chrome.storage.local.set({ [QUEUE_STORAGE_KEY]: queueState }));
+  await queueSaving;
+  chrome.runtime.sendMessage({ action: "queueChanged" }).catch(() => {});
+}
+
+function publicQueueState() {
+  return queueState || { ...QUEUE_DEFAULT };
+}
+
+async function processQueue() {
+  const state = await getQueueState();
+  if (!state.running || state.stopped) return;
+  const active = state.items.filter((item) => item.status === "downloading").length;
+  const slots = Math.max(0, state.concurrency - active);
+  const nextItems = state.items.filter((item) => item.status === "queued").slice(0, slots);
+  for (const item of nextItems) {
+    item.status = "starting";
+    await saveQueueState();
+    const result = await downloadFile(item.url, item.filename);
+    if (result.success) {
+      item.status = "downloading";
+      item.downloadId = result.downloadId;
+    } else {
+      item.status = "failed";
+      item.error = result.error || "Could not start download";
+    }
+    await saveQueueState();
+  }
+  if (!state.items.some((item) => ["queued", "starting", "downloading"].includes(item.status))) {
+    state.running = false;
+    await saveQueueState();
+  }
+}
+
+chrome.downloads.onChanged.addListener(async (delta) => {
+  if (!delta.state || !["complete", "interrupted"].includes(delta.state.current)) return;
+  const state = await getQueueState();
+  const item = state.items.find((candidate) => candidate.downloadId === delta.id);
+  if (!item) return;
+  item.status = delta.state.current === "complete" ? "completed" : "failed";
+  item.error = delta.error?.current || null;
+  item.downloadId = null;
+  await saveQueueState();
+  // This is deliberately called only after Chrome reports a finished/interrupted download.
+  processQueue();
+});
+
+async function handleQueueMessage(msg) {
+  const state = await getQueueState();
+  if (msg.action === "queueGet") return publicQueueState();
+  if (msg.action === "queueSetConcurrency") {
+    state.concurrency = msg.concurrency === 1 ? 1 : 2;
+  } else if (msg.action === "queueSelect") {
+    const item = state.items.find((candidate) => candidate.id === msg.id);
+    if (item) item.selected = Boolean(msg.selected);
+  } else if (msg.action === "queueSelectVisible") {
+    state.items.filter((item) => msg.filter === "all" || item.type === msg.filter)
+      .forEach((item) => { item.selected = Boolean(msg.selected); });
+  } else if (msg.action === "queueClearFinished") {
+    state.items = state.items.filter((item) => !["completed", "failed"].includes(item.status));
+  } else if (msg.action === "queueStart") {
+    state.items.forEach((item) => {
+      const allowed = msg.mode === "all" || item.selected;
+      if (allowed && ["discovered", "failed"].includes(item.status)) item.status = "queued";
+    });
+    state.stopped = false;
+    state.running = true;
+  } else if (msg.action === "queueStop") {
+    state.stopped = true;
+    state.running = false;
+    state.items.forEach((item) => { if (item.status === "queued") item.status = "discovered"; });
+  } else if (msg.action === "queueAdd") {
+    // Discovery connectors add normalized media records here; newest discoveries go first.
+    const additions = (msg.items || []).filter((candidate) => candidate.id && candidate.url)
+      .filter((candidate) => !state.items.some((existing) => existing.id === candidate.id))
+      .map((candidate) => ({ ...candidate, selected: false, status: "discovered", downloadId: null }));
+    state.items.unshift(...additions);
+  } else {
+    return null;
+  }
+  await saveQueueState();
+  if (msg.action === "queueStart" || msg.action === "queueSetConcurrency") processQueue();
+  return publicQueueState();
+}
+
+
+// ==========================================================================
 // MESSAGE HANDLER
 // ==========================================================================
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const tabId = sender.tab?.id;
+
+  // Persistent side-panel queue controls
+  if (typeof msg.action === "string" && msg.action.startsWith("queue")) {
+    handleQueueMessage(msg).then((result) => sendResponse(result));
+    return true;
+  }
 
   // Initialize auth environment
   if (msg.action === "initEnv") {
