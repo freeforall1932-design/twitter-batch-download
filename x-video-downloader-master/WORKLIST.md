@@ -25,50 +25,74 @@ No manual API key, password, `auth_token`, or cookie-pasting field will be added
 | Full-profile pagination / end-of-timeline completion | Implemented, requires live-X validation | Follows the bottom cursor until the cap, no/repeated cursor, or Stop discovery. |
 | Original post / repost / reply / quote inclusion rules | Partial | Original posts are scanned; the existing Include reposts option is now consumed. Replies and quoted media remain explicit future options. |
 | Discovery progress and rate-limit status | Partial | Resolving/page/found/completed/stopped/error states are shown. A visible retry countdown remains to be added. |
-| Queue filename metadata | Not implemented | Queue records need stable filename, author, post date, tweet ID, media index, thumbnail, source type. |
+| Queue filename metadata | Implemented | Queue records include author, post date, tweet ID, media ID, thumbnail, repost flag, and filename. |
 | Queue retries / download byte progress | Implemented, requires browser validation | Up to three attempts for start/interruption failures, manual Retry failed action, and per-item percentage when Chrome exposes byte deltas. |
 | ZIP from Side Panel queue | Not connected | ZIP writer exists; old `useZip` flag is unused by current UI. |
 | Bookmarks / likes full scan | Not implemented | Existing DOM bulk works on loaded content only. |
 | Automated browser/live-X verification | Not run | Requires a logged-in X browser session. |
 
+## Re-review checkpoint for the next session
+
+Before marking the profile scanner complete, re-review the code and execute the live-X checklist below against a signed-in Chrome session. Do not treat a third-party repository, a hardcoded query ID, or an old handoff as current API evidence.
+
+1. Confirm current X page JavaScript still exposes discoverable metadata for `UserByScreenName` and `UserMedia`.
+2. Compare a sanitized live first-page and cursor-page response with `runProfileDiscovery()`, `collectTweets()`, `findBottomCursor()`, and `mediaFromTweet()` in `background.js`.
+3. Verify complete result counts for a small account (for example, an account with 690 media should stop at 690 rather than 9,999).
+4. Verify media ordering, multi-photo uniqueness, direct MP4 selection, and original photo URLs.
+5. Verify Include reposts off/on; keep quote/reply media excluded until their dedicated options are implemented.
+6. Verify a 1-download and 2-download queue, retry behavior, Stop scan, Stop after active downloads, and a Side Panel reload.
+7. Record sanitized failures and update the parser/error handling before adding more source types.
+
 ## Next implementation sequence
 
-### P0 — Full profile media discovery
+### P0 — Live-X validation and hardening
 
-1. Normalize a submitted `@username`, profile URL, or `/media` URL.
-2. Confirm an X signed-in session exists and present actionable errors without exposing cookies/tokens.
-3. Resolve the profile and retrieve media timeline pages through the current internal GraphQL request shape.
-4. Parse every timeline instruction entry, including media in nested/reposted results, into normalized queue records.
-5. Follow the bottom cursor until the cap is hit, a cursor is absent/repeated, or the user presses Stop.
-6. Dedupe by stable `tweet ID + media ID`; prepend each discovery batch so the queue remains newest-first.
-7. Send live discovery progress and rate-limit/backoff status to the Side Panel.
+1. Run the re-review checklist with a signed-in X account and a small public profile.
+2. Use sanitized current first/cursor-page media responses to make operation extraction, variables, features, instruction parsing, cursor parsing, and repost logic exact.
+3. Add specific error handling for expired login, protected account, deleted content, NSFW state, operation metadata failure, and rate limiting.
+4. Add a visible rate-limit retry countdown and regression fixtures from sanitized data.
 
 ### P1 — Inclusion and review UX
 
-1. Make the scan source explicit: original posts, reposts, replies, and quoted media.
-2. Mark reposted media in the queue and keep its original author and the reposting account separate.
-3. Add item counts by type, a retry-failed action, and clear labels for completed/skipped/failed.
-4. Create collision-safe filenames from post date, author, tweet ID, and media index.
+1. Add explicit Include replies and Include quoted media switches; do not include these implicitly.
+2. Mark reposted media in the queue and retain both original author and reposting account where the live response exposes them.
+3. Add item counts by photo/video/GIF and better thumbnail/badge presentation.
+4. Add configurable filename templates and a video-quality preference.
 
 ### P2 — Other timeline sources
 
 1. Authenticated bookmarks pagination.
 2. Likes pagination.
-3. Search / date-range results.
-4. Optional current-page DOM scan import into the same Side Panel queue.
+3. Full user posts/replies timeline source.
+4. Search / date-range results.
+5. Import currently loaded DOM media into the same Side Panel queue.
 
 ### P3 — Robustness and optional features
 
-1. Actual byte progress (where Chrome exposes it) and download-history records.
-2. Retry policy for failed Chrome downloads.
-3. ZIP as an explicit queue export option.
-4. HLS/live media policy and any native companion work only after direct MP4 coverage is verified.
+1. Download history UI and stronger resume policy after browser/extension restart.
+2. ZIP output as an explicit Side Panel queue export.
+3. HLS/live-media policy and support after direct MP4 coverage is verified.
+4. Firefox MV3 compatibility.
+5. Direct avatar/banner download.
+6. Improve original photo extension detection using content type where available.
+
+## Bucket list — later / do not start before P0
+
+- Rebuild the old popup DOM auto-scroll bulk flow around the Side Panel queue, or retire it after a migration plan.
+- Per-tweet action-bar controls for “Add to queue” / “Download this media.”
+- Gallery/list/grid queue view modes, preview modal, open-tweet links, and queue sorting choices.
+- Parallel download tuning above two only after rate-limit and reliability testing.
+- ZIP grouping by account/date/media type.
+- Custom folders and filename templates such as `{date}_{author}_{tweetId}_{index}`.
+- Skip known/downloaded media and user-visible download history export.
+- Animated GIF conversion, HLS merging, or native companion integration only if there is a clear supported use case.
+- Firefox compatibility, accessibility pass, localization, and automated UI tests.
 
 ## Reference research completed
 
 ### yt-dlp (`yt_dlp/extractor/twitter.py`)
 
-- The current file still uses `2ICDjqPd81tulZcYrtpTuQ/TweetResultByRestId` for a single tweet.
+- The reviewed current file used `2ICDjqPd81tulZcYrtpTuQ/TweetResultByRestId` for a single tweet.
 - It uses the public app Bearer token plus `ct0` for signed-in requests; its `is_logged_in` check is based on an existing `auth_token` cookie.
 - It does **not** provide a ready-made `UserMedia` query ID in that extractor, so it is a reference for authenticated single-tweet parsing, not a turnkey full-profile scanner.
 
