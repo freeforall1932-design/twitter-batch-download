@@ -369,6 +369,7 @@ function downloadFile(url, filename) {
 // ==========================================================================
 const QUEUE_STORAGE_KEY = "batchDownloadQueueV1";
 const QUEUE_DEFAULT = { items: [], concurrency: 2, running: false, stopped: false };
+const MAX_DOWNLOAD_ATTEMPTS = 3;
 let queueState = null;
 let queueSaving = Promise.resolve();
 
@@ -378,8 +379,10 @@ async function getQueueState() {
   queueState = { ...QUEUE_DEFAULT, ...(stored[QUEUE_STORAGE_KEY] || {}) };
   queueState.concurrency = queueState.concurrency === 1 ? 1 : 2;
   // Service workers can stop while Chrome downloads continue. Reconcile stale states.
-  queueState.items = queueState.items.map((item) => item.status === "downloading"
-    ? { ...item, status: "queued", downloadId: null } : item);
+  queueState.items = queueState.items.map((item) => {
+    const normalized = { attempts: 0, bytesReceived: 0, totalBytes: 0, ...item };
+    return normalized.status === "downloading" ? { ...normalized, status: "queued", downloadId: null } : normalized;
+  });
   await saveQueueState();
   return queueState;
 }
@@ -403,11 +406,16 @@ async function processQueue() {
   const nextItems = state.items.filter((item) => item.status === "queued").slice(0, slots);
   for (const item of nextItems) {
     item.status = "starting";
+    item.attempts = (item.attempts || 0) + 1;
     await saveQueueState();
     const result = await downloadFile(item.url, item.filename);
     if (result.success) {
       item.status = "downloading";
       item.downloadId = result.downloadId;
+    } else if ((item.attempts || 0) < MAX_DOWNLOAD_ATTEMPTS && !state.stopped) {
+      item.status = "queued";
+      item.error = `${result.error || "Could not start download"}; retrying (${(item.attempts || 0) + 1}/${MAX_DOWNLOAD_ATTEMPTS})`;
+      setTimeout(() => processQueue(), 1000 * (item.attempts || 1));
     } else {
       item.status = "failed";
       item.error = result.error || "Could not start download";
@@ -421,13 +429,29 @@ async function processQueue() {
 }
 
 chrome.downloads.onChanged.addListener(async (delta) => {
-  if (!delta.state || !["complete", "interrupted"].includes(delta.state.current)) return;
   const state = await getQueueState();
   const item = state.items.find((candidate) => candidate.downloadId === delta.id);
   if (!item) return;
-  item.status = delta.state.current === "complete" ? "completed" : "failed";
-  item.error = delta.error?.current || null;
+  if (delta.bytesReceived) item.bytesReceived = delta.bytesReceived.current || 0;
+  if (delta.totalBytes) item.totalBytes = delta.totalBytes.current || 0;
+  if (!delta.state || !["complete", "interrupted"].includes(delta.state.current)) {
+    await saveQueueState();
+    return;
+  }
   item.downloadId = null;
+  if (delta.state.current === "complete") {
+    item.status = "completed";
+    item.error = null;
+    item.bytesReceived = item.totalBytes || item.bytesReceived;
+  } else if ((item.attempts || 0) < MAX_DOWNLOAD_ATTEMPTS && !state.stopped) {
+    // Keep the queue at its configured 1–2 active items; retry occupies a new
+    // slot only after Chrome has confirmed the old attempt has ended.
+    item.status = "queued";
+    item.error = `${delta.error?.current || "Download interrupted"}; retrying (${(item.attempts || 0) + 1}/${MAX_DOWNLOAD_ATTEMPTS})`;
+  } else {
+    item.status = "failed";
+    item.error = delta.error?.current || "Download interrupted";
+  }
   await saveQueueState();
   // This is deliberately called only after Chrome reports a finished/interrupted download.
   processQueue();
@@ -446,6 +470,11 @@ async function handleQueueMessage(msg) {
       .forEach((item) => { item.selected = Boolean(msg.selected); });
   } else if (msg.action === "queueClearFinished") {
     state.items = state.items.filter((item) => !["completed", "failed"].includes(item.status));
+  } else if (msg.action === "queueRetryFailed") {
+    state.items.filter((item) => item.status === "failed").forEach((item) => {
+      item.status = "queued"; item.error = null; item.attempts = 0; item.bytesReceived = 0; item.totalBytes = 0;
+    });
+    state.stopped = false; state.running = true;
   } else if (msg.action === "queueStart") {
     state.items.forEach((item) => {
       const allowed = msg.mode === "all" || item.selected;
@@ -461,13 +490,13 @@ async function handleQueueMessage(msg) {
     // Discovery connectors add normalized media records here; newest discoveries go first.
     const additions = (msg.items || []).filter((candidate) => candidate.id && candidate.url)
       .filter((candidate) => !state.items.some((existing) => existing.id === candidate.id))
-      .map((candidate) => ({ ...candidate, selected: false, status: "discovered", downloadId: null }));
+      .map((candidate) => ({ ...candidate, selected: false, status: "discovered", downloadId: null, attempts: 0, bytesReceived: 0, totalBytes: 0 }));
     state.items.unshift(...additions);
   } else {
     return null;
   }
   await saveQueueState();
-  if (msg.action === "queueStart" || msg.action === "queueSetConcurrency") processQueue();
+  if (["queueStart", "queueSetConcurrency", "queueRetryFailed"].includes(msg.action)) processQueue();
   return publicQueueState();
 }
 

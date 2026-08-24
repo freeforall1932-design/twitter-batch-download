@@ -26,7 +26,7 @@ No manual API key, password, `auth_token`, or cookie-pasting field will be added
 | Original post / repost / reply / quote inclusion rules | Partial | Original posts are scanned; the existing Include reposts option is now consumed. Replies and quoted media remain explicit future options. |
 | Discovery progress and rate-limit status | Partial | Resolving/page/found/completed/stopped/error states are shown. A visible retry countdown remains to be added. |
 | Queue filename metadata | Not implemented | Queue records need stable filename, author, post date, tweet ID, media index, thumbnail, source type. |
-| Queue retries / download byte progress | Not implemented | Add failed-item retry and progress from `chrome.downloads` deltas. |
+| Queue retries / download byte progress | Implemented, requires browser validation | Up to three attempts for start/interruption failures, manual Retry failed action, and per-item percentage when Chrome exposes byte deltas. |
 | ZIP from Side Panel queue | Not connected | ZIP writer exists; old `useZip` flag is unused by current UI. |
 | Bookmarks / likes full scan | Not implemented | Existing DOM bulk works on loaded content only. |
 | Automated browser/live-X verification | Not run | Requires a logged-in X browser session. |

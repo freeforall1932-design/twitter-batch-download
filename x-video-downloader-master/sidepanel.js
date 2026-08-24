@@ -37,7 +37,9 @@ function render() {
   }
   queueEl.innerHTML = items.map((item) => {
     const thumbnail = item.thumbnail ? `<img src="${escapeHtml(item.thumbnail)}" alt="">` : `<div class="thumb-placeholder">${item.type === "video" ? "▶" : "▧"}</div>`;
-    return `<article class="queue-item"><input class="item-select" data-id="${item.id}" type="checkbox" ${item.selected ? "checked" : ""} aria-label="Select media"><div>${thumbnail}</div><div class="item-info"><div class="item-title">${escapeHtml(item.author || "X post")}</div><div class="item-meta">${escapeHtml(item.date || "Recently discovered")}</div><span class="type-badge">${escapeHtml(item.type || "media")}</span></div><span class="item-status ${escapeHtml(item.status || "discovered")}">${escapeHtml(item.status || "discovered")}</span></article>`;
+    const progress = item.status === "downloading" && item.totalBytes > 0 ? ` ${Math.round((item.bytesReceived || 0) * 100 / item.totalBytes)}%` : "";
+    const retry = item.status === "failed" ? ` (${item.attempts || 0}/3)` : "";
+    return `<article class="queue-item"><input class="item-select" data-id="${item.id}" type="checkbox" ${item.selected ? "checked" : ""} aria-label="Select media"><div>${thumbnail}</div><div class="item-info"><div class="item-title">${escapeHtml(item.author || "X post")}</div><div class="item-meta">${escapeHtml(item.date || "Recently discovered")}</div><span class="type-badge">${escapeHtml(item.type || "media")}</span></div><span class="item-status ${escapeHtml(item.status || "discovered")}" title="${escapeHtml(item.error || "")}">${escapeHtml(item.status || "discovered")}${progress}${retry}</span></article>`;
   }).join("");
 }
 
@@ -47,6 +49,7 @@ async function updateSelection(id, selected) { state = await send({ action: "que
 queueEl.addEventListener("change", (event) => { if (event.target.matches(".item-select")) updateSelection(event.target.dataset.id, event.target.checked); });
 selectAllEl.addEventListener("change", async () => { state = await send({ action: "queueSelectVisible", filter: filterEl.value, selected: selectAllEl.checked }); render(); });
 filterEl.addEventListener("change", render);
+$("retryFailedBtn").addEventListener("click", async () => { state = await send({ action: "queueRetryFailed" }); render(); });
 $("clearFinishedBtn").addEventListener("click", async () => { state = await send({ action: "queueClearFinished" }); render(); });
 $("downloadSelectedBtn").addEventListener("click", async () => { state = await send({ action: "queueStart", mode: "selected" }); render(); });
 $("downloadAllBtn").addEventListener("click", async () => { state = await send({ action: "queueStart", mode: "all" }); render(); });
