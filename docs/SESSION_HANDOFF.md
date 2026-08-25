@@ -63,7 +63,7 @@ Open questions to ask the user if they are available:
 - Extension directory: `extension/` (the **Load unpacked** target)
 - Working branch for the last Arena session: `arena/01a03ae9-twitter-batch-download`
 - Recent history:
-  - **(v3.4, this branch)** — Quoted-post ("mentioned post" card) media
+  - **(v3.4, this branch → PR #9)** — Quoted-post ("mentioned post" card) media
     capture: quote parsing in `mediaFromTweet`/`getTweetMedia` with
     quoted-post attribution, `isQuote` flag + `quote` badge, per-tab
     **Include quoted** switches (default on), 7 new tests; plus the
