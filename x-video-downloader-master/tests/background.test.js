@@ -668,3 +668,92 @@ test("fetchWithRetry surfaces countdown callbacks on 429 before succeeding", asy
   assert.ok(events.includes(0));
   background.rateLimitStatusListener = null;
 });
+
+test("network captures prefer live operation ids and headers without storing cookies", () => {
+  const background = loadBackground();
+  background.rememberNetworkCapture({
+    operationName: "UserMedia",
+    queryId: "LiveUserMediaQueryId99",
+    features: JSON.stringify({ responsive_web_graphql_timeline_navigation_enabled: true, custom_flag: true }),
+    fieldToggles: JSON.stringify({ withArticlePlainText: true }),
+    variables: JSON.stringify({ userId: "old", count: 30, withV2Timeline: true }),
+    headers: {
+      authorization: "Bearer CAPTURED_BEARER_TOKEN",
+      "x-csrf-token": "captured-csrf",
+      "x-client-transaction-id": "tx-123",
+      cookie: "auth_token=SHOULD_NOT_PERSIST; ct0=nope"
+    }
+  });
+
+  const captured = background.getCapturedOperation("UserMedia");
+  assert.equal(captured.queryId, "LiveUserMediaQueryId99");
+  const capturedHeaders = background.getCapturedHeaders();
+  assert.equal(capturedHeaders.cookie, undefined);
+  assert.equal(capturedHeaders.authorization, "Bearer CAPTURED_BEARER_TOKEN");
+  assert.equal(capturedHeaders["x-client-transaction-id"], "tx-123");
+  assert.equal(capturedHeaders["x-csrf-token"], "captured-csrf");
+  assert.equal(background.getLastTransactionId(), "tx-123");
+
+  const headers = background.makeHeaders();
+  assert.match(headers.authorization, /CAPTURED_BEARER_TOKEN/);
+  assert.equal(headers["x-client-transaction-id"], "tx-123");
+  assert.equal(headers["x-csrf-token"], "captured-csrf");
+
+  const variables = background.buildUserMediaVariables("user-42", "cursor-abc", captured);
+  assert.equal(variables.userId, "user-42");
+  assert.equal(variables.cursor, "cursor-abc");
+  assert.equal(variables.count, 30);
+  assert.equal(variables.withV2Timeline, true);
+  assert.equal(variables.screen_name, undefined);
+
+  const features = background.mergeDiscoveryFeatures(captured);
+  assert.equal(features.custom_flag, true);
+  assert.equal(features.responsive_web_graphql_timeline_navigation_enabled, true);
+});
+
+test("downloadFile falls back to safer paths after Invalid filename", async () => {
+  const attempts = [];
+  const background = loadBackground({
+    download: (options, callback) => {
+      attempts.push(options.filename);
+      if (attempts.length === 1) {
+        background.chrome.runtime.lastError = { message: "Invalid filename" };
+        callback(undefined);
+        background.chrome.runtime.lastError = null;
+        return;
+      }
+      background.chrome.runtime.lastError = null;
+      callback(99);
+    }
+  });
+
+  const result = await background.downloadFile(
+    "https://video.example.com/a.mp4",
+    'x-media/alice_hello:world?/<>_123_1.mp4'
+  );
+  assert.equal(result.success, true);
+  assert.equal(result.downloadId, 99);
+  assert.ok(attempts.length >= 2);
+  assert.notEqual(attempts[0], attempts[1]);
+  assert.ok(attempts.every((name) => !name.includes("?")));
+});
+
+test("normalizePhotoUrl forces orig and preserves format", () => {
+  const background = loadBackground();
+  assert.equal(
+    background.normalizePhotoUrl("https://pbs.example.com/media/abc?format=png"),
+    "https://pbs.example.com/media/abc?format=png&name=orig"
+  );
+  assert.match(
+    background.normalizePhotoUrl("https://pbs.example.com/media/abc.jpg"),
+    /name=orig/
+  );
+});
+
+test("buildFallbackFilenames produces a short safe ladder", () => {
+  const background = loadBackground();
+  const ladder = background.buildFallbackFilenames('x-media/alice:bad?/name_hello world_1.mp4');
+  assert.ok(ladder.length >= 3);
+  assert.ok(ladder.every((name) => !/[<>:"|?*]/.test(name)));
+  assert.ok(ladder.some((name) => name.startsWith("x-media/")));
+});

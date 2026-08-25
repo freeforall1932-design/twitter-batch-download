@@ -210,3 +210,32 @@ Chronological implementation record for X Media Downloader.
 - All **23** local Node tests pass (`node --test tests/background.test.js`).
 - No live X data or signed-in session required for these tests.
 - Live-X checklist in WORKLIST remains open before declaring P0 complete.
+
+## 2026-08-25 — Rank S/A stability review (live capture + download fallbacks)
+
+### Review priority applied
+1. **Rank S (Plucker XBD)** first — battle-tested intercept of live GraphQL query IDs, features/variables, and request headers (`authorization`, `x-csrf-token`, `x-client-transaction-id`). Rejected its `apixbd.plucker.io` / plan_code / daily-limit gates.
+2. **Rank A** second — Invalid-filename download ladder, photo `format=` extension detection, safer path sanitization.
+3. **Rank B** last — ExtPay licensing ignored; no useful GraphQL scanner to port.
+
+### Added
+- `injected.js` MAIN-world network bridge (document_start) that observes XHR/fetch GraphQL calls and posts operation metadata + safe headers to the isolated content script.
+- `content.js` forwards `xdlNetworkCapture` to the service worker (`networkCapture` message).
+- `background.js` capture bag (`__xdlNetworkCapture`) with 30-minute freshness:
+  - prefers live `UserMedia` / `UserPhotoTimeline` / `UserVideoTimeline` / `UserByScreenName` query IDs over bundle scrape
+  - merges live features/fieldToggles/variables templates into discovery requests
+  - reuses `x-client-transaction-id` and other captured X headers
+  - never stores Cookie header values in the capture bag
+- `downloadFile()` retries with safer path ladder on Chrome `Invalid filename` (Rank S/A pattern).
+- `normalizePhotoUrl()` forces `name=orig` while preserving `format=`.
+- Discovery stops after repeated empty pages (in addition to missing/repeated cursor).
+- Manifest v3.1: MAIN-world content script, dropped unused `webRequest` permission.
+
+### Deliberately not ported
+- Any third-party account, license, activation, tier, or daily download counter.
+- Plucker’s external webapp task pipeline.
+- Rank B ExtPay payment hooks.
+
+### Validation
+- All **27** local Node tests pass.
+- No live X session required for unit tests; live signed-in validation still required for P0 complete.

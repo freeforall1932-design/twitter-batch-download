@@ -23,7 +23,9 @@ The extension is **self-hosted against the signed-in X session only**. It does n
 | Side Panel UI | Done | Target input, discovery cap defaulting to 99,999, queue view, media filter, individual selection, Select all, Download selected/all. |
 | Persistent queue | Done | `chrome.storage.local` queue state in `background.js`. |
 | 1–2 download scheduler | Done | A new item starts only after `chrome.downloads.onChanged` reports a prior item terminal; default 2. |
-| Side Panel profile-media discovery | Implemented, requires live-X validation | The Discover control normalizes a profile target, reads current X bundle metadata, resolves the user, and pushes discovered media into the queue. Features/variables expanded from Rank S captures; live response shapes still must be verified. |
+| Side Panel profile-media discovery | Implemented, requires live-X validation | Discover uses live MAIN-world GraphQL captures when available (query ID + features/variables/headers), else bundle scrape. Still needs signed-in live validation. |
+| Live network capture bridge | Implemented, requires live-X validation | `injected.js` (MAIN) + content forwarder + background capture bag. No third-party hosts. Cookie values are never stored in the capture bag. |
+| Download filename fallback ladder | Implemented | Invalid filename retries with progressively safer paths (Rank S/A insight). |
 | Full-profile pagination / end-of-timeline completion | Implemented, requires live-X validation | Follows the bottom cursor until the cap, no/repeated cursor, or Stop discovery. Supports `timeline_v2` and legacy timeline paths. |
 | Original post / repost / reply / quote inclusion rules | Partial | Original posts are scanned; Include reposts is consumed and reposts get a queue badge. Replies and quoted media remain explicit future options. |
 | Discovery progress and rate-limit status | Implemented, requires live validation | Resolving/page/found/completed/stopped/error states are shown. 429/503 retries publish a visible Side Panel countdown (`retryAfterMs` / `retryUntil`). |

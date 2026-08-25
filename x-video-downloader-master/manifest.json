@@ -1,15 +1,14 @@
 {
   "manifest_version": 3,
   "name": "X Media Downloader",
-  "version": "3.0",
-  "description": "Download videos and photos from X/Twitter \u2014 single click or bulk auto-scroll",
+  "version": "3.1",
+  "description": "Download videos and photos from X/Twitter — Side Panel batch queue or one-click on tweets",
   "permissions": [
     "downloads",
     "storage",
     "activeTab",
     "scripting",
     "cookies",
-    "webRequest",
     "sidePanel"
   ],
   "host_permissions": [
@@ -36,9 +35,20 @@
         "https://twitter.com/*"
       ],
       "js": [
+        "injected.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://x.com/*",
+        "https://twitter.com/*"
+      ],
+      "js": [
         "content.js"
       ],
-      "run_at": "document_idle"
+      "run_at": "document_start"
     }
   ],
   "icons": {

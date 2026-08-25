@@ -12,6 +12,24 @@ let csrfToken = null;
 let cookieStr = null;
 let envTimestamp = 0;
 
+// --- Live network capture cache (Rank S insight, local-only) ---
+// Populated by MAIN-world injected.js via content.js. Holds the latest
+// operation IDs, features/variables templates, and non-cookie request headers
+// observed from the signed-in X tab. Never exported to the UI.
+const CAPTURE_MAX_AGE_MS = 30 * 60 * 1000;
+// Kept on globalThis so the service worker and unit-test VM share one bag and
+// tests can inspect captures without fighting module-scoped `let` bindings.
+globalThis.__xdlNetworkCapture = {
+  operations: new Map(), // operationName → { queryId, features, fieldToggles, variables, at }
+  headers: {},
+  lastTransactionId: null,
+  updatedAt: 0
+};
+
+function captureBag() {
+  return globalThis.__xdlNetworkCapture;
+}
+
 // --- Known Twitter Bearer token (public app-level, embedded in X's JS) ---
 const KNOWN_BEARER = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA";
 
@@ -203,15 +221,163 @@ function getAllCookies() {
   });
 }
 
-function makeHeaders() {
-  return {
+function rememberNetworkCapture(capture) {
+  if (!capture || typeof capture !== "object") return false;
+  const bag = captureBag();
+  const operationName = String(capture.operationName || "").trim();
+  const queryId = String(capture.queryId || "").trim();
+  let changed = false;
+
+  if (operationName && queryId && /^[A-Za-z0-9_-]{8,}$/.test(queryId)) {
+    const prev = bag.operations.get(operationName) || {};
+    const next = {
+      queryId,
+      features: capture.features || prev.features || null,
+      fieldToggles: capture.fieldToggles || prev.fieldToggles || null,
+      variables: capture.variables || prev.variables || null,
+      at: Date.now()
+    };
+    bag.operations.set(operationName, next);
+    changed = true;
+  }
+
+  const headers = capture.headers && typeof capture.headers === "object" ? capture.headers : {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (!value) continue;
+    const lower = String(key).toLowerCase();
+    // Never persist Cookie header values into the capture bag.
+    if (lower === "cookie") continue;
+    if (lower === "authorization") {
+      const match = String(value).match(/Bearer\s+(.+)$/i);
+      if (match?.[1]) {
+        bearerToken = match[1].trim();
+        envTimestamp = Date.now();
+      }
+    }
+    if (lower === "x-csrf-token") {
+      csrfToken = String(value);
+    }
+    if (lower === "x-client-transaction-id") {
+      bag.lastTransactionId = String(value);
+    }
+    bag.headers[lower] = String(value);
+    changed = true;
+  }
+
+  if (changed) bag.updatedAt = Date.now();
+  return changed;
+}
+
+function isCaptureFresh(entry) {
+  if (!entry?.at) return false;
+  return Date.now() - entry.at < CAPTURE_MAX_AGE_MS;
+}
+
+function getCapturedOperation(name) {
+  const entry = captureBag().operations.get(name);
+  return isCaptureFresh(entry) ? entry : null;
+}
+
+function getCapturedHeaders() {
+  return { ...captureBag().headers };
+}
+
+function getLastTransactionId() {
+  return captureBag().lastTransactionId || captureBag().headers["x-client-transaction-id"] || null;
+}
+
+function parseCapturedJson(raw, fallback) {
+  if (!raw) return fallback;
+  if (typeof raw === "object") return raw;
+  try {
+    return JSON.parse(raw);
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function makeHeaders(options = {}) {
+  const headers = {
     "authorization": "Bearer " + bearerToken,
     "x-csrf-token": csrfToken,
     "x-twitter-auth-type": "OAuth2Session",
     "x-twitter-active-user": "yes",
     "x-twitter-client-language": "en",
+    "content-type": "application/json",
     "cookie": cookieStr
   };
+
+  // Prefer live headers captured from the signed-in X page (Rank S pattern).
+  const captured = captureBag().headers || {};
+  for (const key of [
+    "authorization",
+    "x-csrf-token",
+    "x-client-uuid",
+    "x-twitter-active-user",
+    "x-twitter-client-language",
+    "x-twitter-auth-type"
+  ]) {
+    if (captured[key]) headers[key] = captured[key];
+  }
+
+  // Fresh CSRF from cookies always wins over a stale capture.
+  if (csrfToken) headers["x-csrf-token"] = csrfToken;
+  if (bearerToken && !String(headers.authorization || "").includes(bearerToken)) {
+    headers.authorization = "Bearer " + bearerToken;
+  }
+
+  // x-client-transaction-id is required by some modern X GraphQL endpoints.
+  // Reuse the latest observed value when the page has issued one recently.
+  const tx = options.transactionId || getLastTransactionId();
+  if (tx) headers["x-client-transaction-id"] = tx;
+
+  return headers;
+}
+
+function normalizePhotoUrl(rawUrl) {
+  // Rank S keeps the CDN photo URL; Rank A normalizes format + size params.
+  // Prefer original resolution while preserving format when X provides it.
+  if (!rawUrl) return "";
+  try {
+    const url = new URL(rawUrl);
+    if (!url.searchParams.get("name")) url.searchParams.set("name", "orig");
+    const format = url.searchParams.get("format");
+    if (format) url.searchParams.set("format", String(format).toLowerCase());
+    return url.toString();
+  } catch (_) {
+    if (!/[?&]name=/.test(rawUrl)) {
+      return rawUrl.includes("?") ? `${rawUrl}&name=orig` : `${rawUrl}?name=orig`;
+    }
+    return rawUrl;
+  }
+}
+
+function sanitizeDownloadPath(filename) {
+  return String(filename || "x-media/media.bin")
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "")
+    .replace(/\.\.+/g, ".")
+    .replace(/[<>:"|?*\x00-\x1f]/g, "_")
+    .replace(/\/{2,}/g, "/");
+}
+
+function buildFallbackFilenames(filename) {
+  // Rank S / Rank A both retry downloads after "Invalid filename" with simpler
+  // paths. Produce a short ladder of increasingly safe names.
+  const cleaned = sanitizeDownloadPath(filename);
+  const parts = cleaned.split("/");
+  const leaf = parts.pop() || "media.bin";
+  const extMatch = leaf.match(/\.([a-z0-9]{1,5})$/i);
+  const ext = extMatch ? extMatch[1].toLowerCase() : "bin";
+  const stem = leaf.replace(/\.[a-z0-9]{1,5}$/i, "").slice(0, 80) || "media";
+  const safeStem = stem.replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "") || "media";
+  const folder = parts[0] && parts[0] !== ".." ? parts[0].replace(/[^\w.-]+/g, "_") : "x-media";
+  return [
+    cleaned,
+    `${folder}/${safeStem}.${ext}`,
+    `x-media/${safeStem}.${ext}`,
+    `x-media/media_${Date.now().toString(36)}.${ext}`
+  ].filter((value, index, list) => value && list.indexOf(value) === index);
 }
 
 // ==========================================================================
@@ -339,13 +505,21 @@ async function getTweetMedia(tweetId) {
     withArticleRichContentState: false
   };
 
+  // Prefer a live-captured TweetResultByRestId query id when the page has
+  // already issued one (Rank S intercept pattern).
+  const tweetCapture = getCapturedOperation("TweetResultByRestId") || getCapturedOperation("TweetDetail");
+  const queryId = tweetCapture?.queryId || GRAPHQL_QUERY_ID;
+  const operationName = tweetCapture ? (getCapturedOperation("TweetResultByRestId") ? "TweetResultByRestId" : "TweetDetail") : GRAPHQL_ENDPOINT;
+  const mergedFeatures = tweetCapture ? { ...features, ...parseCapturedJson(tweetCapture.features, {}) } : features;
+  const mergedToggles = tweetCapture ? { ...fieldToggles, ...parseCapturedJson(tweetCapture.fieldToggles, {}) } : fieldToggles;
+
   const params = new URLSearchParams({
     variables: JSON.stringify(variables),
-    features: JSON.stringify(features),
-    fieldToggles: JSON.stringify(fieldToggles)
+    features: JSON.stringify(mergedFeatures),
+    fieldToggles: JSON.stringify(mergedToggles)
   });
 
-  const url = `https://x.com/i/api/graphql/${GRAPHQL_QUERY_ID}/${GRAPHQL_ENDPOINT}?${params}`;
+  const url = `https://x.com/i/api/graphql/${queryId}/${operationName}?${params}`;
 
   console.log("[X-DL BG] GraphQL request for tweet:", tweetId);
 
@@ -445,12 +619,7 @@ async function getTweetMedia(tweetId) {
         });
       }
     } else if (m.type === "photo") {
-      // Use original resolution
-      let photoUrl = m.media_url_https || m.media_url || "";
-      // Append ?name=orig for highest resolution
-      if (photoUrl && !photoUrl.includes("name=")) {
-        photoUrl += "?name=orig";
-      }
+      const photoUrl = normalizePhotoUrl(m.media_url_https || m.media_url || "");
       if (photoUrl) {
         photos.push({
           url: photoUrl,
@@ -476,21 +645,46 @@ async function getTweetMedia(tweetId) {
 // DOWNLOAD — Save media file via chrome.downloads
 // ==========================================================================
 
-function downloadFile(url, filename) {
+function chromeDownloadOnce(url, filename) {
   return new Promise((resolve) => {
     chrome.downloads.download(
-      { url, filename, conflictAction: "uniquify" },
+      { url, filename, saveAs: false, conflictAction: "uniquify" },
       (downloadId) => {
         if (chrome.runtime.lastError) {
-          console.error("[X-DL BG] Download error:", chrome.runtime.lastError.message);
-          resolve({ success: false, error: chrome.runtime.lastError.message });
+          resolve({ success: false, error: chrome.runtime.lastError.message || "Download failed" });
         } else {
-          console.log("[X-DL BG] Download started:", filename, "id:", downloadId);
-          resolve({ success: true, downloadId });
+          resolve({ success: true, downloadId, filename });
         }
       }
     );
   });
+}
+
+async function downloadFile(url, filename) {
+  // Rank S retries Invalid filename with progressively safer paths so a long
+  // post-text snippet cannot brick an otherwise valid CDN URL.
+  const candidates = buildFallbackFilenames(filename);
+  let lastError = "Download failed";
+  for (const candidate of candidates) {
+    const result = await chromeDownloadOnce(url, candidate);
+    if (result.success) {
+      if (candidate !== candidates[0]) {
+        console.log("[X-DL BG] Download started with fallback filename:", candidate, "id:", result.downloadId);
+      } else {
+        console.log("[X-DL BG] Download started:", candidate, "id:", result.downloadId);
+      }
+      return result;
+    }
+    lastError = result.error || lastError;
+    const invalid = /invalid filename|invalid file path|path is invalid/i.test(lastError);
+    if (!invalid) {
+      console.error("[X-DL BG] Download error:", lastError);
+      return { success: false, error: lastError };
+    }
+    console.warn("[X-DL BG] Invalid filename, retrying with safer path:", candidate, "→", lastError);
+  }
+  console.error("[X-DL BG] Download error after fallbacks:", lastError);
+  return { success: false, error: lastError };
 }
 
 // ==========================================================================
@@ -861,14 +1055,25 @@ function normalizeProfileTarget(rawTarget) {
   return name;
 }
 
-async function getOperationIds(tabId) {
+function resolveOperationRecord(preferredNames) {
+  // Rank S prefers live-intercepted query IDs (UserMedia / photo-video timelines)
+  // over brittle bundle scraping. Accept the first fresh capture among aliases.
+  for (const name of preferredNames) {
+    const captured = getCapturedOperation(name);
+    if (captured?.queryId) {
+      return { name, queryId: captured.queryId, capture: captured, source: "capture" };
+    }
+  }
+  return null;
+}
+
+async function scrapeOperationIdsFromBundles(tabId, operationNames) {
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     func: () => Array.from(document.scripts).map((script) => script.src).filter((src) => /\.js(?:\?|$)/.test(src))
   });
   const urls = results?.[0]?.result || [];
   const ids = {};
-  const operationNames = ["UserByScreenName", "UserMedia"];
   // Query IDs change often. Read the bundle belonging to the currently open X UI
   // instead of treating a copied ID as a durable API contract.
   for (const url of urls.slice(0, 80)) {
@@ -891,9 +1096,55 @@ async function getOperationIds(tabId) {
       }
     } catch (_) { /* An optional bundle may be unavailable; inspect the next one. */ }
   }
-  const missing = operationNames.filter((name) => !ids[name]);
-  if (missing.length) throw new Error(`Could not find current X operation metadata: ${missing.join(", ")}. Open the target's X profile once, refresh it, then retry.`);
   return ids;
+}
+
+async function getOperationIds(tabId) {
+  // Prefer Rank S-style live captures. Fall back to bundle scrape, then to
+  // alternate media timeline operation names X has shipped recently.
+  const userOp = resolveOperationRecord(["UserByScreenName"]) || null;
+  const mediaOp = resolveOperationRecord(["UserMedia", "UserPhotoTimeline", "UserVideoTimeline"]) || null;
+
+  const needed = [];
+  if (!userOp) needed.push("UserByScreenName");
+  if (!mediaOp) needed.push("UserMedia", "UserPhotoTimeline", "UserVideoTimeline");
+
+  let scraped = {};
+  if (needed.length && tabId) {
+    scraped = await scrapeOperationIdsFromBundles(tabId, [...new Set(needed)]);
+  }
+
+  const resolvedUser = userOp || (scraped.UserByScreenName
+    ? { name: "UserByScreenName", queryId: scraped.UserByScreenName, capture: null, source: "bundle" }
+    : null);
+
+  let resolvedMedia = mediaOp;
+  if (!resolvedMedia) {
+    for (const name of ["UserMedia", "UserPhotoTimeline", "UserVideoTimeline"]) {
+      if (scraped[name]) {
+        resolvedMedia = { name, queryId: scraped[name], capture: null, source: "bundle" };
+        break;
+      }
+    }
+  }
+
+  if (!resolvedUser || !resolvedMedia) {
+    const missing = [
+      !resolvedUser ? "UserByScreenName" : null,
+      !resolvedMedia ? "UserMedia" : null
+    ].filter(Boolean);
+    throw new Error(`Could not find current X operation metadata: ${missing.join(", ")}. Open the target's X profile/media page once, refresh it, then retry.`);
+  }
+
+  return {
+    UserByScreenName: resolvedUser.queryId,
+    UserMedia: resolvedMedia.queryId,
+    userOperationName: resolvedUser.name,
+    mediaOperationName: resolvedMedia.name,
+    userCapture: resolvedUser.capture,
+    mediaCapture: resolvedMedia.capture,
+    sources: { user: resolvedUser.source, media: resolvedMedia.source }
+  };
 }
 
 function discoveryFeatures() {
@@ -946,13 +1197,53 @@ function throwClassifiedDiscoveryError(raw, context = {}) {
   throw error;
 }
 
-async function callDiscoveryGraphQL(operationId, operationName, variables) {
+function mergeDiscoveryFeatures(capture) {
+  const defaults = discoveryFeatures();
+  const captured = parseCapturedJson(capture?.features, null);
+  if (!captured || typeof captured !== "object") return defaults;
+  // Live feature flags from the signed-in page override defaults (Rank S).
+  return { ...defaults, ...captured };
+}
+
+function mergeDiscoveryFieldToggles(capture) {
+  const defaults = discoveryFieldToggles();
+  const captured = parseCapturedJson(capture?.fieldToggles, null);
+  if (!captured || typeof captured !== "object") return defaults;
+  return { ...defaults, ...captured };
+}
+
+function buildUserMediaVariables(userId, cursor, capture) {
+  // Start from a captured variables template when available so newly required
+  // X flags travel with the request automatically.
+  const capturedVars = parseCapturedJson(capture?.variables, {}) || {};
+  const variables = {
+    ...capturedVars,
+    userId,
+    count: Math.min(40, Math.max(10, Number(capturedVars.count) || 20)),
+    includePromotedContent: capturedVars.includePromotedContent !== false,
+    withQuickPromoteEligibilityTweetFields: capturedVars.withQuickPromoteEligibilityTweetFields !== false,
+    withVoice: capturedVars.withVoice !== false,
+    withV2Timeline: capturedVars.withV2Timeline !== false
+  };
+  // Cursor always comes from our pagination state, never a stale capture.
+  if (cursor) variables.cursor = cursor;
+  else delete variables.cursor;
+  // Ensure the resolved user wins over any screen_name leftover in the template.
+  variables.userId = userId;
+  delete variables.screen_name;
+  return variables;
+}
+
+async function callDiscoveryGraphQL(operationId, operationName, variables, capture = null) {
   const params = new URLSearchParams({
     variables: JSON.stringify(variables),
-    features: JSON.stringify(discoveryFeatures()),
-    fieldToggles: JSON.stringify(discoveryFieldToggles())
+    features: JSON.stringify(mergeDiscoveryFeatures(capture)),
+    fieldToggles: JSON.stringify(mergeDiscoveryFieldToggles(capture))
   });
-  const response = await fetchWithRetry(`https://x.com/i/api/graphql/${operationId}/${operationName}?${params}`, makeHeaders());
+  const response = await fetchWithRetry(
+    `https://x.com/i/api/graphql/${operationId}/${operationName}?${params}`,
+    makeHeaders()
+  );
   if (!response) throwClassifiedDiscoveryError("X rate limit retries were exhausted.", { code: "rate_limited" });
   if (!response.ok) {
     const body = await response.text().catch(() => "");
@@ -1105,8 +1396,7 @@ function mediaFromTweet(tweet, targetHandle, includeRetweets) {
   return media.map((item, index) => {
     let url = "", type = item.type === "photo" ? "photo" : "video";
     if (item.type === "photo") {
-      url = item.media_url_https || item.media_url || "";
-      if (url && !/[?&]name=/.test(url)) url += "?name=orig";
+      url = normalizePhotoUrl(item.media_url_https || item.media_url || "");
     } else if (item.type === "video" || item.type === "animated_gif") {
       const variants = (item.video_info?.variants || []).filter((variant) => variant.content_type === "video/mp4");
       variants.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
@@ -1193,10 +1483,12 @@ async function runProfileDiscovery(options, runId) {
     if (!isCurrentDiscoveryRun(state, runId)) return;
     state.status = `Resolving @${username}…`; await saveDiscoveryState();
     if (!isCurrentDiscoveryRun(state, runId)) return;
-    const userJson = await callDiscoveryGraphQL(operations.UserByScreenName, "UserByScreenName", {
-      screen_name: username,
-      withSafetyModeUserFields: true
-    });
+    const userJson = await callDiscoveryGraphQL(
+      operations.UserByScreenName,
+      operations.userOperationName || "UserByScreenName",
+      { screen_name: username, withSafetyModeUserFields: true },
+      operations.userCapture
+    );
     if (!isCurrentDiscoveryRun(state, runId)) return;
     const resolved = resolveUserResult(userJson);
     if (resolved.error) {
@@ -1208,6 +1500,7 @@ async function runProfileDiscovery(options, runId) {
     let cursor = null, previousCursor = null;
     const seenMediaIds = new Set();
     const limit = normalizeDiscoveryLimit(options.limit);
+    let emptyPages = 0;
     while (isCurrentDiscoveryRun(state, runId) && !state.stopRequested && state.found < limit) {
       state.status = `Fetching page ${state.pages + 1} — ${state.found} media found…`;
       state.error = null;
@@ -1215,18 +1508,14 @@ async function runProfileDiscovery(options, runId) {
       await clearDiscoveryRetry(state);
       await saveDiscoveryState();
       if (!isCurrentDiscoveryRun(state, runId)) return;
-      // Variables mirror current X UserMedia / timeline request shape used by
-      // Rank S Plucker captures. count stays moderate to reduce 429 pressure.
-      const variables = {
-        userId,
-        count: 20,
-        includePromotedContent: true,
-        withQuickPromoteEligibilityTweetFields: true,
-        withVoice: true,
-        withV2Timeline: true
-      };
-      if (cursor) variables.cursor = cursor;
-      const page = await callDiscoveryGraphQL(operations.UserMedia, "UserMedia", variables);
+      // Prefer live-captured features/variables (Rank S). Fall back to defaults.
+      const variables = buildUserMediaVariables(userId, cursor, operations.mediaCapture);
+      const page = await callDiscoveryGraphQL(
+        operations.UserMedia,
+        operations.mediaOperationName || "UserMedia",
+        variables,
+        operations.mediaCapture
+      );
       if (!isCurrentDiscoveryRun(state, runId)) return;
       const instructions = extractTimelineInstructions(page) || page;
       const tweets = [];
@@ -1239,7 +1528,10 @@ async function runProfileDiscovery(options, runId) {
       state.pages++;
       previousCursor = cursor;
       cursor = findBottomCursor(instructions);
-      if (!cursor || cursor === previousCursor) break;
+      if (!items.length) emptyPages += 1;
+      else emptyPages = 0;
+      // End when X stops paging, repeats a cursor, or returns multiple empty pages.
+      if (!cursor || cursor === previousCursor || emptyPages >= 2) break;
     }
     if (!isCurrentDiscoveryRun(state, runId)) return;
     state.running = false;
@@ -1303,6 +1595,13 @@ async function handleDiscoveryMessage(msg) {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const tabId = sender.tab?.id;
+
+  // Live GraphQL/header captures from MAIN-world injected.js (via content.js).
+  if (msg.action === "networkCapture") {
+    rememberNetworkCapture(msg.capture || {});
+    sendResponse({ ok: true });
+    return false;
+  }
 
   // Side-panel discovery controls
   if (typeof msg.action === "string" && msg.action.startsWith("discovery")) {

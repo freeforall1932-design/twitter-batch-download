@@ -13,7 +13,8 @@
   - Queue retries, byte progress, restart reconciliation
   - Direct filenames by username/text; ZIP export dropped
   - Community discovery cap 99,999
-  - **This session:** P0 discovery error classification, rate-limit countdown UI, richer GraphQL features/variables, sanitized fixtures (23 local tests)
+  - **This session:** P0 discovery error classification, rate-limit countdown UI, richer GraphQL features/variables, sanitized fixtures
+  - Rank S/A stability pass: live GraphQL/header capture bridge, transaction-id headers, operation-config reuse, download filename fallbacks (27 local tests)
 
 The extension has no build step, package manager, TypeScript, or server. Reload it in `chrome://extensions` after changes and load `x-video-downloader-master/` as the unpacked extension.
 
@@ -173,7 +174,9 @@ Queue states are `discovered`, `queued`, `starting`, `downloading`, `completed`,
 - Profile target validation.
 - Stop behavior and queue cleanup.
 - Classified discovery errors + Side Panel rate-limit countdown.
-- Local sanitized fixtures and 23 Node regression tests.
+- Local sanitized fixtures and 27 Node regression tests.
+- MAIN-world live GraphQL/header capture bridge (`injected.js`) reimplemented from Rank S intercept patterns without third-party services.
+- Download filename fallback ladder (Rank A/S insight).
 
 ### Implemented but **must be verified against live X**
 
