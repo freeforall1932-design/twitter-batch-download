@@ -64,7 +64,7 @@ $("useCurrentBtn").addEventListener("click", () => chrome.tabs.query({ active: t
 $("discoverBtn").addEventListener("click", async () => {
   const target = $("targetInput").value.trim();
   if (!target) { $("discoveryHint").textContent = "Enter a profile URL or @username first."; return; }
-  const options = { target, limit: Math.min(9999, Math.max(1, Number($("discoveryLimit").value) || 9999)), includeRetweets: $("includeRetweets").checked };
+  const options = { target, limit: Math.min(99999, Math.max(1, Number($("discoveryLimit").value) || 99999)), includeRetweets: $("includeRetweets").checked };
   await chrome.storage.local.set({ batchTarget: options.target, batchLimit: options.limit, includeRetweets: options.includeRetweets });
   discovery = await send({ action: "discoveryStart", ...options });
   render();

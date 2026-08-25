@@ -6,8 +6,10 @@
 
 - Repository: `freeforall1932-design/twitter-batch-download`
 - Extension directory: `x-video-downloader-master/`
-- Working branch for this Arena session: `arena/01a02c57-twitter-batch-download`
+- Working branch for this Arena session: `arena/01a031d1-twitter-batch-download`
 - Current relevant commits:
+  - `00540d9` — Name downloads by post username and text
+  - `7058dce` — Harden queue scheduling, discovery, and restart reconciliation
   - `5ee8ad3` — Add queue retry and download progress states
   - `3947598` — Add profile media discovery to side panel
   - `58c2f32` — Document queue discovery implementation worklist
@@ -23,8 +25,9 @@ The main product is a **Chrome Side Panel batch media queue**, not only one-butt
 A user should be able to:
 
 1. Enter `@username`, a profile URL, or a `/media` URL.
-2. Discover the account's media with an upper cap, default **9,999**.
+2. Discover the account's media with an upper cap, default **99,999**.
    - The cap is not a target. If an account has 690 media items, discovery should complete at 690.
+   - This is a local community cap, not a third-party paid/free tier limit.
 3. See discovered items newest-first in the Side Panel.
 4. Tick individual media items or Select all.
 5. Download selected items or all discovered items.
@@ -36,6 +39,8 @@ The existing per-tweet action-bar button remains supported but is not the main c
 ## Security and authentication policy
 
 Do **not** ask the user to paste passwords, API keys, `auth_token`, `ct0`, or a Cookie header.
+
+The extension is **self-hosted against the signed-in X session only**. It must not call any third-party account, subscription, activation, licensing, or tier-checking service. There is no paid/free mode to unlock or bypass.
 
 The extension is intended to use the existing signed-in X session in the same Chrome profile:
 
@@ -77,7 +82,7 @@ The persistent batch interface.
 Current controls:
 
 - profile target input and “use current X tab” button;
-- scan limit, default 9,999;
+- scan limit, default 99,999;
 - Include reposts checkbox;
 - Discover media / Stop scan;
 - discovered, selected, completed counters;
@@ -102,7 +107,7 @@ Existing page-side behavior.
 ### `popup.html`, `popup.js`
 
 - Existing current-page bulk download controls remain.
-- Default max input changed to 9,999.
+- Default max input changed to 99,999.
 - Added **Open batch queue** action to open the Side Panel.
 
 ### `lib/zip-writer.js`
@@ -216,6 +221,13 @@ Redact/replace completely:
 9. Select one/two items and verify no more than the configured 1/2 Chrome downloads run at once.
 10. Test failed download retry if a harmless reproducible failure is available.
 11. Test protected/deleted/NSFW errors without exposing sensitive account details.
+
+## Third-party service and abandoned-extension policy
+
+- This extension is **self-hosted and X-session-only**. It must never call, require, or depend on a third-party account, subscription, activation, license, or tier-checking service.
+- The abandoned Chrome Web Store X-media extension is a **conceptual reference only**. It has no public repo, no readable source, and no verifiable license, so it must **not** be unpacked, decompiled, or copied.
+- Any feature direction it suggests (batch-fetch-then-download, sidebar-style review UI) must be **reimplemented locally** against the existing queue/parser/scheduler. Do not import its login, license, activation, or tier-gating logic.
+- This project has **no paid vs free tier**. Its high community discovery cap is a local setting, not an unlock or bypass of any external license.
 
 ## Backlog / bucket list
 

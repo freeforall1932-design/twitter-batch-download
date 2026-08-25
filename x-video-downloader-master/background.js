@@ -24,6 +24,20 @@ let lastRequestTime = 0;
 let rateLimitHits = 0;
 const MIN_REQUEST_INTERVAL = 800; // ms between requests to avoid rate limiting
 
+// --- Community discovery cap ---
+// This extension is self-hosted against the signed-in X session only. There is
+// no third-party tier service, so the scan cap is intentionally high and
+// community-owned rather than limited by a paid/free subscription.
+const DEFAULT_DISCOVERY_LIMIT = 99999;
+const MAX_DISCOVERY_LIMIT = 99999;
+
+function normalizeDiscoveryLimit(value) {
+  if (value === null || value === undefined || value === "") return DEFAULT_DISCOVERY_LIMIT;
+  const number = Math.floor(Number(value));
+  if (!Number.isFinite(number)) return DEFAULT_DISCOVERY_LIMIT;
+  return Math.min(MAX_DISCOVERY_LIMIT, Math.max(1, number));
+}
+
 // --- Download queue for ZIP batching ---
 const zipBuffers = new Map(); // bulkId → [{data, filename}]
 
@@ -912,7 +926,7 @@ async function runProfileDiscovery(options, runId) {
     if (!userId) throw new Error("X did not return a profile for that username.");
     let cursor = null, previousCursor = null;
     const seenMediaIds = new Set();
-    const limit = Math.min(9999, Math.max(1, Number(options.limit) || 9999));
+    const limit = normalizeDiscoveryLimit(options.limit);
     while (isCurrentDiscoveryRun(state, runId) && !state.stopRequested && state.found < limit) {
       state.status = `Fetching page ${state.pages + 1} — ${state.found} media found…`; await saveDiscoveryState();
       if (!isCurrentDiscoveryRun(state, runId)) return;

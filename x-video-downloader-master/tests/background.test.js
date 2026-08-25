@@ -483,6 +483,16 @@ test("media filenames use the post username and text instead of a ZIP archive", 
   assert.deepEqual(Array.from(items, (item) => item.author), ["@alice", "@alice"]);
 });
 
+test("discovery limit defaults to the high community cap and clamps invalid values", () => {
+  const background = loadBackground();
+  assert.equal(background.normalizeDiscoveryLimit(undefined), 99999);
+  assert.equal(background.normalizeDiscoveryLimit(0), 1);
+  assert.equal(background.normalizeDiscoveryLimit(-5), 1);
+  assert.equal(background.normalizeDiscoveryLimit(1234.9), 1234);
+  assert.equal(background.normalizeDiscoveryLimit(200000), 99999);
+  assert.equal(background.normalizeDiscoveryLimit(40), 40);
+});
+
 test("makeMediaFilename sanitizes username and post text deterministically", () => {
   const background = loadBackground();
   const filename = background.makeMediaFilename({

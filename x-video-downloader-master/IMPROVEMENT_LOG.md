@@ -147,3 +147,18 @@ Chronological implementation record for X Media Downloader.
 ### Validation
 - Added tests that verify a photo and animated GIF from one post use the post username/text in their filenames and that username/text sanitization is deterministic.
 - No live X data or signed-in session required.
+
+## 2026-08-25 — Community cap and abandoned-extension scope
+
+### Decision
+- Drop the idea of unlocking a "paid tier" or bypassing a third-party license gate. This project is self-hosted and uses only the signed-in X session.
+- The abandoned Chrome Web Store X-media extension is a **conceptual reference only** (batch fetch then download, sidebar-style review surface). It has no public source or verifiable license, so it is **not** unpacked, decompiled, or copied. Any aligned behavior is reimplemented locally.
+- No third-party account, subscription, activation, or tier-checking service is added. Host permissions remain X/Twitter-only.
+
+### Changed
+- Community discovery cap raised from 9,999 to **99,999** in Side Panel, popup, and background discovery.
+- Added `normalizeDiscoveryLimit()` for a single deterministic cap rule (invalid/blank → 99,999; zero/negative → 1; higher values clamped to 99,999).
+
+### Validation
+- Added a regression test for `normalizeDiscoveryLimit()`.
+- All local Node tests pass; no live X data or signed-in session required.
