@@ -70,13 +70,30 @@
 
   function emitCapture(urlString, headers) {
     const parsed = parseGraphqlUrl(urlString);
-    if (!parsed) return;
+    if (!parsed) return null;
     const picked = pickHeaders(headers || {});
     post("xdlNetworkCapture", {
       ...parsed,
       headers: picked,
       at: Date.now()
     });
+    return parsed;
+  }
+
+  function emitGraphqlResponse(urlString, body) {
+    const parsed = parseGraphqlUrl(urlString);
+    if (!parsed || !body || typeof body !== "object") return;
+    post("xdlGraphqlResponse", {
+      operationName: parsed.operationName,
+      queryId: parsed.queryId,
+      json: body,
+      at: Date.now()
+    });
+  }
+
+  function parseJsonMaybe(text) {
+    if (!text || typeof text !== "string") return null;
+    try { return JSON.parse(text); } catch (_) { return null; }
   }
 
   function patchXhr() {
@@ -101,7 +118,16 @@
 
     globalScope.XMLHttpRequest.prototype.send = function patchedSend() {
       try {
-        if (this.__xdlUrl) emitCapture(this.__xdlUrl, this.__xdlHeaders || {});
+        if (this.__xdlUrl) {
+          emitCapture(this.__xdlUrl, this.__xdlHeaders || {});
+          this.addEventListener("loadend", () => {
+            try {
+              if (this.responseType && this.responseType !== "text") return;
+              const json = parseJsonMaybe(this.responseText);
+              if (json) emitGraphqlResponse(this.__xdlUrl, json);
+            } catch (_) { /* ignore response capture failures */ }
+          }, { once: true });
+        }
       } catch (_) { /* ignore */ }
       return originalSend.apply(this, arguments);
     };
@@ -130,7 +156,24 @@
         }
         if (requestUrl) emitCapture(requestUrl, headers);
       } catch (_) { /* ignore */ }
-      return originalFetch.apply(this, arguments);
+      const result = originalFetch.apply(this, arguments);
+      try {
+        return Promise.resolve(result).then((response) => {
+          try {
+            const requestUrl = typeof resource === "string"
+              ? resource
+              : (resource && resource.url) || "";
+            if (requestUrl && response && typeof response.clone === "function") {
+              response.clone().json()
+                .then((json) => emitGraphqlResponse(requestUrl, json))
+                .catch(() => {});
+            }
+          } catch (_) { /* ignore */ }
+          return response;
+        });
+      } catch (_) {
+        return result;
+      }
     };
   }
 
