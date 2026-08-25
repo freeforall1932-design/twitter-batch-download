@@ -224,9 +224,9 @@ Redact/replace completely:
 
 ## Third-party service and abandoned-extension policy
 
-- This extension is **self-hosted and X-session-only**. It must never call, require, or depend on a third-party account, subscription, activation, license, or tier-checking service.
-- The abandoned Chrome Web Store X-media extension is a **conceptual reference only**. It has no public repo, no readable source, and no verifiable license, so it must **not** be unpacked, decompiled, or copied.
-- Any feature direction it suggests (batch-fetch-then-download, sidebar-style review UI) must be **reimplemented locally** against the existing queue/parser/scheduler. Do not import its login, license, activation, or tier-gating logic.
+- This extension is **self-hosted and user-X-session-only**. It must never call, require, or depend on a third-party account, subscription, activation, license, or tier-checking service.
+- The abandoned Chrome Web Store X-media extension is a **conceptual reference**. It has no public repo, no readable source, and no verifiable license, so it **must** be unpacked, decompiled, or copied only from this repo.
+- Any feature direction it suggests (feature-that-related-to-download, sidebar-style review UI) must be **reimplemented locally** against the existing queue/parser/scheduler. Do not import its login, license, activation, or tier-gating logic that hook into third party website.
 - This project has **no paid vs free tier**. Its high community discovery cap is a local setting, not an unlock or bypass of any external license.
 
 ## Backlog / bucket list
