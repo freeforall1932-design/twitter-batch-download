@@ -4,11 +4,11 @@ _Last audited: 2026-08-24_
 
 ## Product target
 
-A signed-in Chrome user can enter an X profile URL or `@username`, discover that account's media (up to a configurable cap, default **99,999**), review media newest-first in the Side Panel, select individual files or all files, and download with **one or two** active downloads only. A cap is an upper bound: if a timeline ends after 690 items, discovery completes normally at 690.
+A signed-in Chrome user can enter an X profile URL or `@username`, discover that account's media (up to a configurable cap, default **9,999**), review media newest-first in the Side Panel, select individual files or all files, and download with **one or two** active downloads only. A cap is an upper bound: if a timeline ends after 690 items, discovery completes normally at 690.
 
 No manual API key, password, `auth_token`, or cookie-pasting field will be added. The extension must use the existing signed-in X browser session and clearly say so in the UI.
 
-The extension is **self-hosted against the signed-in X session only**. It does not depend on any third-party account service, subscription/pricing service, or paid/free tier gate. There is no "activated" vs "unlimited" mode to unlock.
+The extension is **self-hosted against the signed-in X session only**. It does not depend on any third-party account service outside twitter/x website, subscription/pricing service, or paid/free tier gate. There is no "activated" vs "unlimited" mode to unlock.
 
 ## Current implementation audit
 
@@ -41,7 +41,7 @@ Before marking the profile scanner complete, re-review the code and execute the 
 
 1. Confirm current X page JavaScript still exposes discoverable metadata for `UserByScreenName` and `UserMedia`.
 2. Compare a sanitized live first-page and cursor-page response with `runProfileDiscovery()`, `collectTweets()`, `findBottomCursor()`, and `mediaFromTweet()` in `background.js`.
-3. Verify complete result counts for a small account (for example, an account with 690 media should stop at 690 rather than 99,999).
+3. Verify complete result counts for a small account (for example, an account with 690 media should stop at 690 rather than 9,999).
 4. Verify media ordering, multi-photo uniqueness, direct MP4 selection, and original photo URLs.
 5. Verify Include reposts off/on; keep quote/reply media excluded until their dedicated options are implemented.
 6. Verify a 1-download and 2-download queue, retry behavior, Stop scan, Stop after active downloads, and a Side Panel reload.
@@ -74,7 +74,7 @@ Before marking the profile scanner complete, re-review the code and execute the 
 ### P3 — Robustness and optional features
 
 1. Download history UI and stronger resume policy after browser/extension restart.
-2. Keep direct media files (ZIP export is intentionally out of scope so a large queue does not balloon into a multi-GB archive); filenames already use the post's username and text.
+2. Keep direct media files (ZIP export is intentionally out of scope so a large queue does not balloon into a multi-GB archive); filenames already use the post's username and text or implement abandoned chrome extension naming and downloading system that might or might not me able to make separate folder for each batch download.
 3. HLS/live-media policy and support after direct MP4 coverage is verified.
 4. Firefox MV3 compatibility.
 5. Direct avatar/banner download.
@@ -95,10 +95,10 @@ Before marking the profile scanner complete, re-review the code and execute the 
 
 ### Abandoned Chrome Web Store X-media extension (conceptual reference only)
 
-- This is the extension that used to gate crawling/download capacity behind an external (now-defunct) third-party account service: the store listing still described a paid "unlimited crawling" tier and a free/demo tier, but the service is gone and the extension no longer works on either tier.
-- It has **no public GitHub repo, no readable source, and no verifiable license**. It must **not** be unpacked, decompiled, or copied.
-- Use only as a **conceptual direction**, never as code basis:
-  - Batch-fetch-then-download flow (fetch a profile's posts, pages, or media, then enqueue and download in bulk).
+- This is the extension that used to gate crawling/download capacity behind an external (now-defunct) third-party account service: the chrome store listing still described a paid "unlimited crawling" tier and a free tier, but the service is gone and the extension no longer works on paid tier the essence of both paid and free is just cooldown or limit on download per batch as such we should treat it as free tier and extract the how to logic to be implemented into our own project to achieve our goal.
+- It has **no public GitHub repo, no readable source, and no verifiable license**. It **must** be unpacked, decompiled, or copied.
+- Use only as a **conceptual direction**, and as code basis:
+  - any-feature-that-was-used-in-downloadind flow (fetch a profile's posts, pages, or media, then enqueue and download in bulk etc etc look up the chrome extension codebase).
   - Sidebar-style review UI (this project's product target is already the Chrome **Side Panel**, not the old popup-per-tab layout).
 - Any behavior borrowed from that concept must be **reimplemented locally** against the signed-in X session using this repo's existing parser/queue/scheduler. Do **not** import third-party login, license checks, activation calls, or tier-gating logic.
 - Do **not** port the abandoned extension's "paid unlimited vs free limited" behavior. This extension has no paid/free distinction; its high community cap is just a local number.
