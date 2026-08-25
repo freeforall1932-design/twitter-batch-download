@@ -5,15 +5,29 @@
 ## Project and branch
 
 - Repository: `freeforall1932-design/twitter-batch-download`
-- Extension directory: `x-video-downloader-master/`
-- Working branch for this Arena session: `arena/01a0367e-twitter-batch-download`
-- Recent commits on this branch:
-  - cleanup / PR batch (this handoff): remove deprecated ZIP path, legacy message handlers, dead bulk flags
+- Extension directory: `extension/` (load-unpacked root)
+- Previous Arena session branch `arena/01a0367e-twitter-batch-download` — **merged into `main`** (commit `66fab6e`).
+- Working branch for this Arena session: `arena/01a03699-twitter-batch-download`
+- Recent commits:
+  - cleanup / PR batch (prior handoff): remove deprecated ZIP path, legacy message handlers, dead bulk flags
   - `4cc3782` — Rank S live capture bridge + Rank A download fallbacks
   - `93940d8` — Discovery error classification, rate-limit countdown, fixtures
   - `14d2c4d` — Baseline upload
 
-The extension has **no build step**, package manager, TypeScript, or server. Reload it in `chrome://extensions` after changes and load `x-video-downloader-master/` as the unpacked extension.
+The extension has **no build step**, package manager, TypeScript, or server. Reload it in `chrome://extensions` after changes and load **`extension/`** as the unpacked extension.
+
+### Repository layout (2026-08-25 restructure)
+
+```
+extension/                 # ← Load unpacked target (manifest.json at root)
+tests/                     # node --test tests/background.test.js
+scripts/package-release.sh # zip extension/ → releases/x-media-downloader-v<version>.zip
+releases/                  # generated zips (gitignored)
+docs/                      # WORKLIST.md, SESSION_HANDOFF.md, IMPROVEMENT_LOG.md
+reference/scrapyard/       # abandoned extensions, reference only: rank-s-plucker-xbd / rank-a-video-downloader / rank-b-x-exporter
+```
+
+Old names → new names: `x-video-downloader-master/` → `extension/`; docs moved out of the extension root; `abandoned chrome extension scrapyard for use/` → `reference/scrapyard/` (ranks flattened).
 
 ## Product direction
 
@@ -126,14 +140,17 @@ Ask for a **sanitized** Network capture only (no credentials):
 ## Useful commands
 
 ```bash
-cd x-video-downloader-master
-node --check background.js content.js popup.js sidepanel.js injected.js
+# from repo root
+node --check extension/background.js extension/content.js extension/popup.js extension/sidepanel.js extension/injected.js
 node --test tests/background.test.js
+scripts/package-release.sh            # → releases/x-media-downloader-v<version>.zip
 ```
 
 ## Next session priorities
 
-1. Live-X checklist (WORKLIST P0 remaining).
-2. Optional: signed-in status pill in Side Panel.
-3. P1: Include replies / quoted media switches; filename template settings; better badges/counts.
-4. Later: bookmarks/likes sources; retire or migrate popup DOM bulk into Side Panel queue.
+1. **Try it out:** `chrome://extensions` → Load unpacked → `extension/` (see WORKLIST "P0 — repo layout & release packaging"), then run the live-X checklist.
+2. Live-X checklist (WORKLIST P0 remaining).
+3. Cut the first release zip; bump manifest version on next user-visible change.
+4. Optional: signed-in status pill in Side Panel.
+5. P1: Include replies / quoted media switches; filename template settings; better badges/counts.
+6. Later: bookmarks/likes sources; retire or migrate popup DOM bulk into Side Panel queue.

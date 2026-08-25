@@ -1,6 +1,6 @@
 # Development Worklist
 
-_Last audited: 2026-08-25 (post Rank S/A pass + deprecation cleanup)_
+_Last audited: 2026-08-25 (repo restructure — `extension/` load-unpacked root + release packaging; post Rank S/A pass + deprecation cleanup)_
 
 ## Product target
 
@@ -55,6 +55,18 @@ Use this before claiming “ready” or merging large changes:
 - `downloadZip`, `fetchAsArrayBuffer`, `getVideoUrl`, `downloadVideo`, `zipBuffers`, `ZipWriter`, `useZip`, `bulkId` ZIP session ids.
 - `webRequest` permission without a real listener.
 - Hardcoded third-party query IDs as the only discovery path (capture + scrape is OK; single stale ID as sole source is not).
+
+## P0 — repo layout & release packaging (try-it-out path)
+
+New this session (2026-08-25): restructure so the extension can be **Load unpacked** directly, with source and releases separated.
+
+- [x] Renamed project folder to `extension/` — the single **Load unpacked** target (manifest.json at its root).
+- [x] Moved docs to `docs/`, tests to `tests/`, LICENSE + README to repo root; `extension/` now contains only browser-loaded files + icons.
+- [x] Flattened scrapyard to `reference/scrapyard/{rank-s-plucker-xbd, rank-a-video-downloader, rank-b-x-exporter}` (rank A/B were nested inside rank S; rank A extension was double-nested). Context notes + install instructions preserved per rank.
+- [x] Added `scripts/package-release.sh` → `releases/x-media-downloader-v<version>.zip` (manifest at zip root, optional date tag, Windows fallback documented); `releases/*.zip` gitignored.
+- [ ] **Try it out:** load `extension/` unpacked in a signed-in Chrome, then run the live-X checklist below end-to-end.
+- [ ] Cut the first release zip (`scripts/package-release.sh`) and confirm it loads from the unzipped folder.
+- [ ] Bump `extension/manifest.json` version when shipping the next user-visible change; optionally start a `CHANGELOG.md` per release.
 
 ## P0 — remaining (live-X)
 
