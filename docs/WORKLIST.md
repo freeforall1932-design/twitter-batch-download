@@ -1,6 +1,6 @@
 # Development Worklist
 
-_Last audited: 2026-08-25 (Side Panel scroll-capture-first UX after live testing feedback)_
+_Last audited: 2026-08-25 (post live-testing fix pass: always-on capture, SPA route handling, single download action)_
 
 ## Product target
 
@@ -13,19 +13,21 @@ No manual API key / password / cookie paste. Self-hosted against the signed-in X
 | Area | Status | Notes |
 |---|---|---|
 | Manifest V3 / no build | Done | Plain JS under this folder. |
-| Side Panel two-tab queue | Implemented, needs live-X | Default **Scroll capture** tab watches active X pages while the user scrolls; **Remote fetch** keeps paste-link discovery as secondary. Selection/download actions are tab-scoped. |
+| Side Panel two-tab queue | Reworked after live testing | Capture is **always on** in every X tab — no watch command. One download action (`Select all` + `Download selected`); `Download all in tab` removed as redundant. Per-row remove, post deep-link, live active-tab status pill. |
 | Persistent queue + restart reconcile | Done | `batchDownloadQueueV1`; starting/downloading recovery via `chrome.downloads.search`. |
 | Profile discovery | Implemented, needs live-X | Capture-first op IDs + bundle scrape fallback; timeline_v2/legacy; empty-page stop. |
-| Live GraphQL/header/response capture | Implemented, needs live-X | MAIN `injected.js` → content → background. Headers warm operation metadata; GraphQL responses can list media from normal page scrolling. No cookie values in bag. |
+| Live GraphQL/header/response capture | Reworked after live testing | **No operation allowlist for responses** (that is what broke homepage capture). Allowlist retained only for Remote-fetch request metadata. Adds a 40-entry replay buffer and an SPA `pushState`/`popstate` route watcher. No cookie values in bag. |
 | Discovery error codes + RL countdown | Implemented, needs live-X | Side Panel countdown via `retryUntil`. |
 | Direct filenames + invalid-name ladder | Done | ZIP intentionally removed. |
-| Per-tweet action bar | Done, needs selector verify | `content.js` into `article[data-testid=tweet] [role=group]`. |
-| Popup DOM auto-scroll bulk | Legacy fallback | Popup still exists, but Side Panel Scroll capture is now the primary scroll/review/download surface. |
+| Per-tweet action bar | Expanded (Rank A) | `Download` **and** `Add to queue` on every media post, plus toasts. Reimplemented locally, not copied. |
+| Popup DOM auto-scroll bulk | **Removed** | The popup's competing scroll+download loop is deleted; the popup is now an Open-Side-Panel launcher with a live capture status line. |
 | ZIP export | **Removed** | Deprecated path deleted (`lib/zip-writer.js`, handlers). Do not ship multi-GB archives. |
 | Third-party tier/license | Absent | Do not add. |
+| Skip already-downloaded (Rank S "Ignore saved") | Done | `downloadedMediaIdsV1` stores completed item ids only. Toggle in the toolbar; resettable. |
+| Cross-source dedupe | Done | Every item carries a CDN-derived `mediaKey`, so DOM-found and GraphQL-found copies of one photo collapse into a single row. |
 | Bookmarks / likes full scan | Not implemented | |
 | Include replies / quoted | Not implemented | Must be explicit switches when added. |
-| Live signed-in verification | **Partially run by user; new UX needs another pass** | Previous remote flow worked but was subpar vs Rank S UX/rate-limit behavior. New Scroll capture flow needs validation. |
+| Live signed-in verification | **Round 2 feedback applied; needs round 3** | v3.1 live test found: homepage never captured, capture only woke after reload/new tab, auto-scroll broken, redundant download buttons, dead `Watch current tab`. All addressed in v3.2 — re-test needed. |
 
 
 ## Current product opinion / direction
@@ -77,17 +79,22 @@ New this session (2026-08-25): restructure so the extension can be **Load unpack
 - [ ] Cut the first release zip (`scripts/package-release.sh`) and confirm it loads from the unzipped folder.
 - [ ] Bump `extension/manifest.json` version when shipping the next user-visible change; optionally start a `CHANGELOG.md` per release.
 
-## P0 — remaining (live-X)
+## P0 — remaining (live-X, round 3)
 
-1. Reload the unpacked extension, hard-refresh X, open Side Panel, and verify **Scroll capture** is the default tab.
-2. On an X profile `/media` page, manually scroll and confirm media appears without pressing Remote discover.
-3. Verify visible DOM photos list reliably and GraphQL-response-captured videos/photos appear as X loads timeline pages.
-4. Confirm duplicates are avoided across DOM and response capture.
-5. Test tab-scoped behavior: Scroll capture list, Remote fetch list, Select all, Download all in tab, and Clear history.
-6. Test optional Side Panel auto-scroll: start, stop, limit, speed, media filter.
-7. Run Remote fetch as secondary with a small limit and verify clearer rate-limit messaging/stopping.
-8. Replace or augment synthetic fixtures with sanitized live first/cursor captures when available.
-9. Optional but recommended next: Side Panel diagnostics/status pill and sanitized copy-debug-report.
+Re-test v3.2 against the exact v3.1 failures:
+
+1. **Homepage capture:** open `x.com/home`, scroll, confirm media lists without any reload.
+2. **In-tab route change:** from home click into a post, then to a profile, then to `/media`, all without reloading. Media must list on every view within a couple of seconds.
+3. **Profile posts vs /media:** on `https://x.com/real_loonarae` (the reported case) confirm the *posts* tab lists media, not only `/media`.
+4. **Video posts:** confirm videos appear (per-post resolve is rate-bounded to ~1/700ms, so a video-heavy view fills in progressively).
+5. **Auto-scroll:** start from the panel, confirm the in-page badge appears, that it scrolls continuously without waiting on downloads, and that Stop works from both the badge and the panel.
+6. **Speed:** compare Fast vs Medium; Fast should advance as soon as X renders the next batch.
+7. **One download action:** confirm `Select all` + `Download selected` is sufficient and nothing references a removed `Download all in tab`.
+8. **Skip already downloaded:** download a few items, clear the list, re-scroll the same view, and confirm they do not come back. Then untick the toggle and confirm they do.
+9. **Action bar:** confirm both `Download` and `Add to queue` appear under media posts and that `Add to queue` lands in the Side Panel list.
+10. **Status pill:** confirm it reflects the current route, posts on screen, and pending video resolves; and that it warns when the tab is not X or needs a refresh.
+11. Remote fetch still works as the secondary path with clear rate-limit messaging.
+12. Replace synthetic fixtures with sanitized live captures when available.
 
 ## P1 — inclusion and review UX
 
@@ -113,8 +120,8 @@ New this session (2026-08-25): restructure so the extension can be **Load unpack
 
 ## Bucket list — do not start before P0 live pass
 
-- Retire or simplify popup DOM bulk into an “Open Side Panel” launcher after Scroll capture passes live testing.
-- Action-bar “Add to queue”.
+- ~~Retire or simplify popup DOM bulk into an “Open Side Panel” launcher~~ — **done in v3.2**.
+- ~~Action-bar “Add to queue”~~ — **done in v3.2**.
 - Gallery modes, preview modal, sort choices.
 - Concurrency > 2 only after rate-limit testing.
 - Skip already-downloaded history export.
@@ -134,4 +141,4 @@ New this session (2026-08-25): restructure so the extension can be **Load unpack
 - Reposts off/on correct.
 - Protected / NSFW / logged-out / rate-limit messages specific.
 - Stop discovery; stop downloads; Side Panel reload retains state.
-- **27+** local Node tests still green after cleanup.
+- **43+** local Node tests still green after cleanup (`tests/background.test.js` + `tests/content.test.js`).

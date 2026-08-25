@@ -1,6 +1,12 @@
 // ==========================================================================
-// content.js — DOM observer, button injection, bulk scroll loop
+// content.js — DOM observer, action-bar buttons, scroll capture engine
 // Runs in ISOLATED world on x.com / twitter.com
+//
+// Capture is ALWAYS ON. Earlier builds only listed media after the Side Panel
+// sent an explicit "watch" command to the tab that happened to be active, so
+// SPA route changes (profile → /media → post) and background tabs silently
+// captured nothing until a full reload. Listing now starts at document_start
+// and re-arms on every SPA route change.
 // ==========================================================================
 
 (() => {
@@ -11,65 +17,156 @@
   window.__xdl_active = false;
   console.log("[X-DL] Content script loaded on:", window.location.href);
 
-  // Forward MAIN-world network captures (Rank S insight) to the service worker.
-  // Tokens stay in extension memory only — never rendered in the Side Panel.
+  // ==========================================================================
+  // STATE
+  // ==========================================================================
+
+  let mediaFilter = "all"; // "all" | "video" | "photo"
+  let skipDownloaded = true;
+  let autoScrollRunning = false;
+  let autoScrollStopRequested = false;
+  let listedCount = 0;
+  let statusText = "Watching this tab — scroll to list media.";
+  let envReady = false;
+  let lastRoute = routeKey(window.location.href);
+
+  const listedMediaIds = new Set();       // queue item ids already sent
+  const listedMediaKeys = new Set();      // CDN media keys already sent
+  const pendingVideoTweets = new Set();   // tweet ids seen in DOM with video, unresolved
+  const resolvedVideoTweets = new Set();  // tweet ids already resolved or resolving
+  const scanStats = { photos: 0, videos: 0, posts: 0 };
+
+  // Auto-scroll tuning. "Fast" is genuinely fast: it does not sleep on a fixed
+  // timer, it waits for X to render the next batch and moves on immediately.
+  const SCROLL_CONFIG = {
+    slow: { step: 0.75, settle: 1200, maxWait: 5000 },
+    medium: { step: 1.1, settle: 550, maxWait: 4000 },
+    fast: { step: 1.6, settle: 180, maxWait: 3000 }
+  };
+  let scrollSpeed = "fast";
+
+  // ==========================================================================
+  // MAIN-WORLD BRIDGE
+  // ==========================================================================
+
   window.addEventListener("message", (event) => {
     if (event.source !== window) return;
     const payload = event.data;
     if (!payload || payload.source !== "XDL_INJECTED") return;
+
     if (payload.type === "xdlNetworkCapture" && payload.data) {
-      chrome.runtime.sendMessage({
+      safeSend({
         action: "networkCapture",
         capture: payload.data,
         pageUrl: payload.capturedUrl || window.location.href
-      }).catch(() => {});
+      });
+      return;
     }
+
     if (payload.type === "xdlGraphqlResponse" && payload.data) {
-      chrome.runtime.sendMessage({
+      safeSend({
         action: "localTimelineCapture",
         capture: payload.data,
-        pageUrl: payload.capturedUrl || window.location.href
-      }).catch(() => {});
+        pageUrl: payload.capturedUrl || window.location.href,
+        mediaFilter,
+        skipDownloaded
+      }, (response) => {
+        if (response?.addedCount) {
+          listedCount += response.addedCount;
+          statusText = `Listed ${listedCount} media item${listedCount === 1 ? "" : "s"} from this tab.`;
+        }
+        // Videos that arrived through GraphQL no longer need a per-post resolve.
+        for (const tweetId of response?.tweetIds || []) {
+          pendingVideoTweets.delete(tweetId);
+          resolvedVideoTweets.add(tweetId);
+        }
+      });
+      return;
+    }
+
+    if (payload.type === "xdlInjectedReady") {
+      requestReplay();
+      return;
+    }
+
+    if (payload.type === "xdlUrlChanged" && payload.data) {
+      handleRouteChange(payload.data.newUrl || window.location.href);
     }
   });
 
-  // --- State ---
-  let downloaded = 0;
-  let maxMedia = 100;
-  let scrollSpeed = "medium";
-  let mediaFilter = "all"; // "all" | "video" | "photo"
-  let running = false;
-  let statusText = "Ready";
-  let statusState = "";
-  const processedTweets = new Set();
-  const localListedMedia = new Set();
-  let localWatch = false;
-  let localScrollRunning = false;
-  let localFound = 0;
-  let localStatusText = "Watching is off";
-  let localMediaFilter = "all";
-  let localMaxMedia = 99999;
-  let localScrollSpeed = "medium";
-  let envReady = false;
+  function requestReplay() {
+    // Ask the MAIN world to re-post buffered GraphQL payloads. Covers an
+    // extension reload on an already-open tab and responses that landed before
+    // this listener existed.
+    try {
+      window.postMessage({ source: "XDL_CONTENT", type: "xdlRequestReplay" }, "*");
+    } catch (_) { /* ignore */ }
+  }
 
-  const SCROLL_CONFIG = {
-    slow: { distance: 400, interval: 3500 },
-    medium: { distance: 600, interval: 2200 },
-    fast: { distance: 900, interval: 1400 }
-  };
+  function routeKey(href) {
+    try {
+      const url = new URL(href);
+      const path = url.pathname.replace(/\/+$/, "").toLowerCase();
+      const filter = (url.searchParams.get("filter") || "").toLowerCase();
+      return filter ? `${path}?filter=${filter}` : path;
+    } catch (_) {
+      return String(href || "");
+    }
+  }
+
+  function handleRouteChange(newUrl) {
+    const next = routeKey(newUrl);
+    if (next === lastRoute) return;
+    lastRoute = next;
+    console.log("[X-DL] Route changed →", next);
+    // Deliberately keep listedMediaIds/Keys: the same media can appear on both
+    // the profile and its /media view, and re-listing it would duplicate rows.
+    pendingVideoTweets.clear();
+    statusText = "Route changed — listing media on this view.";
+    // X frequently serves SPA views from its cache without re-issuing GraphQL,
+    // so replay what the page already fetched and rescan the rendered DOM.
+    requestReplay();
+    scheduleScan(0);
+    scheduleScan(700);
+    scheduleScan(1800);
+  }
+
+  function safeSend(message, callback) {
+    try {
+      if (!chrome.runtime?.id) return;
+      chrome.runtime.sendMessage(message, (response) => {
+        // Reading lastError suppresses "Unchecked runtime.lastError" noise when
+        // the service worker is asleep or the extension was just reloaded.
+        void chrome.runtime.lastError;
+        if (callback) callback(response);
+      });
+    } catch (_) { /* extension context invalidated */ }
+  }
+
+  function sendMessage(action, data = {}) {
+    return new Promise((resolve) => {
+      safeSend({ action, ...data }, (response) => resolve(response || null));
+    });
+  }
 
   // ==========================================================================
-  // UI STYLES — Download button styling
+  // UI STYLES — action-bar buttons + toast (Rank A pattern, reimplemented)
   // ==========================================================================
 
   const style = document.createElement("style");
   style.textContent = `
+    .xdl-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: 4px;
+    }
     .xdl-btn {
-      display: flex;
+      display: inline-flex;
       align-items: center;
       gap: 4px;
       padding: 0 12px;
-      height: 32px;
+      height: 30px;
       border: none;
       border-radius: 9999px;
       background: rgba(29,155,240,0.1);
@@ -78,41 +175,90 @@
       font-weight: 700;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       cursor: pointer;
-      transition: background 0.2s;
+      transition: background 0.15s, color 0.15s;
       white-space: nowrap;
     }
-    .xdl-btn:hover {
-      background: rgba(29,155,240,0.2);
+    .xdl-btn:hover { background: rgba(29,155,240,0.2); }
+    .xdl-btn.xdl-loading { opacity: 0.6; cursor: wait; }
+    .xdl-btn.xdl-done { background: rgba(0,186,124,0.12); color: rgb(0,186,124); }
+    .xdl-btn.xdl-error { background: rgba(244,33,46,0.12); color: rgb(244,33,46); }
+    .xdl-btn.xdl-queue { background: rgba(120,86,255,0.12); color: rgb(150,120,255); }
+    .xdl-btn.xdl-queue:hover { background: rgba(120,86,255,0.22); }
+    .xdl-btn svg { width: 15px; height: 15px; fill: currentColor; }
+    .xdl-toast {
+      position: fixed;
+      right: 20px;
+      bottom: 20px;
+      z-index: 2147483647;
+      padding: 10px 15px;
+      border-radius: 9999px;
+      background: #16202a;
+      color: #fff;
+      font: 600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      box-shadow: 0 8px 24px rgba(0,0,0,.35);
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity .16s ease, transform .16s ease;
+      pointer-events: none;
     }
-    .xdl-btn.xdl-loading {
-      opacity: 0.6;
-      cursor: wait;
+    .xdl-toast.visible { opacity: 1; transform: translateY(0); }
+    .xdl-toast.success { background: #0f7a5a; }
+    .xdl-toast.warning { background: #8a5a10; }
+    .xdl-toast.error { background: #99202a; }
+    .xdl-autoscroll-badge {
+      position: fixed;
+      right: 20px;
+      bottom: 20px;
+      z-index: 2147483646;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      border-radius: 9999px;
+      background: rgba(15,23,31,.95);
+      border: 1px solid #2f4250;
+      color: #e8f1f7;
+      font: 700 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      box-shadow: 0 8px 24px rgba(0,0,0,.35);
     }
-    .xdl-btn.xdl-done {
-      background: rgba(0,186,124,0.1);
-      color: rgb(0,186,124);
-    }
-    .xdl-btn.xdl-error {
-      background: rgba(244,33,46,0.1);
-      color: rgb(244,33,46);
-    }
-    .xdl-btn svg {
-      width: 16px;
-      height: 16px;
-      fill: currentColor;
+    .xdl-autoscroll-badge button {
+      border: 0;
+      border-radius: 9999px;
+      padding: 5px 11px;
+      background: #f4212e;
+      color: #fff;
+      font: inherit;
+      cursor: pointer;
     }
   `;
-  document.head.appendChild(style);
+  (document.head || document.documentElement).appendChild(style);
 
   const DOWNLOAD_SVG = `<svg viewBox="0 0 24 24"><path d="M12 2a1 1 0 0 1 1 1v10.59l3.3-3.3a1 1 0 1 1 1.4 1.42l-5 5a1 1 0 0 1-1.4 0l-5-5a1 1 0 1 1 1.4-1.42l3.3 3.3V3a1 1 0 0 1 1-1zM5 20a1 1 0 1 0 0 2h14a1 1 0 1 0 0-2H5z"/></svg>`;
   const CHECK_SVG = `<svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>`;
+  const QUEUE_SVG = `<svg viewBox="0 0 24 24"><path d="M4 6h16a1 1 0 1 0 0-2H4a1 1 0 0 0 0 2zm0 5h9a1 1 0 1 0 0-2H4a1 1 0 1 0 0 2zm0 5h9a1 1 0 1 0 0-2H4a1 1 0 1 0 0 2zm14-3a1 1 0 0 1 1 1v2h2a1 1 0 1 1 0 2h-2v2a1 1 0 1 1-2 0v-2h-2a1 1 0 1 1 0-2h2v-2a1 1 0 0 1 1-1z"/></svg>`;
+
+  let toastEl = null;
+  let toastTimer = null;
+  function showToast(text, kind = "") {
+    if (!document.body) return;
+    if (!toastEl) {
+      toastEl = document.createElement("div");
+      toastEl.className = "xdl-toast";
+      document.body.appendChild(toastEl);
+    }
+    toastEl.className = `xdl-toast ${kind}`;
+    toastEl.textContent = text;
+    requestAnimationFrame(() => toastEl.classList.add("visible"));
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove("visible"), 2600);
+  }
 
   // ==========================================================================
   // UTILITIES
   // ==========================================================================
 
   function sanitizeFilename(text) {
-    return text
+    return String(text || "")
       .replace(/https?:\/\/\S+/g, "")
       .replace(/[<>:"/\\|?*\x00-\x1f]/g, "")
       .replace(/@\w+/g, "")
@@ -126,207 +272,18 @@
     return new Promise((r) => setTimeout(r, ms));
   }
 
-  // ==========================================================================
-  // DOM — Extract tweet info from article node
-  // ==========================================================================
-
-  function getTweetInfo(article) {
-    // Tweet text
-    const tweetTextEl = article.querySelector('[data-testid="tweetText"]');
-    const tweetText = tweetTextEl ? tweetTextEl.innerText : "";
-
-    // Author handle — find first link matching /username pattern
-    let handle = "";
-    const allLinks = article.querySelectorAll('a[role="link"]');
-    for (const link of allLinks) {
-      const href = link.getAttribute("href");
-      if (href && /^\/[A-Za-z0-9_]{1,15}$/.test(href)) {
-        handle = href.slice(1);
-        break;
-      }
-    }
-
-    // Tweet ID from the timestamp link
-    const timeEl = article.querySelector("time");
-    const tweetLink = timeEl ? timeEl.closest("a") : null;
-    const tweetHref = tweetLink ? tweetLink.getAttribute("href") : null;
-
-    let tweetId = null;
-    if (tweetHref) {
-      const match = tweetHref.match(/\/status\/(\d+)/);
-      if (match) tweetId = match[1];
-    }
-
-    // Detect media types present in this tweet
-    const hasVideo =
-      article.querySelector("video") !== null ||
-      article.querySelector('[data-testid="videoPlayer"]') !== null ||
-      article.querySelector('[data-testid="videoComponent"]') !== null;
-
-    // Photo detection — look for tweetPhoto testid or images within media containers
-    const photoElements = article.querySelectorAll('[data-testid="tweetPhoto"]');
-    const hasPhoto = photoElements.length > 0 && !hasVideo;
-
-    // Also check for images that aren't inside video players
-    let hasPhotoFallback = false;
-    if (!hasPhoto && !hasVideo) {
-      const images = article.querySelectorAll('img[src*="pbs.twimg.com/media"]');
-      hasPhotoFallback = images.length > 0;
-    }
-
-    return {
-      tweetText,
-      handle,
-      tweetId,
-      tweetHref,
-      hasVideo,
-      hasPhoto: hasPhoto || hasPhotoFallback,
-      hasMedia: hasVideo || hasPhoto || hasPhotoFallback
-    };
-  }
-
-  // ==========================================================================
-  // API COMMUNICATION — Talk to background.js
-  // ==========================================================================
-
-  function sendMessage(action, data = {}) {
-    return new Promise((resolve) => {
-      chrome.runtime.sendMessage({ action, ...data }, (resp) => {
-        if (chrome.runtime.lastError) {
-          console.error(`[X-DL] ${action} error:`, chrome.runtime.lastError.message);
-          resolve(null);
-          return;
-        }
-        resolve(resp);
-      });
-    });
-  }
-
-  function initEnv() {
-    return new Promise((resolve) => {
-      chrome.runtime.sendMessage({ action: "initEnv" }, (resp) => {
-        if (resp?.error) {
-          console.error("[X-DL] Init error:", resp.error);
-        }
-        if (resp?.ok) {
-          console.log("[X-DL] Auth initialized successfully");
-          envReady = true;
-        }
-        resolve(!!resp?.ok);
-      });
-    });
-  }
-
-  function getTweetMedia(tweetId) {
-    return sendMessage("getTweetMedia", { tweetId });
-  }
-
-  function downloadFile(url, filename) {
-    return sendMessage("downloadFile", { url, filename });
-  }
-
-  // ==========================================================================
-  // SINGLE DOWNLOAD — Handle click on a tweet's download button
-  // ==========================================================================
-
-  async function handleSingleDownload(btn, article) {
-    if (btn.classList.contains("xdl-loading")) return;
-
-    const info = getTweetInfo(article);
-    if (!info.tweetId) {
-      btn.classList.add("xdl-error");
-      btn.innerHTML = `${DOWNLOAD_SVG} No ID`;
-      return;
-    }
-
-    btn.classList.add("xdl-loading");
-    btn.innerHTML = `${DOWNLOAD_SVG} Fetching...`;
-
-    // Init auth if needed
-    if (!envReady) {
-      const ok = await initEnv();
-      if (!ok) {
-        btn.classList.remove("xdl-loading");
-        btn.classList.add("xdl-error");
-        btn.innerHTML = `${DOWNLOAD_SVG} Auth error`;
-        setTimeout(() => resetBtn(btn), 3000);
-        return;
-      }
-    }
-
-    const media = await getTweetMedia(info.tweetId);
-    if (!media || media.error) {
-      btn.classList.remove("xdl-loading");
-      if (media?.error === "protected_or_deleted") {
-        btn.classList.add("xdl-error");
-        btn.innerHTML = `${DOWNLOAD_SVG} Protected/N/A`;
-      } else {
-        btn.classList.add("xdl-error");
-        btn.innerHTML = `${DOWNLOAD_SVG} No media`;
-      }
-      setTimeout(() => resetBtn(btn), 3000);
-      return;
-    }
-
-    const safeName = sanitizeFilename(info.tweetText || media.tweetText);
-    const handle = info.handle || media.username || "unknown";
-
-    // Download videos
-    let successCount = 0;
-    if (media.videos && media.videos.length > 0) {
-      for (let i = 0; i < media.videos.length; i++) {
-        const v = media.videos[i];
-        const suffix = media.videos.length > 1 ? `_vid${i + 1}` : "";
-        const filename = `x-media/${handle}_${safeName}${suffix}.mp4`;
-
-        btn.innerHTML = `${DOWNLOAD_SVG} Video ${i + 1}/${media.videos.length}...`;
-        const result = await downloadFile(v.url, filename);
-        if (result?.success) successCount++;
-      }
-    }
-
-    // Download photos
-    if (media.photos && media.photos.length > 0) {
-      for (let i = 0; i < media.photos.length; i++) {
-        const p = media.photos[i];
-        // Determine extension from URL
-        const ext = getPhotoExtension(p.url);
-        const suffix = media.photos.length > 1 ? `_img${i + 1}` : "";
-        const filename = `x-media/${handle}_${safeName}${suffix}.${ext}`;
-
-        btn.innerHTML = `${DOWNLOAD_SVG} Photo ${i + 1}/${media.photos.length}...`;
-        const result = await downloadFile(p.url, filename);
-        if (result?.success) successCount++;
-      }
-    }
-
-    btn.classList.remove("xdl-loading");
-    if (successCount > 0) {
-      btn.classList.add("xdl-done");
-      btn.innerHTML = `${CHECK_SVG} Saved (${successCount})`;
-    } else {
-      btn.classList.add("xdl-error");
-      btn.innerHTML = `${DOWNLOAD_SVG} Failed`;
-      setTimeout(() => resetBtn(btn), 3000);
-    }
-  }
-
   function getPhotoExtension(url) {
-    // Twitter photo URLs like: pbs.twimg.com/media/xxx.jpg?name=orig
-    // or pbs.twimg.com/media/xxx?format=png&name=orig (Rank A style)
     try {
       const parsed = new URL(url, window.location.origin);
       const format = (parsed.searchParams.get("format") || "").toLowerCase();
-      if (format === "png" || format === "webp" || format === "jpg" || format === "jpeg") {
-        return format === "jpeg" ? "jpg" : format;
-      }
-      const cleanUrl = parsed.pathname.toLowerCase();
-      if (cleanUrl.endsWith(".png")) return "png";
-      if (cleanUrl.endsWith(".webp")) return "webp";
+      if (["png", "webp", "jpg", "jpeg"].includes(format)) return format === "jpeg" ? "jpg" : format;
+      const path = parsed.pathname.toLowerCase();
+      if (path.endsWith(".png")) return "png";
+      if (path.endsWith(".webp")) return "webp";
     } catch (_) {
-      const cleanUrl = String(url || "").split("?")[0].toLowerCase();
-      if (cleanUrl.endsWith(".png")) return "png";
-      if (cleanUrl.endsWith(".webp")) return "webp";
+      const clean = String(url || "").split("?")[0].toLowerCase();
+      if (clean.endsWith(".png")) return "png";
+      if (clean.endsWith(".webp")) return "webp";
     }
     return "jpg";
   }
@@ -343,411 +300,625 @@
     }
   }
 
+  // Stable CDN key so a photo found in the DOM and the same photo parsed from a
+  // GraphQL response collapse into one queue row.
+  function mediaKeyFromUrl(rawUrl) {
+    try {
+      const url = new URL(rawUrl, window.location.origin);
+      const leaf = url.pathname.split("/").filter(Boolean).pop() || "";
+      return leaf.replace(/\.[a-z0-9]{1,5}$/i, "") || "";
+    } catch (_) {
+      const leaf = String(rawUrl || "").split("?")[0].split("/").pop() || "";
+      return leaf.replace(/\.[a-z0-9]{1,5}$/i, "");
+    }
+  }
+
+  // ==========================================================================
+  // DOM — tweet inspection
+  // ==========================================================================
+
+  function getTweetInfo(article) {
+    const tweetTextEl = article.querySelector('[data-testid="tweetText"]');
+    const tweetText = tweetTextEl ? tweetTextEl.innerText : "";
+
+    let handle = "";
+    for (const link of article.querySelectorAll('a[role="link"]')) {
+      const href = link.getAttribute("href");
+      if (href && /^\/[A-Za-z0-9_]{1,15}$/.test(href)) {
+        handle = href.slice(1);
+        break;
+      }
+    }
+
+    const timeEl = article.querySelector("time");
+    const tweetLink = timeEl ? timeEl.closest("a") : null;
+    const tweetHref = tweetLink ? tweetLink.getAttribute("href") : null;
+    const tweetId = tweetHref ? (tweetHref.match(/\/status\/(\d+)/)?.[1] || null) : null;
+
+    const hasVideo =
+      article.querySelector("video") !== null ||
+      article.querySelector('[data-testid="videoPlayer"]') !== null ||
+      article.querySelector('[data-testid="videoComponent"]') !== null ||
+      article.querySelector('img[src*="ext_tw_video_thumb"], img[src*="amplify_video_thumb"], img[src*="tweet_video_thumb"]') !== null;
+
+    const photoImages = Array.from(
+      article.querySelectorAll('img[src*="pbs.twimg.com/media"]')
+    );
+    const hasPhoto = photoImages.length > 0;
+
+    return {
+      tweetText,
+      handle,
+      tweetId,
+      tweetHref,
+      hasVideo,
+      hasPhoto,
+      photoImages,
+      hasMedia: hasVideo || hasPhoto
+    };
+  }
+
+  function initEnv() {
+    return new Promise((resolve) => {
+      safeSend({ action: "initEnv" }, (resp) => {
+        if (resp?.ok) envReady = true;
+        resolve(!!resp?.ok);
+      });
+    });
+  }
+
+  function getTweetMedia(tweetId) {
+    return sendMessage("getTweetMedia", { tweetId });
+  }
+
+  function downloadFile(url, filename) {
+    return sendMessage("downloadFile", { url, filename });
+  }
+
+  // ==========================================================================
+  // SCROLL CAPTURE — list rendered media into the Side Panel queue
+  // ==========================================================================
+
   function makeDomQueueItems(article) {
     const info = getTweetInfo(article);
-    if (!info.hasMedia || !info.tweetId) return [];
-    if (localMediaFilter === "video" && !info.hasVideo) return [];
-    if (localMediaFilter === "photo" && !info.hasPhoto) return [];
+    if (!info.tweetId) return [];
+
+    // Videos have no usable direct URL in the DOM; they come from GraphQL
+    // captures, or from a bounded per-post resolve if the page never re-fetched.
+    if (info.hasVideo && mediaFilter !== "photo" && !resolvedVideoTweets.has(info.tweetId)) {
+      pendingVideoTweets.add(info.tweetId);
+    }
+
+    if (mediaFilter === "video" || !info.hasPhoto) return [];
 
     const safeName = sanitizeFilename(info.tweetText || "media");
     const handle = info.handle || "unknown";
-    const date = article.querySelector("time")?.getAttribute("datetime") || "Visible on page";
-    const imgs = Array.from(article.querySelectorAll('[data-testid="tweetPhoto"] img[src*="pbs.twimg.com/media"], img[src*="pbs.twimg.com/media"]'));
+    const date = article.querySelector("time")?.getAttribute("datetime") || "";
     const seenUrls = new Set();
-    return imgs.map((img, index) => {
+    const items = [];
+
+    info.photoImages.forEach((img, index) => {
       const url = normalizeDomPhotoUrl(img.currentSrc || img.src || "");
-      if (!url || seenUrls.has(url)) return null;
+      if (!url || seenUrls.has(url)) return;
       seenUrls.add(url);
-      const mediaId = (url.match(/media\/([^?]+)/)?.[1] || `${info.tweetId}-${index}`).replace(/[^a-zA-Z0-9_-]/g, "");
-      const ext = getPhotoExtension(url);
-      const id = `scroll-${info.tweetId}-${mediaId}-${index}`;
-      if (localListedMedia.has(id)) return null;
-      localListedMedia.add(id);
-      return {
+      const mediaKey = mediaKeyFromUrl(url);
+      if (!mediaKey || listedMediaKeys.has(mediaKey)) return;
+      const id = `${info.tweetId}-${mediaKey}`;
+      if (listedMediaIds.has(id)) return;
+      listedMediaIds.add(id);
+      listedMediaKeys.add(mediaKey);
+      items.push({
         id,
+        mediaKey,
         url,
         type: "photo",
         thumbnail: img.currentSrc || img.src || url,
         author: `@${handle}`,
         date,
         tweetId: info.tweetId,
-        mediaId,
+        mediaId: mediaKey,
         isRepost: false,
         source: "scroll",
-        filename: `x-media/${handle}_${safeName}_${info.tweetId}_${index + 1}.${ext}`
-      };
-    }).filter(Boolean);
+        filename: `x-media/${handle}_${safeName}_${info.tweetId}_${index + 1}.${getPhotoExtension(url)}`
+      });
+    });
+
+    if (items.length) scanStats.photos += items.length;
+    return items;
   }
 
-  function scanLocalVisibleMedia() {
-    if (!localWatch && !localScrollRunning) return;
+  let scanQueued = false;
+  function scheduleScan(delay = 120) {
+    if (delay === 0) { scanVisibleMedia(); return; }
+    if (scanQueued) return;
+    scanQueued = true;
+    setTimeout(() => { scanQueued = false; scanVisibleMedia(); }, delay);
+  }
+
+  function scanVisibleMedia() {
+    if (!document.body) return;
     const articles = Array.from(document.querySelectorAll('article[data-testid="tweet"]'));
+    scanStats.posts = articles.length;
     const items = [];
-    for (const article of articles) {
-      if (localFound + items.length >= localMaxMedia) break;
-      items.push(...makeDomQueueItems(article));
+    for (const article of articles) items.push(...makeDomQueueItems(article));
+
+    if (items.length) {
+      safeSend({ action: "queueAdd", items, source: "scroll", skipDownloaded }, (response) => {
+        const added = response?.addedCount ?? items.length;
+        listedCount += added;
+        statusText = `Listed ${listedCount} media item${listedCount === 1 ? "" : "s"} from this tab.`;
+      });
     }
-    const capped = items.slice(0, Math.max(0, localMaxMedia - localFound));
-    if (!capped.length) return;
-    localFound += capped.length;
-    localStatusText = `Listed ${localFound} visible media item${localFound === 1 ? "" : "s"}.`;
-    chrome.runtime.sendMessage({ action: "queueAdd", items: capped, source: "scroll" }).catch(() => {});
+
+    drainPendingVideoTweets();
   }
 
-  async function localAutoScrollLoop() {
-    const config = SCROLL_CONFIG[localScrollSpeed] || SCROLL_CONFIG.medium;
-    localWatch = true;
-    localScrollRunning = true;
-    localStatusText = "Auto-scroll listing started";
-    let noGrowth = 0;
-    let lastHeight = document.body?.scrollHeight || 0;
-    while (localScrollRunning && localFound < localMaxMedia) {
-      scanLocalVisibleMedia();
-      window.scrollBy({ top: config.distance, behavior: localScrollSpeed === "fast" ? "instant" : "smooth" });
-      await sleep(config.interval);
-      const nextHeight = document.body?.scrollHeight || 0;
-      noGrowth = nextHeight <= lastHeight ? noGrowth + 1 : 0;
-      lastHeight = nextHeight;
-      localStatusText = `Auto-scrolling — ${localFound}/${localMaxMedia} listed`;
-      if (noGrowth > 12) break;
-    }
-    localScrollRunning = false;
-    localStatusText = localFound >= localMaxMedia ? `Reached ${localMaxMedia} listed items.` : `Auto-scroll stopped — ${localFound} listed.`;
-  }
+  // Per-post video resolve, rate-bounded. X often serves an SPA view from cache
+  // without re-issuing the timeline GraphQL call, so without this a profile's
+  // videos would only ever appear after a hard reload.
+  let resolvingVideos = false;
+  async function drainPendingVideoTweets() {
+    if (resolvingVideos || mediaFilter === "photo") return;
+    if (!pendingVideoTweets.size) return;
+    resolvingVideos = true;
+    try {
+      while (pendingVideoTweets.size) {
+        const tweetId = pendingVideoTweets.values().next().value;
+        pendingVideoTweets.delete(tweetId);
+        if (resolvedVideoTweets.has(tweetId)) continue;
+        resolvedVideoTweets.add(tweetId);
 
-  function resetBtn(btn) {
-    btn.classList.remove("xdl-error", "xdl-done");
-    btn.innerHTML = `${DOWNLOAD_SVG} Download`;
+        if (!envReady) await initEnv();
+        const media = await getTweetMedia(tweetId);
+        if (!media || media.error) continue;
+
+        const handle = media.username || "unknown";
+        const safeName = sanitizeFilename(media.tweetText || "media");
+        const items = [];
+        (media.videos || []).forEach((video, index) => {
+          const mediaKey = mediaKeyFromUrl(video.url);
+          const id = `${tweetId}-${video.mediaId || mediaKey || index}`;
+          if (listedMediaIds.has(id) || (mediaKey && listedMediaKeys.has(mediaKey))) return;
+          listedMediaIds.add(id);
+          if (mediaKey) listedMediaKeys.add(mediaKey);
+          items.push({
+            id,
+            mediaKey,
+            url: video.url,
+            type: "video",
+            thumbnail: "",
+            author: `@${handle}`,
+            date: "",
+            tweetId,
+            mediaId: String(video.mediaId || mediaKey || index),
+            isRepost: false,
+            source: "scroll",
+            filename: `x-media/${handle}_${safeName}_${tweetId}_${index + 1}.mp4`
+          });
+        });
+        if (mediaFilter !== "video") {
+          (media.photos || []).forEach((photo, index) => {
+            const mediaKey = mediaKeyFromUrl(photo.url);
+            const id = `${tweetId}-${photo.mediaId || mediaKey || index}`;
+            if (listedMediaIds.has(id) || (mediaKey && listedMediaKeys.has(mediaKey))) return;
+            listedMediaIds.add(id);
+            if (mediaKey) listedMediaKeys.add(mediaKey);
+            items.push({
+              id,
+              mediaKey,
+              url: photo.url,
+              type: "photo",
+              thumbnail: photo.url,
+              author: `@${handle}`,
+              date: "",
+              tweetId,
+              mediaId: String(photo.mediaId || mediaKey || index),
+              isRepost: false,
+              source: "scroll",
+              filename: `x-media/${handle}_${safeName}_${tweetId}_${index + 1}.${getPhotoExtension(photo.url)}`
+            });
+          });
+        }
+        if (items.length) {
+          scanStats.videos += items.filter((item) => item.type === "video").length;
+          safeSend({ action: "queueAdd", items, source: "scroll", skipDownloaded }, (response) => {
+            listedCount += response?.addedCount ?? items.length;
+            statusText = `Listed ${listedCount} media item${listedCount === 1 ? "" : "s"} from this tab.`;
+          });
+        }
+        // Keep well below X's per-post GraphQL rate limits.
+        await sleep(700);
+      }
+    } finally {
+      resolvingVideos = false;
+    }
   }
 
   // ==========================================================================
-  // BUTTON INJECTION — Add download buttons to tweet action bars
+  // AUTO-SCROLL — one engine, no item limit, content-driven pacing
   // ==========================================================================
 
-  function injectDownloadButtons() {
-    const articles = document.querySelectorAll('article[data-testid="tweet"]');
+  let autoScrollBadge = null;
 
-    for (const article of articles) {
-      // Skip if button already added
-      if (article.querySelector(".xdl-btn")) continue;
+  function showAutoScrollBadge() {
+    if (!document.body) return;
+    if (!autoScrollBadge) {
+      autoScrollBadge = document.createElement("div");
+      autoScrollBadge.className = "xdl-autoscroll-badge";
+      const label = document.createElement("span");
+      label.dataset.role = "label";
+      const stop = document.createElement("button");
+      stop.type = "button";
+      stop.textContent = "Stop";
+      stop.addEventListener("click", () => { autoScrollStopRequested = true; });
+      autoScrollBadge.appendChild(label);
+      autoScrollBadge.appendChild(stop);
+      document.body.appendChild(autoScrollBadge);
+    }
+    autoScrollBadge.style.display = "flex";
+  }
 
+  function updateAutoScrollBadge(text) {
+    const label = autoScrollBadge?.querySelector('[data-role="label"]');
+    if (label) label.textContent = text;
+  }
+
+  function hideAutoScrollBadge() {
+    if (autoScrollBadge) autoScrollBadge.style.display = "none";
+  }
+
+  function documentHeight() {
+    return Math.max(
+      document.body?.scrollHeight || 0,
+      document.documentElement?.scrollHeight || 0
+    );
+  }
+
+  // Resolve as soon as the timeline grows or new articles render, instead of
+  // sleeping on a fixed timer. This is what makes "fast" actually fast while
+  // still not outrunning X's virtualized list.
+  function waitForGrowth(previousHeight, previousArticles, maxWait) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (reason) => {
+        if (settled) return;
+        settled = true;
+        observer.disconnect();
+        clearTimeout(timer);
+        clearInterval(poll);
+        resolve(reason);
+      };
+      const check = () => {
+        if (documentHeight() > previousHeight + 40) return finish("grew");
+        if (document.querySelectorAll('article[data-testid="tweet"]').length !== previousArticles) return finish("rendered");
+      };
+      const observer = new MutationObserver(check);
+      if (document.body) observer.observe(document.body, { childList: true, subtree: true });
+      const poll = setInterval(check, 100);
+      const timer = setTimeout(() => finish("timeout"), maxWait);
+    });
+  }
+
+  async function autoScrollLoop() {
+    const config = SCROLL_CONFIG[scrollSpeed] || SCROLL_CONFIG.fast;
+    autoScrollRunning = true;
+    autoScrollStopRequested = false;
+    showAutoScrollBadge();
+    statusText = "Auto-scrolling…";
+
+    let stallCount = 0;
+    while (autoScrollRunning && !autoScrollStopRequested) {
+      scanVisibleMedia();
+
+      const beforeHeight = documentHeight();
+      const beforeArticles = document.querySelectorAll('article[data-testid="tweet"]').length;
+      const step = Math.round(window.innerHeight * config.step);
+      window.scrollBy({ top: step, behavior: "instant" });
+
+      const reason = await waitForGrowth(beforeHeight, beforeArticles, config.maxWait);
+      if (config.settle) await sleep(config.settle);
+      scanVisibleMedia();
+
+      const atBottom = window.innerHeight + window.scrollY >= documentHeight() - 200;
+      if (reason === "timeout" && atBottom) {
+        stallCount += 1;
+        // Nudge X into requesting the next page before giving up.
+        window.scrollBy({ top: -400, behavior: "instant" });
+        await sleep(250);
+        window.scrollBy({ top: 900, behavior: "instant" });
+        await waitForGrowth(documentHeight(), beforeArticles, config.maxWait);
+      } else if (reason === "timeout") {
+        stallCount += 1;
+      } else {
+        stallCount = 0;
+      }
+
+      updateAutoScrollBadge(`Auto-scroll · ${listedCount} listed`);
+      statusText = `Auto-scrolling — ${listedCount} listed.`;
+
+      if (stallCount >= 6) {
+        statusText = `Reached the end of this timeline — ${listedCount} listed.`;
+        break;
+      }
+    }
+
+    autoScrollRunning = false;
+    hideAutoScrollBadge();
+    if (autoScrollStopRequested) statusText = `Auto-scroll stopped — ${listedCount} listed.`;
+    scanVisibleMedia();
+  }
+
+  // ==========================================================================
+  // ACTION BAR — Download + Add to queue (Rank A UX, reimplemented locally)
+  // ==========================================================================
+
+  function resetBtn(btn, label) {
+    btn.classList.remove("xdl-error", "xdl-done", "xdl-loading");
+    btn.innerHTML = `${DOWNLOAD_SVG} ${label}`;
+  }
+
+  async function collectTweetMedia(article, info) {
+    if (!envReady) await initEnv();
+    const media = await getTweetMedia(info.tweetId);
+    if (!media || media.error) return { error: media?.error || "no_media" };
+    const handle = media.username || info.handle || "unknown";
+    const safeName = sanitizeFilename(info.tweetText || media.tweetText);
+    const items = [];
+    (media.videos || []).forEach((video, index) => {
+      const mediaKey = mediaKeyFromUrl(video.url);
+      items.push({
+        id: `${info.tweetId}-${video.mediaId || mediaKey || index}`,
+        mediaKey,
+        url: video.url,
+        type: "video",
+        thumbnail: "",
+        author: `@${handle}`,
+        date: "",
+        tweetId: info.tweetId,
+        mediaId: String(video.mediaId || mediaKey || index),
+        isRepost: false,
+        source: "scroll",
+        filename: `x-media/${handle}_${safeName}_${info.tweetId}_${index + 1}.mp4`
+      });
+    });
+    (media.photos || []).forEach((photo, index) => {
+      const mediaKey = mediaKeyFromUrl(photo.url);
+      items.push({
+        id: `${info.tweetId}-${photo.mediaId || mediaKey || index}`,
+        mediaKey,
+        url: photo.url,
+        type: "photo",
+        thumbnail: photo.url,
+        author: `@${handle}`,
+        date: "",
+        tweetId: info.tweetId,
+        mediaId: String(photo.mediaId || mediaKey || index),
+        isRepost: false,
+        source: "scroll",
+        filename: `x-media/${handle}_${safeName}_${info.tweetId}_${index + 1}.${getPhotoExtension(photo.url)}`
+      });
+    });
+    return { items, media, handle, safeName };
+  }
+
+  async function handleSingleDownload(btn, article, label) {
+    if (btn.classList.contains("xdl-loading")) return;
+    const info = getTweetInfo(article);
+    if (!info.tweetId) {
+      btn.classList.add("xdl-error");
+      btn.innerHTML = `${DOWNLOAD_SVG} No ID`;
+      return;
+    }
+
+    btn.classList.add("xdl-loading");
+    btn.innerHTML = `${DOWNLOAD_SVG} Fetching…`;
+
+    const collected = await collectTweetMedia(article, info);
+    if (collected.error || !collected.items.length) {
+      btn.classList.remove("xdl-loading");
+      btn.classList.add("xdl-error");
+      btn.innerHTML = collected.error === "protected_or_deleted"
+        ? `${DOWNLOAD_SVG} Protected`
+        : `${DOWNLOAD_SVG} No media`;
+      setTimeout(() => resetBtn(btn, label), 3000);
+      return;
+    }
+
+    let success = 0;
+    for (let i = 0; i < collected.items.length; i++) {
+      const item = collected.items[i];
+      btn.innerHTML = `${DOWNLOAD_SVG} ${i + 1}/${collected.items.length}…`;
+      const result = await downloadFile(item.url, item.filename);
+      if (result?.success) success++;
+    }
+
+    btn.classList.remove("xdl-loading");
+    if (success > 0) {
+      btn.classList.add("xdl-done");
+      btn.innerHTML = `${CHECK_SVG} Saved (${success})`;
+    } else {
+      btn.classList.add("xdl-error");
+      btn.innerHTML = `${DOWNLOAD_SVG} Failed`;
+      setTimeout(() => resetBtn(btn, label), 3000);
+    }
+  }
+
+  async function handleAddToQueue(btn, article) {
+    if (btn.disabled) return;
+    const info = getTweetInfo(article);
+    if (!info.tweetId) return;
+    btn.disabled = true;
+    btn.innerHTML = `${QUEUE_SVG} Adding…`;
+
+    const collected = await collectTweetMedia(article, info);
+    if (collected.error || !collected.items.length) {
+      btn.disabled = false;
+      btn.innerHTML = `${QUEUE_SVG} Add to queue`;
+      showToast("No downloadable media found in this post.", "warning");
+      return;
+    }
+
+    for (const item of collected.items) {
+      listedMediaIds.add(item.id);
+      if (item.mediaKey) listedMediaKeys.add(item.mediaKey);
+    }
+    resolvedVideoTweets.add(info.tweetId);
+
+    safeSend({ action: "queueAdd", items: collected.items, source: "scroll", skipDownloaded }, (response) => {
+      const added = response?.addedCount ?? 0;
+      btn.disabled = false;
+      if (added > 0) {
+        btn.classList.add("xdl-done");
+        btn.innerHTML = `${CHECK_SVG} In queue`;
+        listedCount += added;
+        showToast(`Added ${added} item${added === 1 ? "" : "s"} to the Side Panel queue.`, "success");
+      } else {
+        btn.innerHTML = `${QUEUE_SVG} In queue`;
+        showToast("Already in the Side Panel queue.", "");
+      }
+    });
+  }
+
+  function injectActionButtons() {
+    for (const article of document.querySelectorAll('article[data-testid="tweet"]')) {
+      if (article.querySelector(".xdl-actions")) continue;
       const info = getTweetInfo(article);
       if (!info.hasMedia || !info.tweetId) continue;
-
-      // Find the action bar (like, retweet, reply, share row)
       const actionBar = article.querySelector('[role="group"]');
       if (!actionBar) continue;
 
-      const btn = document.createElement("button");
-      btn.className = "xdl-btn";
+      const label = info.hasVideo && info.hasPhoto
+        ? "Download all"
+        : info.hasVideo ? "Download video" : "Download photo";
 
-      // Label based on media type
-      let label = "Download";
-      if (info.hasVideo && info.hasPhoto) label = "Download all";
-      else if (info.hasVideo) label = "Download video";
-      else label = "Download photo";
+      const wrap = document.createElement("div");
+      wrap.className = "xdl-actions";
 
-      btn.innerHTML = `${DOWNLOAD_SVG} ${label}`;
-      btn.title = "Download media from this tweet";
-
-      btn.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        handleSingleDownload(btn, article);
+      const downloadBtn = document.createElement("button");
+      downloadBtn.type = "button";
+      downloadBtn.className = "xdl-btn";
+      downloadBtn.title = "Download this post's media now";
+      downloadBtn.innerHTML = `${DOWNLOAD_SVG} ${label}`;
+      downloadBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        handleSingleDownload(downloadBtn, article, label);
       });
 
-      actionBar.appendChild(btn);
+      const queueBtn = document.createElement("button");
+      queueBtn.type = "button";
+      queueBtn.className = "xdl-btn xdl-queue";
+      queueBtn.title = "Add this post's media to the Side Panel queue";
+      queueBtn.innerHTML = `${QUEUE_SVG} Add to queue`;
+      queueBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        handleAddToQueue(queueBtn, article);
+      });
+
+      wrap.appendChild(downloadBtn);
+      wrap.appendChild(queueBtn);
+      actionBar.appendChild(wrap);
     }
   }
 
-  // Watch for new tweets appearing in the DOM (virtualized list).
-  // document_start may run before <body> exists.
+  // ==========================================================================
+  // WATCHERS
+  // ==========================================================================
+
   function startDomWatchers() {
     if (!document.body) {
       document.addEventListener("DOMContentLoaded", startDomWatchers, { once: true });
       return;
     }
     const observer = new MutationObserver(() => {
-      injectDownloadButtons();
-      scanLocalVisibleMedia();
+      injectActionButtons();
+      scheduleScan(150);
     });
     observer.observe(document.body, { childList: true, subtree: true });
-    injectDownloadButtons();
-    scanLocalVisibleMedia();
-    setInterval(() => { injectDownloadButtons(); scanLocalVisibleMedia(); }, 2000);
+    injectActionButtons();
+    scanVisibleMedia();
+    setInterval(() => {
+      // Belt-and-braces: catches SPA views that reuse existing DOM nodes and
+      // routes changed by mechanisms the history patch cannot see.
+      handleRouteChange(window.location.href);
+      injectActionButtons();
+      scheduleScan(0);
+    }, 2500);
   }
+
+  chrome.storage?.local?.get(["scrollMediaFilter", "scrollSpeed", "skipDownloaded"], (saved) => {
+    if (saved?.scrollMediaFilter) mediaFilter = saved.scrollMediaFilter;
+    if (saved?.scrollSpeed) scrollSpeed = saved.scrollSpeed;
+    if (typeof saved?.skipDownloaded === "boolean") skipDownloaded = saved.skipDownloaded;
+  });
+
   startDomWatchers();
+  requestReplay();
 
   // ==========================================================================
-  // BULK SCROLL LOOP — Auto-scroll and download all media
-  // ==========================================================================
-
-  function getVisibleMediaTweets() {
-    const articles = document.querySelectorAll('article[data-testid="tweet"]');
-    const tweets = [];
-
-    for (const article of articles) {
-      const info = getTweetInfo(article);
-      if (!info.hasMedia || !info.tweetId) continue;
-      if (processedTweets.has(info.tweetId)) continue;
-
-      // Apply media type filter
-      if (mediaFilter === "video" && !info.hasVideo) continue;
-      if (mediaFilter === "photo" && !info.hasPhoto) continue;
-
-      tweets.push({ ...info, article });
-    }
-
-    return tweets;
-  }
-
-  async function mainLoop() {
-    console.log("[X-DL] Initializing auth environment...");
-    statusText = "Initializing...";
-
-    const envOk = await initEnv();
-    if (!envOk) {
-      console.error("[X-DL] Failed to initialize auth");
-      statusText = "Error: Could not get auth tokens. Refresh the page.";
-      statusState = "stopped";
-      running = false;
-      return;
-    }
-    console.log("[X-DL] Auth ready. Starting bulk download loop.");
-
-    const config = SCROLL_CONFIG[scrollSpeed] || SCROLL_CONFIG.medium;
-    statusState = "running";
-    let noNewCount = 0;
-    let stuckSinceScroll = 0;
-
-    // Wait for new DOM content after scrolling
-    function waitForNewContent(timeout) {
-      return new Promise((resolve) => {
-        let resolved = false;
-        const obs = new MutationObserver(() => {
-          if (!resolved) {
-            resolved = true;
-            obs.disconnect();
-            setTimeout(resolve, 300);
-          }
-        });
-        obs.observe(document.body, { childList: true, subtree: true });
-        setTimeout(() => {
-          if (!resolved) {
-            resolved = true;
-            obs.disconnect();
-            resolve();
-          }
-        }, timeout);
-      });
-    }
-
-    while (running && downloaded < maxMedia) {
-      const tweets = getVisibleMediaTweets();
-
-      if (tweets.length > 0) {
-        noNewCount = 0;
-        for (const tweet of tweets) {
-          if (!running || downloaded >= maxMedia) break;
-
-          processedTweets.add(tweet.tweetId);
-          statusText = `Processing ${downloaded + 1}/${maxMedia}...`;
-
-          console.log("[X-DL] Processing tweet:", tweet.tweetId, "by @" + tweet.handle);
-
-          const media = await getTweetMedia(tweet.tweetId);
-          if (!media || media.error) {
-            console.warn("[X-DL] No media for tweet:", tweet.tweetId, media?.error);
-            continue;
-          }
-
-          const safeName = sanitizeFilename(media.tweetText || tweet.tweetText);
-          const handle = media.username || tweet.handle || "unknown";
-
-          // Download videos
-          if (media.videos) {
-            for (let i = 0; i < media.videos.length; i++) {
-              if (!running || downloaded >= maxMedia) break;
-
-              const v = media.videos[i];
-              const suffix = media.videos.length > 1 ? `_vid${i + 1}` : "";
-              const index = String(downloaded + 1).padStart(3, "0");
-              const filename = `x-media/${index}_${handle}_${safeName}${suffix}.mp4`;
-
-              statusText = `Downloading video ${downloaded + 1}/${maxMedia}...`;
-              const result = await downloadFile(v.url, filename);
-              if (result?.success) {
-                downloaded++;
-                statusText = `Downloaded ${downloaded}/${maxMedia}`;
-
-                const btn = tweet.article.querySelector(".xdl-btn");
-                if (btn) {
-                  btn.classList.add("xdl-done");
-                  btn.innerHTML = `${CHECK_SVG} Saved`;
-                }
-              }
-
-              // Small delay between downloads
-              await sleep(500);
-            }
-          }
-
-          // Download photos
-          if (media.photos) {
-            for (let i = 0; i < media.photos.length; i++) {
-              if (!running || downloaded >= maxMedia) break;
-
-              const p = media.photos[i];
-              const ext = getPhotoExtension(p.url);
-              const suffix = media.photos.length > 1 ? `_img${i + 1}` : "";
-              const index = String(downloaded + 1).padStart(3, "0");
-              const filename = `x-media/${index}_${handle}_${safeName}${suffix}.${ext}`;
-
-              statusText = `Downloading photo ${downloaded + 1}/${maxMedia}...`;
-              const result = await downloadFile(p.url, filename);
-              if (result?.success) {
-                downloaded++;
-                statusText = `Downloaded ${downloaded}/${maxMedia}`;
-
-                const btn = tweet.article.querySelector(".xdl-btn");
-                if (btn) {
-                  btn.classList.add("xdl-done");
-                  btn.innerHTML = `${CHECK_SVG} Saved`;
-                }
-              }
-
-              await sleep(500);
-            }
-          }
-        }
-      } else {
-        noNewCount++;
-      }
-
-      if (!running || downloaded >= maxMedia) break;
-
-      // Scroll forward
-      const scrollAmount = noNewCount > 2
-        ? Math.min(800 + noNewCount * 400, 5000)
-        : config.distance;
-
-      window.scrollBy({ top: scrollAmount, behavior: noNewCount > 2 ? "instant" : "smooth" });
-      statusText = `Scrolling... ${downloaded}/${maxMedia} downloaded`;
-
-      if (noNewCount > 2) {
-        console.log("[X-DL] Aggressive scroll", scrollAmount + "px (attempt " + noNewCount + ")");
-        await waitForNewContent(4000);
-      } else {
-        await sleep(config.interval);
-      }
-
-      // Give up after many attempts with no new media
-      if (noNewCount > 50) {
-        console.log("[X-DL] No new media tweets after 50 scroll attempts, stopping");
-        break;
-      }
-
-      // Detect end of page
-      const atBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 100;
-      if (atBottom && noNewCount > 5) {
-        window.scrollBy({ top: -200, behavior: "instant" });
-        await sleep(500);
-        window.scrollBy({ top: 400, behavior: "instant" });
-        await waitForNewContent(3000);
-        stuckSinceScroll++;
-        if (stuckSinceScroll > 5) {
-          console.log("[X-DL] Reached end of page");
-          break;
-        }
-      } else {
-        stuckSinceScroll = 0;
-      }
-    }
-
-    running = false;
-    window.__xdl_active = false;
-    statusState = downloaded >= maxMedia ? "done" : "stopped";
-    statusText = downloaded >= maxMedia
-      ? `Done! Downloaded ${downloaded} items.`
-      : `Stopped at ${downloaded} items.`;
-    console.log("[X-DL]", statusText);
-  }
-
-  // ==========================================================================
-  // MESSAGE LISTENER — Commands from popup.js
+  // MESSAGE LISTENER — Side Panel commands
   // ==========================================================================
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (msg.action === "start") {
-      if (running) {
-        sendResponse({ ok: false, reason: "Already running" });
+    if (msg.action === "scrollSettings") {
+      if (msg.mediaFilter) mediaFilter = msg.mediaFilter;
+      if (msg.scrollSpeed) scrollSpeed = msg.scrollSpeed;
+      if (typeof msg.skipDownloaded === "boolean") skipDownloaded = msg.skipDownloaded;
+      scheduleScan(0);
+      sendResponse(statusPayload());
+      return;
+    }
+
+    if (msg.action === "scrollStart") {
+      if (autoScrollRunning) {
+        sendResponse({ ...statusPayload(), ok: false, reason: "Auto-scroll is already running." });
         return;
       }
-      maxMedia = msg.maxMedia || msg.maxVideos || 100;
-      scrollSpeed = msg.scrollSpeed || "medium";
-      mediaFilter = msg.mediaFilter || "all";
-      downloaded = 0;
-      running = true;
-      window.__xdl_active = true;
-      processedTweets.clear();
-      statusText = "Starting...";
-      statusState = "running";
-      console.log("[X-DL] STARTED. Max:", maxMedia, "Speed:", scrollSpeed, "Filter:", mediaFilter);
-      sendResponse({ ok: true });
-      mainLoop();
+      if (msg.mediaFilter) mediaFilter = msg.mediaFilter;
+      if (msg.scrollSpeed) scrollSpeed = msg.scrollSpeed;
+      if (typeof msg.skipDownloaded === "boolean") skipDownloaded = msg.skipDownloaded;
+      autoScrollLoop();
+      sendResponse({ ...statusPayload(), ok: true, running: true });
       return;
     }
 
-    if (msg.action === "stop") {
-      running = false;
-      window.__xdl_active = false;
-      statusText = `Stopped at ${downloaded} items.`;
-      statusState = "stopped";
-      sendResponse({ ok: true });
+    if (msg.action === "scrollStop") {
+      autoScrollStopRequested = true;
+      autoScrollRunning = false;
+      hideAutoScrollBadge();
+      statusText = `Auto-scroll stopped — ${listedCount} listed.`;
+      sendResponse({ ...statusPayload(), ok: true, running: false });
       return;
     }
 
-    if (msg.action === "localCaptureWatch") {
-      localWatch = msg.enabled !== false;
-      localMediaFilter = msg.mediaFilter || localMediaFilter || "all";
-      localMaxMedia = msg.maxMedia || localMaxMedia || 99999;
-      localStatusText = localWatch ? "Watching visible X media while you scroll." : "Watching is off";
-      if (localWatch) setTimeout(scanLocalVisibleMedia, 100);
-      sendResponse({ ok: true, text: localStatusText, running: localScrollRunning, found: localFound });
+    if (msg.action === "scrollStatus") {
+      sendResponse(statusPayload());
       return;
     }
 
-    if (msg.action === "localCaptureStart") {
-      if (localScrollRunning) {
-        sendResponse({ ok: false, reason: "Auto-scroll is already running" });
-        return;
-      }
-      localMaxMedia = msg.maxMedia || 99999;
-      localScrollSpeed = msg.scrollSpeed || "medium";
-      localMediaFilter = msg.mediaFilter || "all";
-      localStatusText = "Starting auto-scroll listing...";
-      sendResponse({ ok: true, text: localStatusText, running: true, found: localFound });
-      localAutoScrollLoop();
-      return;
-    }
-
-    if (msg.action === "localCaptureStop") {
-      localScrollRunning = false;
-      localStatusText = `Stopped — ${localFound} listed.`;
-      sendResponse({ ok: true, text: localStatusText, running: false, found: localFound });
-      return;
-    }
-
-    if (msg.action === "localCaptureStatus") {
-      sendResponse({ text: localStatusText, running: localScrollRunning, found: localFound, watching: localWatch });
-      return;
-    }
-
-    if (msg.action === "getStatus") {
-      sendResponse({ text: statusText, state: statusState, downloaded });
+    if (msg.action === "scrollRescan") {
+      requestReplay();
+      scanVisibleMedia();
+      sendResponse(statusPayload());
       return;
     }
   });
 
-  console.log("[X-DL] Ready — download buttons active on video and photo tweets");
+  function statusPayload() {
+    return {
+      ok: true,
+      text: statusText,
+      running: autoScrollRunning,
+      found: listedCount,
+      url: window.location.href,
+      route: lastRoute,
+      postsOnScreen: scanStats.posts,
+      pendingVideos: pendingVideoTweets.size,
+      mediaFilter,
+      scrollSpeed
+    };
+  }
+
+  console.log("[X-DL] Scroll capture active — listing media on every X view");
 })();

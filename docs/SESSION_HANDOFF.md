@@ -1,13 +1,13 @@
 # Session Handoff — X Media Downloader
 
-**Prepared:** 2026-08-25
+**Prepared:** 2026-08-25 (updated after live-testing round 2 — extension v3.2)
 
 ## Project and branch
 
 - Repository: `freeforall1932-design/twitter-batch-download`
 - Extension directory: `extension/` (load-unpacked root)
 - Previous Arena session branch `arena/01a0367e-twitter-batch-download` — **merged into `main`** (commit `66fab6e`).
-- Working branch for this Arena session: `arena/01a036a9-twitter-batch-download`
+- Working branch for this Arena session: `arena/01a03712-twitter-batch-download`
 - Recent commits:
   - cleanup / PR batch (prior handoff): remove deprecated ZIP path, legacy message handlers, dead bulk flags
   - `4cc3782` — Rank S live capture bridge + Rank A download fallbacks
@@ -64,10 +64,10 @@ Do **not** ask the user to paste passwords, API keys, `auth_token`, `ct0`, or Co
 |---|---|
 | `manifest.json` | MV3, sidePanel, cookies/downloads/storage/scripting. Content scripts: `injected.js` (MAIN, document_start) + `content.js` (isolated, document_start). Hosts: x.com / twitter.com / twimg CDN only. |
 | `background.js` | Auth, GraphQL, source-tagged queue, remote discovery, downloads, capture bag, local timeline response ingestion. **No ZIP.** |
-| `injected.js` | MAIN-world XHR/fetch observer → posts GraphQL op metadata + safe headers and parses cloned GraphQL responses for scroll-capture listing. |
-| `content.js` | Forwards captures/responses; action-bar buttons; Side Panel scroll-capture commands; visible DOM photo listing; legacy popup DOM bulk. |
-| `sidepanel.html/js/css` | Two-tab Side Panel: default Scroll capture + secondary Remote fetch; tab-scoped review/download/clear actions. |
-| `popup.html/js` | Open Side Panel + legacy page bulk controls. |
+| `injected.js` | MAIN-world XHR/fetch observer. Forwards **any** media-bearing GraphQL response (no operation allowlist), keeps a 40-entry replay buffer, and watches SPA route changes via `pushState`/`replaceState`/`popstate`. Allowlist retained only for Remote-fetch request metadata. |
+| `content.js` | **Always-on** scroll capture (no watch command), SPA route re-arm, DOM photo listing, rate-bounded per-post video resolve, content-driven auto-scroll with in-page badge, action-bar `Download` + `Add to queue`, toasts. |
+| `sidepanel.html/js/css` | Two-tab Side Panel: Scroll capture + Remote fetch. One download action, live active-tab status pill, per-row remove, skip-already-downloaded toggle. |
+| `popup.html/js` | Open Side Panel launcher + capture status line. No scroll/download loop. |
 | `tests/` | Node VM unit tests + sanitized fixtures. |
 
 ### Removed / deprecated (do not reintroduce without product decision)
@@ -85,7 +85,12 @@ Do **not** ask the user to paste passwords, API keys, `auth_token`, `ct0`, or Co
 **Discovery:** `discoveryGet`, `discoveryStart` `{ target, limit, includeRetweets }`, `discoveryStop`  
 State also exposes `errorCode`, `retryAfterMs`, `retryUntil`.
 
-**Other:** `networkCapture`, `localTimelineCapture`, `initEnv`, `getTweetMedia`, `downloadFile`, Side Panel content commands `localCaptureWatch` / `localCaptureStart` / `localCaptureStop` / `localCaptureStatus`, content bulk `start` / `stop` / `getStatus`
+**Queue (new):** `queueRemove`, `queueSetSkipDownloaded`, `queueClearDownloadedHistory`. `queueAdd` now returns `addedCount`.
+
+**Other:** `networkCapture`, `localTimelineCapture` (returns `{ addedCount, tweetIds }`), `initEnv`, `getTweetMedia`, `downloadFile`.
+
+**Side Panel → content:** `scrollSettings` / `scrollStart` / `scrollStop` / `scrollStatus` / `scrollRescan`.
+The old `localCapture*` and popup `start`/`stop`/`getStatus` commands are **removed**.
 
 ### Queue item shape
 
@@ -95,11 +100,19 @@ State also exposes `errorCode`, `retryAfterMs`, `retryUntil`.
   url, type: "photo" | "video",
   thumbnail, author, date, tweetId, mediaId,
   source: "scroll" | "remote",
+  mediaKey,           // CDN-derived identity; collapses DOM vs GraphQL duplicates
   isRepost, filename, // x-media/{user}_{text}_{tweetId}_{index}.{ext}
   selected, status, // discovered|queued|starting|downloading|completed|failed
   attempts, bytesReceived, totalBytes, downloadId?, error?
 }
 ```
+
+## Storage keys
+
+`batchDownloadQueueV1` (queue), `profileDiscoveryV1` (discovery),
+`downloadedMediaIdsV1` (completed item ids only — no URLs, no content, capped
+at 20k), plus UI prefs `sidePanelActiveTab`, `scrollMediaFilter`, `scrollSpeed`,
+`skipDownloaded`, `batchTarget`, `batchLimit`, `includeRetweets`.
 
 ## What needs live-X validation (not complete offline)
 
@@ -154,10 +167,20 @@ scripts/package-release.sh            # → releases/x-media-downloader-v<versio
 
 ## Next session priorities
 
-1. **Try the new default Scroll capture:** reload unpacked `extension/`, hard-refresh X, open Side Panel, keep Scroll capture selected, and manually scroll an X `/media` page.
-2. Verify media listing, duplicate avoidance, tab-scoped Select all / Download all / Clear history, and optional auto-scroll start/stop.
-3. Verify Remote fetch remains usable as a secondary advanced fallback and does not feel like the primary path.
-4. Add diagnostics/status next if live testing is unclear: active X tab, watching status, last captured ops, warm/cold capture, sanitized copy-debug-report.
-5. Cut the first release zip only after the Scroll capture live pass; bump manifest version on next user-visible release.
-6. P1: stronger live response parsing, source/count badges, Include replies / quoted media switches, filename template settings.
-7. Later: simplify popup into an Open Side Panel launcher after Side Panel scroll capture replaces it.
+1. **Re-run the live checklist in `docs/WORKLIST.md` → "P0 — remaining (live-X, round 3)".** It is written directly against the v3.1 failures this pass fixed.
+2. If homepage or route-change capture still misses anything, capture a sanitized GraphQL response from that exact view — the parser is now allowlist-free, so a miss means the payload shape, not the operation name.
+3. If video posts fill in too slowly on video-heavy profiles, tune the 700ms per-post resolve gap in `content.js` (`drainPendingVideoTweets`) against real rate limits before raising it.
+4. Cut the first release zip (`scripts/package-release.sh`) once round 3 passes; manifest is already bumped to **3.2**.
+5. P1 after that: diagnostics/copy-debug-report, Include replies / quoted media switches, filename templates, per-batch subfolders.
+
+## Testing
+
+```bash
+node --check extension/background.js extension/content.js extension/popup.js extension/sidepanel.js extension/injected.js
+node --test tests/*.test.js          # 43 tests
+```
+
+`tests/content.test.js` runs the real `content.js` inside a DOM + `chrome` shim
+and encodes each reported live failure as a regression test (homepage capture,
+in-tab route change, duplicate suppression, capture filter, auto-scroll
+lifecycle). Extend it rather than testing capture by hand.

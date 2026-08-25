@@ -13,3 +13,20 @@ main { padding:14px 14px 156px; } .hidden { display:none !important; }
 .item-status.downloading { color: #79c8ff; }
 .item-status.starting { color: #79c8ff; }
 .item-status.queued { color: #c7d3dc; }
+.tab-status { display:flex; gap:9px; align-items:flex-start; margin:0 0 12px; padding:9px 10px; border:1px solid var(--border); border-radius:10px; background:#101b24; }
+.tab-status .dot { flex:0 0 8px; width:8px; height:8px; margin-top:5px; border-radius:50%; background:#5a6b78; }
+.tab-status.ok .dot { background:var(--green); box-shadow:0 0 0 3px rgba(0,186,124,.15); }
+.tab-status.active .dot { background:var(--blue); box-shadow:0 0 0 3px rgba(29,155,240,.18); animation:xdlPulse 1.4s ease-in-out infinite; }
+.tab-status.warn .dot { background:#f0c674; box-shadow:0 0 0 3px rgba(240,198,116,.15); }
+@keyframes xdlPulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
+.tab-status-text { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.tab-status-text strong { font-size:12px; }
+.tab-status-text span { color:var(--muted); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.secondary-toolbar { justify-content:space-between; padding-top:0; }
+.secondary-toolbar .check-label { color:var(--muted); font-size:11px; }
+.item-right { display:flex; flex-direction:column; align-items:flex-end; gap:5px; }
+.item-remove { width:20px; height:20px; padding:0; border:0; border-radius:50%; background:#2a3b48; color:#9fb0bc; font-size:14px; line-height:1; cursor:pointer; }
+.item-remove:hover { background:#4a2229; color:#ffb1b7; }
+.item-link { margin-left:5px; color:#82caff; font-size:11px; text-decoration:none; }
+.download-dock .action-row .button { flex:1; }
+.download-dock #stopBtn { flex:0 0 84px; }

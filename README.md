@@ -1,6 +1,6 @@
 # X Media Downloader — Chrome Extension
 
-**Download videos and photos from X (Twitter) via a Side Panel batch queue, or one click on a tweet.**
+**Scroll X normally and your media collects itself in a Side Panel queue — or grab a single post with one click.**
 
 Self-hosted against your signed-in X session. No third-party accounts, API keys, or paid tiers.
 
@@ -12,8 +12,11 @@ Self-hosted against your signed-in X session. No third-party accounts, API keys,
 
 ## Features
 
-- **Side Panel batch queue** — Enter `@username` or a profile/media URL, discover media (cap default 99,999), select items, download with 1–2 concurrent Chrome downloads.
-- **Download button on media tweets** — Action-bar control for a single post.
+- **Always-on scroll capture** — Open any X view (home timeline, profile, `/media`, or a single post) and scroll. Media lists itself in the Side Panel. No button to press first, and it follows in-tab navigation without a reload.
+- **Optional auto-scroll** — Let the extension scroll for you. It paces itself to how fast X renders, has no item cap, and never pauses for downloads.
+- **Action-bar buttons on media posts** — **Download** saves immediately; **Add to queue** sends the post's media to the Side Panel list.
+- **Remote fetch (advanced)** — Enter `@username` or a profile/media URL, discover media (cap default 99,999), then select and download.
+- **Skip already downloaded** — Finished files are remembered and not re-listed, even after you clear the list.
 - **Videos + photos** — Highest-bitrate MP4 (including animated GIFs as MP4); original-resolution photos (`name=orig`).
 - **Include reposts** — Optional during profile discovery.
 - **Rate-limit handling** — Throttle + exponential backoff; Side Panel shows a retry countdown on 429/503.
@@ -21,7 +24,7 @@ Self-hosted against your signed-in X session. No third-party accounts, API keys,
 - **Live session capture** — MAIN-world observer learns current GraphQL operation IDs and safe request headers from the open X tab.
 - **No third-party services** — Calls go to X only, using your browser session.
 
-Legacy popup **DOM auto-scroll bulk** still works on the currently loaded page; full-profile discovery is the Side Panel flow.
+The popup is just a launcher for the Side Panel — all capture, review, and downloading happens there.
 
 ## Installation
 
@@ -29,27 +32,29 @@ Legacy popup **DOM auto-scroll bulk** still works on the currently loaded page; 
 2. Open `chrome://extensions/` and enable **Developer mode**.
 3. **Load unpacked** → select the **`extension/`** folder (it contains `manifest.json` at its root).
 4. Sign in to [x.com](https://x.com) in that Chrome profile.
-5. Open the extension popup → **Open batch queue** (Side Panel), or use on-tweet Download buttons.
+5. Open the extension popup → **Open media queue** (Side Panel), or use the on-post buttons.
 
 You must be logged in to X. The extension uses your existing session — no API keys or passwords.
 
 ## Usage
 
-### Side Panel batch queue (primary)
+### Scroll capture (primary)
 
-1. Open any X tab so page scripts load (a profile `/media` page is ideal).
-2. Popup → **Open batch queue**.
-3. Enter `@username` or a profile URL; set limit; optionally include reposts.
-4. **Discover media** → review queue newest-first → select → **Download selected** or **Download all**.
-5. Keep concurrent downloads at 1 or 2. Use **Stop after active downloads** / **Stop scan** as needed.
+1. Open the Side Panel (popup → **Open media queue**). It stays on **Scroll capture**.
+2. Open any X view — home timeline, a profile, a profile's `/media` tab, or a single post.
+3. Scroll normally. Media appears in the panel as you go. Switching views inside the same tab works without reloading.
+4. Optionally press **Start auto-scroll** and pick a speed; a badge appears on the page with a **Stop** button.
+5. Tick the items you want (or **Select all**) and press **Download selected**.
 
-### Single tweet
+Keep concurrent downloads at 1 or 2. **Skip already downloaded** keeps finished files out of the list.
 
-Click **Download** on a media tweet’s action bar. Files go to `Downloads/x-media/`.
+### Single post
 
-### Legacy page bulk (popup)
+Under any media post: **Download** saves it now, **Add to queue** sends it to the Side Panel list for batching.
 
-On a timeline already loaded in the tab, set max items / filter / scroll speed and **Start**. This only sees DOM-loaded tweets — it is not full-profile GraphQL discovery.
+### Remote fetch (advanced fallback)
+
+Switch to the **Remote fetch** tab, enter `@username` or a profile URL, set a limit, optionally include reposts, then **Remote discover**. This crawls X directly, so it can hit rate limits sooner than normal scrolling — prefer Scroll capture when you can.
 
 ## How it works
 
@@ -83,7 +88,7 @@ No data is sent to third-party extension backends.
 │   ├── injected.js            #   MAIN-world GraphQL/header capture
 │   ├── content.js             #   Capture forwarder, action bar, DOM bulk
 │   ├── sidepanel.html/js/css  #   Batch queue UI
-│   ├── popup.html/js          #   Open panel + legacy bulk controls
+│   ├── popup.html/js          #   Side Panel launcher + capture status
 │   └── icon48.png / icon128.png
 ├── tests/                     # Node unit tests + sanitized fixtures
 ├── scripts/
@@ -107,6 +112,7 @@ never loaded by the browser.
 
 ```bash
 node --check extension/background.js extension/content.js extension/popup.js extension/sidepanel.js extension/injected.js
+node --test tests/*.test.js   # 43 tests
 node --test tests/background.test.js
 ```
 
@@ -137,7 +143,7 @@ Bump `extension/manifest.json` → `version` when cutting a new release.
 | Auth / session errors | Sign in on x.com, hard-refresh, retry |
 | Operation metadata missing | Open the target profile `/media` once so live capture can warm up |
 | Protected / N/A | Private, deleted, or unavailable to your account |
-| Rate limited | Wait for the Side Panel countdown; use slower bulk scroll |
+| Rate limited | Wait for the Side Panel countdown; use a slower auto-scroll speed |
 | After code update | Reload extension on `chrome://extensions`, then hard-refresh X |
 
 ## Disclaimer
