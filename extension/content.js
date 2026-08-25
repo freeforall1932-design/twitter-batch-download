@@ -231,7 +231,36 @@
       cursor: pointer;
     }
   `;
-  (document.head || document.documentElement).appendChild(style);
+  // run_at:document_start can execute before <head> exists — and on some
+  // navigations before <html> exists either. Appending to a null parent threw
+  // "Cannot read properties of null (reading 'appendChild')", which aborted
+  // this whole IIFE and left capture silently dead on that tab. Never throw
+  // here: fall back through the parents we have, and retry once the document
+  // element appears.
+  function injectStyles() {
+    const parent = document.head || document.documentElement;
+    if (!parent) return false;
+    parent.appendChild(style);
+    return true;
+  }
+
+  if (!injectStyles()) {
+    const retryStyle = () => {
+      if (injectStyles()) {
+        styleObserver.disconnect();
+        document.removeEventListener?.("DOMContentLoaded", retryStyle);
+      }
+    };
+    // The Document node always exists even when it has no element children yet,
+    // so a non-subtree childList watch fires exactly when <html> is inserted.
+    const styleObserver = new MutationObserver(retryStyle);
+    try {
+      styleObserver.observe(document, { childList: true });
+    } catch (_) {
+      /* environments that reject a Document target still get DOMContentLoaded */
+    }
+    document.addEventListener("DOMContentLoaded", retryStyle, { once: true });
+  }
 
   const DOWNLOAD_SVG = `<svg viewBox="0 0 24 24"><path d="M12 2a1 1 0 0 1 1 1v10.59l3.3-3.3a1 1 0 1 1 1.4 1.42l-5 5a1 1 0 0 1-1.4 0l-5-5a1 1 0 1 1 1.4-1.42l3.3 3.3V3a1 1 0 0 1 1-1zM5 20a1 1 0 1 0 0 2h14a1 1 0 1 0 0-2H5z"/></svg>`;
   const CHECK_SVG = `<svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>`;

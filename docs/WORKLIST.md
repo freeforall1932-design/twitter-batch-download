@@ -1,6 +1,6 @@
 # Development Worklist
 
-_Last audited: 2026-08-25 (post live-testing fix pass: always-on capture, SPA route handling, single download action)_
+_Last audited: 2026-08-25 (post live-testing fix pass; `document_start` null-root crash fix; **full code-review checklist run** — see the IMPROVEMENT_LOG entry of the same date)_
 
 ## Product target
 
@@ -27,7 +27,9 @@ No manual API key / password / cookie paste. Self-hosted against the signed-in X
 | Cross-source dedupe | Done | Every item carries a CDN-derived `mediaKey`, so DOM-found and GraphQL-found copies of one photo collapse into a single row. |
 | Bookmarks / likes full scan | Not implemented | |
 | Include replies / quoted | Not implemented | Must be explicit switches when added. |
-| Live signed-in verification | **Round 2 feedback applied; needs round 3** | v3.1 live test found: homepage never captured, capture only woke after reload/new tab, auto-scroll broken, redundant download buttons, dead `Watch current tab`. All addressed in v3.2 — re-test needed. |
+| Live signed-in verification | **Round 2 feedback applied; needs round 3** | v3.1 live test found: homepage never captured, capture only woke after reload/new tab, auto-scroll broken, redundant download buttons, dead `Watch current tab`. All addressed in v3.2 and still shipping in v3.3 — re-test needed. |
+| `document_start` null-root crash | **Fixed + regression-tested** | Reported `Cannot read properties of null (reading 'appendChild')` at `content.js:105`. That file is a pre-v3.2 build (still has `localCapture*` + the popup bulk loop). The null-`<head>` case was already covered by a `documentElement` fallback; the null-`<head>`-and-null-`<html>` case still threw and killed capture. Now deferred-and-retried, never throws. 3 regression tests. |
+| Code-review checklist (fit + missing logic + dead code) | **Run in full** | Clean except two contract commands that were handled in `background.js` and listed in the handoff but had no UI sender (`queueClearFinished`, `queueClearDownloadedHistory`). Both now wired to toolbar buttons; a structural contract test guards the class. `scrollRescan` remains a documented hook with no button (read-only, allowlisted). |
 
 
 ## Current product opinion / direction
@@ -58,24 +60,38 @@ capture, routing, or the download actions.
 
 Use this before claiming “ready” or merging large changes:
 
+### Before trusting a live bug report
+
+- [ ] Match the reported file and line against the current tree first. A trace
+      from a stale unpacked folder is not a bug in this repo — check the line
+      number, the total line count, and whether the surrounding symbols still
+      exist (`grep -n`). v3.2 deleted whole command families, so pre-v3.2 traces
+      point at code that is no longer here.
+- [ ] Reproduce against the real script before fixing. Load
+      `extension/content.js` through `tests/content.test.js`'s `loadContentScript()`
+      rather than reasoning about it — the DOM shim's defaults can hide a branch.
+- [ ] If the DOM shim supplies a node the live page may not have at
+      `document_start` (`head`, `documentElement`, `body`), pass an override so
+      the null path is actually executed.
+
 ### Fit / accidental shipment
 
-- [ ] No third-party hosts, ExtPay, plucker/apixbd, license, or tier gates.
-- [ ] No ZIP reintroduction without an explicit product decision.
-- [ ] No manual token/password fields.
-- [ ] No `<all_urls>` or non-X permissions.
-- [ ] No npm/TS/build step.
-- [ ] Scrapyard code is reimplemented, not copied as a black-box dependency.
+- [x] No third-party hosts, ExtPay, plucker/apixbd, license, or tier gates.
+- [x] No ZIP reintroduction without an explicit product decision.
+- [x] No manual token/password fields.
+- [x] No `<all_urls>` or non-X permissions.
+- [x] No npm/TS/build step.
+- [x] Scrapyard code is reimplemented, not copied as a black-box dependency.
 
 ### Missing logic / regressions
 
-- [ ] Discovery: stop on cap, no cursor, repeated cursor, empty pages, user stop, run-id staleness.
-- [ ] Queue: only 1–2 concurrent; `starting` holds a slot; terminal event before next start.
-- [ ] Restart: in_progress kept; complete/interrupted/missing reconciled; no duplicate downloads.
-- [ ] Capture bag: cookies never stored; CSRF from cookies preferred over stale capture when refreshing.
-- [ ] Single-tweet path uses `TweetResultByRestId` shape only (not TweetDetail variables).
-- [ ] Quotes still excluded until an explicit option exists; reposts honor Include reposts.
-- [ ] Filename sanitization + invalid-filename fallback ladder still works.
+- [x] Discovery: stop on cap, no cursor, repeated cursor, empty pages, user stop, run-id staleness.
+- [x] Queue: only 1–2 concurrent; `starting` holds a slot; terminal event before next start.
+- [x] Restart: in_progress kept; complete/interrupted/missing reconciled; no duplicate downloads.
+- [x] Capture bag: cookies never stored; CSRF from cookies preferred over stale capture when refreshing.
+- [x] Single-tweet path uses `TweetResultByRestId` shape only (not TweetDetail variables).
+- [x] Quotes still excluded until an explicit option exists; reposts honor Include reposts.
+- [x] Filename sanitization + invalid-filename fallback ladder still works.
 
 ### Deprecated / dead code to keep out
 
@@ -93,11 +109,11 @@ New this session (2026-08-25): restructure so the extension can be **Load unpack
 - [x] Added `scripts/package-release.sh` → `releases/x-media-downloader-v<version>.zip` (manifest at zip root, optional date tag, Windows fallback documented); `releases/*.zip` gitignored.
 - [ ] **Try it out:** load `extension/` unpacked in a signed-in Chrome, then run the live-X checklist below end-to-end.
 - [ ] Cut the first release zip (`scripts/package-release.sh`) and confirm it loads from the unzipped folder.
-- [x] Bump `extension/manifest.json` version when shipping the next user-visible change — now at **3.2**; optionally start a `CHANGELOG.md` per release.
+- [x] Bump `extension/manifest.json` version when shipping the next user-visible change — now at **3.3** (two new toolbar buttons + crash fix are user-visible); optionally start a `CHANGELOG.md` per release.
 
 ## P0 — remaining (live-X, round 3)
 
-Re-test v3.2 against the exact v3.1 failures:
+Re-test **v3.3** against the exact v3.1 failures:
 
 1. **Homepage capture:** open `x.com/home`, scroll, confirm media lists without any reload.
 2. **In-tab route change:** from home click into a post, then to a profile, then to `/media`, all without reloading. Media must list on every view within a couple of seconds.
@@ -107,6 +123,7 @@ Re-test v3.2 against the exact v3.1 failures:
 6. **Speed:** compare Fast vs Medium; Fast should advance as soon as X renders the next batch.
 7. **One download action:** confirm `Select all` + `Download selected` is sufficient and nothing references a removed `Download all in tab`.
 8. **Skip already downloaded:** download a few items, clear the list, re-scroll the same view, and confirm they do not come back. Then untick the toggle and confirm they do.
+   - **New in v3.3 — never rendered in a browser yet:** confirm the two toolbar buttons added this session actually appear and work. `Clear finished` must drop only completed/failed rows and keep the rest. `Reset downloaded history` must make previously skipped media list again on the next scroll.
 9. **Action bar:** confirm both `Download` and `Add to queue` appear under media posts and that `Add to queue` lands in the Side Panel list.
 10. **Status pill:** confirm it reflects the current route, posts on screen, and pending video resolves; and that it warns when the tab is not X or needs a refresh.
 11. Remote fetch still works as the secondary path with clear rate-limit messaging.
@@ -157,4 +174,4 @@ Re-test v3.2 against the exact v3.1 failures:
 - Reposts off/on correct.
 - Protected / NSFW / logged-out / rate-limit messages specific.
 - Stop discovery; stop downloads; Side Panel reload retains state.
-- **43+** local Node tests still green after cleanup (`tests/background.test.js` + `tests/content.test.js`).
+- **48+** local Node tests still green after cleanup (`tests/background.test.js` + `tests/content.test.js`).

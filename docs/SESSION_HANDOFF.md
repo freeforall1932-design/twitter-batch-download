@@ -1,6 +1,6 @@
 # Session Handoff — X Media Downloader
 
-**Prepared:** 2026-08-25 · **Extension version:** 3.2 · **Status:** v3.2 fixes landed, awaiting live-X round 3
+**Prepared:** 2026-08-25 · **Extension version:** 3.3 · **Status:** v3.3 = v3.2 + `document_start` null-root crash fix, two unreachable queue commands wired, contract test. Awaiting live-X round 3.
 
 ---
 
@@ -28,9 +28,13 @@ a set and each answers a different question:
 
 ### User input carried into the next session
 
-_Latest live-test feedback (round 2) is fully addressed in v3.2 — see the
-IMPROVEMENT_LOG entry for 2026-08-25 "Live-testing fixes". No unaddressed user
-requests are outstanding._
+_Latest input (2026-08-25): a live `TypeError: Cannot read properties of null
+(reading 'appendChild')` at `content.js:105` on `https://x.com/real_loonarae/media`.
+Traced and closed — see the IMPROVEMENT_LOG entry of the same name. Two things to
+carry forward: (a) the trace came from a **pre-v3.2** file, so if the user reports
+it again, first confirm which folder Chrome has loaded; (b) the DOM shim in
+`tests/content.test.js` used to guarantee `head` + `documentElement`, which hid
+the null branch — new `document_start` DOM code must be tested with overrides._
 
 Open questions to ask the user if they are available:
 
@@ -46,8 +50,11 @@ Open questions to ask the user if they are available:
 
 - Repository: `freeforall1932-design/twitter-batch-download`
 - Extension directory: `extension/` (the **Load unpacked** target)
-- Working branch for the last Arena session: `arena/01a03712-twitter-batch-download`
+- Working branch for the last Arena session: `arena/01a03748-twitter-batch-download`
 - Recent history:
+  - **(this branch)** — `document_start` null-root crash fix; `queueClearFinished` +
+    `queueClearDownloadedHistory` wired to toolbar buttons; message-contract and
+    style-injection regression tests (**v3.3**)
   - `6370ba8` — Live-testing fixes: always-on capture, SPA routes, single download action (**v3.2**)
   - `4cded49` — Merge PR #6 (repo restructure + release packaging)
   - `4cc3782` — Rank S live capture bridge + Rank A download fallbacks
@@ -122,7 +129,7 @@ Cookie headers.
 
 ---
 
-## 4. Current architecture (v3.2)
+## 4. Current architecture (v3.3)
 
 | File | Role |
 |---|---|
@@ -130,7 +137,7 @@ Cookie headers.
 | `background.js` | Auth, GraphQL, source-tagged queue, remote discovery, downloads, capture bag, timeline response ingestion, downloaded-id history. **No ZIP.** |
 | `injected.js` | MAIN-world XHR/fetch observer. Forwards **any** media-bearing GraphQL response (no operation allowlist), keeps a 40-entry replay buffer, and watches SPA route changes via `pushState`/`replaceState`/`popstate`. The allowlist survives only for Remote-fetch *request metadata*. |
 | `content.js` | **Always-on** scroll capture (no watch command), SPA route re-arm, DOM photo listing, rate-bounded per-post video resolve, content-driven auto-scroll with in-page badge, action-bar `Download` + `Add to queue`, toasts. |
-| `sidepanel.html/js/css` | Two-tab Side Panel: Scroll capture + Remote fetch. One download action, live active-tab status pill, per-row remove, skip-already-downloaded toggle. |
+| `sidepanel.html/js/css` | Two-tab Side Panel: Scroll capture + Remote fetch. One download action, live active-tab status pill, per-row remove, skip-already-downloaded toggle, plus `Clear finished` / `Reset downloaded history` maintenance buttons (wired in the round-3 review; the handlers existed but nothing sent them). |
 | `popup.html/js` | Side Panel launcher + capture status line. No scroll/download loop. |
 | `tests/` | `background.test.js` (Node VM unit tests + sanitized fixtures) and `content.test.js` (real `content.js` in a DOM + `chrome` shim). |
 
@@ -152,6 +159,13 @@ re-breaks a bug the user already reported:
    redundant `Download all in tab`.
 6. **The popup has no scroll/download loop.** Two engines fought over the page
    and the popup blocked scrolling on each download.
+7. **Stylesheet injection must never throw.** `content.js` runs at
+   `document_start`, where `document.head` — and sometimes `document.documentElement`
+   — do not exist yet. `injectStyles()` falls back through both parents and, if
+   neither exists, defers to a `Document`-node `MutationObserver` +
+   `DOMContentLoaded` retry. A bare `document.head.appendChild(...)` here aborted
+   the whole IIFE, so a styling edge case silently disabled all capture on that
+   tab. Do not collapse it back to a one-liner.
 
 ### Removed / deprecated — do not reintroduce without a product decision
 
@@ -172,6 +186,11 @@ re-breaks a bug the user already reported:
 `queueSelectVisible`, `queueSetConcurrency`, `queueStart`, `queueStop`,
 `queueRetryFailed`, `queueClearFinished`, `queueClearAll`, `queueRemove`,
 `queueSetSkipDownloaded`, `queueClearDownloadedHistory`
+
+_Every action above is asserted to have both a handler and a UI sender by the
+contract test in `tests/background.test.js`. Add a command → add a sender, or the
+suite fails. The single exception is `scrollRescan`, a read-only hook with no
+button yet._
 
 **Discovery:** `discoveryGet`, `discoveryStart` `{ target, limit, includeRetweets }`,
 `discoveryStop`. State also exposes `errorCode`, `retryAfterMs`, `retryUntil`.
@@ -277,7 +296,7 @@ one-line quality notes that inform ranking, not detailed specs.
 # from repo root
 node --check extension/background.js extension/content.js extension/popup.js \
              extension/sidepanel.js extension/injected.js
-node --test tests/*.test.js            # 43 tests
+node --test tests/*.test.js            # 48 tests
 scripts/package-release.sh             # → releases/x-media-downloader-v<version>.zip
 ```
 
@@ -297,7 +316,7 @@ capture bug should land there first as a failing test.
    exact view and add it to `tests/fixtures/` as a regression test.
 3. If video posts fill in too slowly, tune the 700ms gap in `content.js`
    (`drainPendingVideoTweets`) against real rate limits before raising it.
-4. Cut the first release zip once round 3 passes; the manifest is already at **3.2**.
+4. Cut the first release zip once round 3 passes; the manifest is already at **3.3**.
 5. P1 afterwards: Side Panel diagnostics + sanitized copy-debug-report, explicit
    Include replies / quoted media switches, filename templates, per-batch
    subfolders.
