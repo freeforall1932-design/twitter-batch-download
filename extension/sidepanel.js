@@ -195,6 +195,18 @@ $("clearHistoryBtn").addEventListener("click", async () => {
   state = await send({ action: "queueClearAll", source: sourceForActiveTab() });
   render();
 });
+// Both handlers below existed in background.js but nothing in the panel ever
+// sent them, so the contract in SESSION_HANDOFF §4 listed two unreachable
+// commands. They are wired here rather than deleted.
+$("clearFinishedBtn").addEventListener("click", async () => {
+  state = await send({ action: "queueClearFinished" });
+  render();
+});
+$("resetDownloadedBtn").addEventListener("click", async () => {
+  if (!confirm("Forget which media you already downloaded? Previously skipped items will list again.")) return;
+  state = await send({ action: "queueClearDownloadedHistory" });
+  render();
+});
 $("downloadSelectedBtn").addEventListener("click", async () => { state = await send({ action: "queueStart", mode: "selected", source: sourceForActiveTab() }); render(); });
 $("stopBtn").addEventListener("click", async () => { state = await send({ action: "queueStop" }); render(); });
 

@@ -915,3 +915,69 @@ test("mediaFromTweet stamps a CDN media key for cross-source dedupe", () => {
   assert.equal(item.mediaKey, "KeYaBc123");
   assert.equal(background.mediaKeyFromUrl("https://pbs.example.com/media/KeYaBc123.jpg?format=jpg&name=orig"), "KeYaBc123");
 });
+
+test("queueClearFinished drops only completed and failed rows", async () => {
+  const background = loadBackground();
+  await background.handleQueueMessage({
+    action: "queueAdd",
+    source: "scroll",
+    items: [
+      { id: "901-a", mediaKey: "a", url: "https://pbs.example.com/media/a.jpg", type: "photo" },
+      { id: "901-b", mediaKey: "b", url: "https://pbs.example.com/media/b.jpg", type: "photo" }
+    ]
+  });
+  await background.handleQueueMessage({ action: "queueStart", mode: "all", source: "scroll" });
+  await background.processQueue();
+  await background.emitDownloadChange({ id: 1, state: { current: "complete" } });
+
+  const cleared = await background.handleQueueMessage({ action: "queueClearFinished" });
+  const remaining = cleared.items.map((item) => item.id);
+  assert.ok(!remaining.includes("901-a"), "the completed row must be removed");
+  assert.ok(remaining.includes("901-b"), "an unfinished row must survive Clear finished");
+});
+
+// Regression for the round-3 review: two handlers existed in background.js and
+// were listed in the SESSION_HANDOFF message contract, but no UI ever sent them
+// (queueClearFinished, queueClearDownloadedHistory). A contract the docs
+// advertise and no button can reach is dead code either way, so the shipped
+// surfaces are cross-checked against the handlers here.
+test("every runtime action the UI sends has a handler, and every handler is reachable", () => {
+  const JS_TYPE_NAMES = new Set([
+    "string", "number", "boolean", "undefined", "object", "function", "bigint", "symbol"
+  ]);
+  const read = (name) => fs.readFileSync(path.join(__dirname, "..", "extension", name), "utf8");
+  const background = read("background.js");
+  const content = read("content.js");
+  const senders = ["content.js", "sidepanel.js", "popup.js"].map(read).join("\n");
+
+  const actions = (source, pattern) => new Set(
+    [...source.matchAll(pattern)]
+      .map((match) => match[1])
+      // `typeof msg.action === "string"` is a type guard, not a message action.
+      .filter((name) => !JS_TYPE_NAMES.has(name))
+  );
+
+  const bgHandled = actions(background, /action === "([a-zA-Z]+)"/g);
+  const contentHandled = actions(content, /action === "([a-zA-Z]+)"/g);
+  const sentLiteral = actions(senders, /action:\s*"([a-zA-Z]+)"/g);
+  // content.js also sends through sendMessage(action, ...) with a variable name.
+  const sentViaHelper = actions(senders, /sendMessage\("([a-zA-Z]+)"/g);
+  const sent = new Set([...sentLiteral, ...sentViaHelper]);
+
+  for (const action of sent) {
+    assert.ok(
+      bgHandled.has(action) || contentHandled.has(action),
+      `"${action}" is sent by the UI but handled nowhere`
+    );
+  }
+
+  // Handlers with no sender are only allowed for read-only panel hooks and
+  // test seams; anything else means a documented feature no button can reach.
+  const allowedUnreachable = new Set(["scrollRescan"]);
+  for (const action of bgHandled) {
+    assert.ok(
+      sent.has(action) || allowedUnreachable.has(action),
+      `"${action}" is handled in background.js but no UI sends it`
+    );
+  }
+});

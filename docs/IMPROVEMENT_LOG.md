@@ -2,6 +2,153 @@
 
 Chronological implementation record for X Media Downloader.
 
+## 2026-08-25 — Full pre-release code review (WORKLIST checklist) — contract gaps found and closed
+
+### Motivation
+Before declaring v3.2 ready for live round-3 testing, the `WORKLIST.md`
+code-review checklist was run end to end. It had not been run in full previously;
+only the reported `appendChild` crash had been investigated.
+
+### Verified clean (each re-checked against the shipped tree, not the docs)
+
+- **No third-party hosts / license / tier gates.** The only `plucker` / `tier`
+  matches in `extension/` are code comments; no external API host.
+- **No ZIP path.** The only `zip` match is a comment explaining why ZIP was dropped.
+- **No manual token/password input.** No `type="password"`, no token/cookie prompt.
+- **No build tooling, no non-X permissions.** No `package.json`/`tsconfig`/lockfile
+  outside `reference/`; manifest hosts are x.com, twitter.com, and three twimg/X CDNs.
+- **Every deprecated symbol is gone.** `downloadZip`, `fetchAsArrayBuffer`,
+  `getVideoUrl`, `downloadVideo`, `zipBuffers`, `ZipWriter`, `useZip`, `bulkId`,
+  `webRequest` — 0 hits in `extension/`.
+- **`TweetDetail` is request-metadata only.** It sits in `injected.js`
+  `TRACKED_OPS`, which is explicitly documented as *not* gating response parsing
+  (`injected.js:100` returns the parsed payload regardless). `getTweetMedia`
+  still reads only `getCapturedOperation("TweetResultByRestId")`.
+- **Capture bag never stores cookies** (`background.js:242-243` skips the
+  `cookie` header) and **fresh CSRF from cookies overrides a stale capture**
+  (`background.js:317-318`).
+- **Discovery stop conditions all present** in one guard
+  (`background.js:1621`): no cursor, repeated cursor, and `emptyPages >= 2`;
+  plus cap (`state.found < limit`), user stop (`!state.stopRequested`), and
+  `isCurrentDiscoveryRun()` staleness checks at 14 points in the loop.
+- **No missing DOM ids.** Every `$("#id")` in `sidepanel.js` exists in
+  `sidepanel.html`, and both `popup.js` ids exist in `popup.html` — so no
+  `null.addEventListener` crash class. (`remoteTabBtn`, `scrollTabBtn`,
+  `tabStatusDot`, `downloadNotice` look unused by id but are wired via the
+  `.tab` class + `data-tab` or are static CSS/text — not dead markup.)
+- **No unused functions** in `content.js`, `injected.js`, `sidepanel.js`.
+
+### Found and fixed
+
+1. **Two message-contract commands were unreachable.** `background.js` handled
+   `queueClearFinished` (line 1030) and `queueClearDownloadedHistory` (line 1023),
+   and `SESSION_HANDOFF.md` §4 lists both in the contract — but **nothing in the
+   Side Panel ever sent either**. `queueClearFinished` was a real user-facing
+   control in the 2026-08-24 "Persistent Side Panel batch queue" entry and was
+   lost in the v3.2 rework; the `Clear list` button sends `queueClearAll`
+   instead. `queueClearDownloadedHistory`'s *handler* was covered by a test, but
+   no button could reach it, so the documented "resettable" skip-history was not
+   actually resettable by a user.
+   - **Fixed:** added `Clear finished` and `Reset downloaded history` buttons to
+     the queue-maintenance toolbar (`sidepanel.html`), wired in `sidepanel.js`.
+     Both handlers already returned `publicQueueState()`, so no background change
+     was needed. Chosen over deletion because the docs advertise both.
+2. **`getCapturedHeaders()` has no shipped caller.** Declared at
+   `background.js:275`, used only by `tests/background.test.js:690` as a test
+   seam. Left in place deliberately; recorded so it is not mistaken for dead code.
+3. **`scrollRescan` is handled in `content.js:929` but never sent.** Read-only
+   rescan hook documented in the contract; harmless, left wired for a future
+   panel control and allowlisted explicitly in the new contract test.
+
+### Added
+
+- **A structural contract test** (`tests/background.test.js`): cross-checks the
+  shipped sources so every `action:` the UI sends has a handler in
+  `background.js` or `content.js`, and every `background.js` handler has a sender
+  (allowlist: `scrollRescan`). This is the test that should have existed when
+  v3.2 dropped those two controls.
+- **`queueClearFinished` behaviour test** — completed/failed rows are dropped,
+  unfinished rows survive.
+- Both new tests were verified to fail against the pre-fix tree: unwiring the new
+  `clearFinishedBtn` listener makes the contract test report
+  `"queueClearFinished" is handled in background.js but no UI sends it`.
+
+### Validation
+
+- `node --test tests/*.test.js` — **48** pass (was 46).
+- `node --check` clean on all five extension scripts and both test files.
+- Id audit and message-contract audit both report zero unhandled/missing entries.
+- `extension/manifest.json` bumped **3.2 → 3.3**: two new toolbar buttons plus the
+   crash fix are user-visible, per the WORKLIST rule on version bumps. No release
+   zip cut yet — `scripts/package-release.sh` should run only after round 3 passes.
+
+### Still not verified (unchanged)
+
+Nothing here was run in a signed-in Chrome. The live-X round-3 checklist in
+`WORKLIST.md` remains the gating item before P0 can be called complete.
+
+## 2026-08-25 — Reported `appendChild` on null crash: traced, partly already fixed, residual gap closed
+
+### Report
+A live error was reported against `https://x.com/real_loonarae/media`:
+
+```
+Uncaught TypeError: Cannot read properties of null (reading 'appendChild')
+  content.js:105
+```
+
+Line 105 of the reported file is `document.head.appendChild(style);` — the
+unguarded stylesheet injection.
+
+### Findings
+
+1. **The reported file is a pre-v3.2 build, not this repo's `content.js`.** The
+   copy that produced the trace is 754 lines and still contains the
+   `localCaptureWatch/Start/Stop/Status` handlers, the popup `start` / `stop` /
+   `getStatus` bulk loop, `mainLoop()`, and `getVisibleMediaTweets()`. All of
+   those are listed as *removed in v3.2* in `SESSION_HANDOFF.md` §4. The current
+   `extension/content.js` is 924 lines and contains none of them
+   (`grep -n "localCapture\|mainLoop\|getVisibleMediaTweets" extension/content.js`
+   returns nothing). **Anyone still seeing this trace is running a stale unpacked
+   folder — reload the extension, or confirm the folder is this repo's
+   `extension/`.**
+2. **The exact crash the user hit (null `<head>`) was already addressed.** The
+   injection had become `(document.head || document.documentElement).appendChild(style);`.
+   Verified by loading the real script with `document.head === null`: no throw,
+   stylesheet lands on `<html>`. This is the documented `document_start` case —
+   `<head>` may not exist yet while `<html>` does.
+3. **But the guard was incomplete and untested.** At `document_start` both
+   `document.head` *and* `document.documentElement` can be null. Loading the real
+   script in that state still threw the identical
+   `TypeError: Cannot read properties of null (reading 'appendChild')`, now at
+   `content.js:234`, killing the whole IIFE so capture never started on that tab.
+   `tests/content.test.js` never caught this because its DOM shim hardcodes a
+   non-null `head` *and* `documentElement`, so the null branch was never executed.
+   No doc recorded the fallback either.
+
+### Changed
+
+- `extension/content.js`: stylesheet injection is now `injectStyles()` — it tries
+  `document.head`, then `document.documentElement`, and if neither exists yet it
+  arms a non-subtree `MutationObserver` on the `Document` node plus a
+  `DOMContentLoaded` listener and retries. It never throws, so a null root can no
+  longer abort the script and silently kill capture.
+- `tests/content.test.js`: `loadContentScript()` takes a `documentOptions`
+  override (`head` / `documentElement` / `body`) and the `MutationObserver` shim
+  now records instances, so a `document_start` with a missing root is testable.
+  Three regression tests added: null `<head>`; null `<head>` *and* null `<html>`
+  (retry via observer); deferred attach via `DOMContentLoaded` alone. Each also
+  asserts capture still lists media afterwards, since the old throw killed
+  capture, not just styling.
+
+### Validation
+
+- `node --test tests/*.test.js` — **46** pass (was 43).
+- The three new tests were run against the pre-fix line to confirm they are real
+  regressions: the two null-root tests fail without the fix, the null-`<head>`
+  test passes without it (proving finding #2 — that case was already handled).
+- `node --check` clean on all five extension scripts.
+
 ## 2026-08-25 — Session handoff rewritten as a review-driven document
 
 ### Motivation

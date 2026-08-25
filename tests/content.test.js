@@ -132,22 +132,30 @@ function makeTweetArticle({ tweetId, handle, text, photos = [], video = false })
   return article;
 }
 
-function loadContentScript() {
+function loadContentScript(documentOptions = {}) {
   const sent = [];
   const posted = [];
   const messageListeners = [];
   const runtimeListeners = [];
   const intervals = [];
   const timeouts = [];
+  const observers = [];
 
-  const body = makeElement("body");
-  const head = makeElement("head");
+  const body = documentOptions.body !== undefined ? documentOptions.body : makeElement("body");
+  const head = documentOptions.head !== undefined ? documentOptions.head : makeElement("head");
+  const documentListeners = [];
   const document = {
     body,
     head,
-    documentElement: makeElement("html"),
+    documentElement: documentOptions.documentElement !== undefined
+      ? documentOptions.documentElement
+      : makeElement("html"),
     createElement: (tag) => makeElement(tag),
-    addEventListener() {},
+    addEventListener(type, listener) { documentListeners.push({ type, listener }); },
+    removeEventListener(type, listener) {
+      const index = documentListeners.findIndex((entry) => entry.type === type && entry.listener === listener);
+      if (index !== -1) documentListeners.splice(index, 1);
+    },
     querySelector(selector) { return body.querySelector(selector); },
     querySelectorAll(selector) { return body.querySelectorAll(selector); }
   };
@@ -174,7 +182,11 @@ function loadContentScript() {
     clearTimeout: () => {},
     setInterval: (fn, ms) => { intervals.push({ fn, ms }); return intervals.length; },
     clearInterval: () => {},
-    MutationObserver: class { observe() {} disconnect() {} },
+    MutationObserver: class {
+      constructor(callback) { this.callback = callback; observers.push(this); }
+      observe() { this.observing = true; }
+      disconnect() { this.observing = false; }
+    },
     chrome: {
       runtime: {
         id: "test-extension-id",
@@ -218,6 +230,13 @@ function loadContentScript() {
     window,
     document,
     body,
+    head,
+    documentElement: () => document.documentElement,
+    observers,
+    documentListeners,
+    emitDocumentEvent: (type) => documentListeners
+      .filter((entry) => entry.type === type)
+      .forEach((entry) => entry.listener()),
     location,
     sent,
     posted,
@@ -354,4 +373,52 @@ test("status reports the live route so the panel can show the active tab", () =>
   assert.equal(status.route, "/home");
   assert.equal(status.mediaFilter, "all");
   assert.equal(status.scrollSpeed, "fast");
+});
+
+// Regression: "Uncaught TypeError: Cannot read properties of null (reading
+// 'appendChild')" at the style-injection line. run_at:document_start can run
+// before <head> exists, and on some navigations before <html> exists either.
+// The old throw aborted the whole IIFE, so capture never started on that tab.
+test("style injection survives a document_start with no <head> yet", () => {
+  const env = loadContentScript({ head: null });
+
+  assert.ok(env.documentElement(), "the html element should host the stylesheet");
+  assert.equal(env.documentElement().children.length, 1, "the style element must be attached");
+
+  // The crash used to kill the script before any watcher was registered.
+  env.body.appendChild(makeTweetArticle({ tweetId: "600", handle: "real_loonarae", text: "early post", photos: ["FFF666"] }));
+  env.runIntervals();
+  const ids = env.queueAdds().flatMap((add) => add.items.map((item) => item.id));
+  assert.deepEqual(ids, ["600-FFF666"], "capture must still work when <head> is missing");
+});
+
+test("style injection survives a document_start with neither <head> nor <html>", () => {
+  const env = loadContentScript({ head: null, documentElement: null });
+
+  assert.equal(env.documentElement(), null, "still no root element at this point");
+  assert.ok(env.observers.length > 0, "a retry must be armed instead of throwing");
+
+  // <html> appears as the parser creates it.
+  const html = makeElement("html");
+  env.document.documentElement = html;
+  env.observers.forEach((observer) => observer.callback());
+
+  assert.equal(html.children.length, 1, "the style element must attach once <html> exists");
+
+  env.body.appendChild(makeTweetArticle({ tweetId: "700", handle: "real_loonarae", text: "late post", photos: ["GGG777"] }));
+  env.runIntervals();
+  const ids = env.queueAdds().flatMap((add) => add.items.map((item) => item.id));
+  assert.deepEqual(ids, ["700-GGG777"], "capture must still work when the document starts empty");
+});
+
+test("DOMContentLoaded alone is enough to attach a deferred stylesheet", () => {
+  const env = loadContentScript({ head: null, documentElement: null });
+  env.observers.forEach((observer) => observer.disconnect());
+  assert.equal(env.documentListeners.some((entry) => entry.type === "DOMContentLoaded"), true);
+
+  const html = makeElement("html");
+  env.document.documentElement = html;
+  env.emitDocumentEvent("DOMContentLoaded");
+
+  assert.equal(html.children.length, 1, "the deferred style element must be attached");
 });
