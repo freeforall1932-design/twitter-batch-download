@@ -1,0 +1,187 @@
+{
+  "data": {
+    "user": {
+      "result": {
+        "__typename": "User",
+        "timeline_v2": {
+          "timeline": {
+            "instructions": [
+              {
+                "type": "TimelineAddEntries",
+                "entries": [
+                  {
+                    "entryId": "tweet-1001",
+                    "content": {
+                      "entryType": "TimelineTimelineItem",
+                      "itemContent": {
+                        "itemType": "TimelineTweet",
+                        "tweet_results": {
+                          "result": {
+                            "__typename": "Tweet",
+                            "rest_id": "1001",
+                            "core": {
+                              "user_results": {
+                                "result": {
+                                  "legacy": { "screen_name": "demo" }
+                                }
+                              }
+                            },
+                            "legacy": {
+                              "created_at": "Mon Aug 24 12:00:00 +0000 2026",
+                              "full_text": "first photo post",
+                              "extended_entities": {
+                                "media": [
+                                  {
+                                    "id_str": "m1",
+                                    "type": "photo",
+                                    "media_url_https": "https://pbs.example.com/media/one.jpg"
+                                  },
+                                  {
+                                    "id_str": "m2",
+                                    "type": "photo",
+                                    "media_url_https": "https://pbs.example.com/media/two.jpg"
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "entryId": "tweet-1002",
+                    "content": {
+                      "entryType": "TimelineTimelineItem",
+                      "itemContent": {
+                        "itemType": "TimelineTweet",
+                        "tweet_results": {
+                          "result": {
+                            "__typename": "TweetWithVisibilityResults",
+                            "tweet": {
+                              "__typename": "Tweet",
+                              "rest_id": "1002",
+                              "core": {
+                                "user_results": {
+                                  "result": {
+                                    "legacy": { "screen_name": "demo" }
+                                  }
+                                }
+                              },
+                              "legacy": {
+                                "created_at": "Mon Aug 24 11:00:00 +0000 2026",
+                                "full_text": "a video",
+                                "extended_entities": {
+                                  "media": [
+                                    {
+                                      "id_str": "v1",
+                                      "type": "video",
+                                      "media_url_https": "https://pbs.example.com/media/video_thumb.jpg",
+                                      "video_info": {
+                                        "variants": [
+                                          { "content_type": "application/x-mpegURL", "url": "https://video.example.com/x.m3u8" },
+                                          { "content_type": "video/mp4", "bitrate": 832000, "url": "https://video.example.com/low.mp4" },
+                                          { "content_type": "video/mp4", "bitrate": 2176000, "url": "https://video.example.com/high.mp4" }
+                                        ]
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "entryId": "tweet-1003-rt",
+                    "content": {
+                      "entryType": "TimelineTimelineItem",
+                      "itemContent": {
+                        "itemType": "TimelineTweet",
+                        "tweet_results": {
+                          "result": {
+                            "__typename": "Tweet",
+                            "rest_id": "1003",
+                            "core": {
+                              "user_results": {
+                                "result": {
+                                  "legacy": { "screen_name": "demo" }
+                                }
+                              }
+                            },
+                            "legacy": {
+                              "created_at": "Mon Aug 24 10:00:00 +0000 2026",
+                              "full_text": "RT @other: reposted media",
+                              "retweeted_status_result": {
+                                "result": {
+                                  "__typename": "Tweet",
+                                  "rest_id": "9001",
+                                  "core": {
+                                    "user_results": {
+                                      "result": {
+                                        "legacy": { "screen_name": "other" }
+                                      }
+                                    }
+                                  },
+                                  "legacy": {
+                                    "created_at": "Sun Aug 23 10:00:00 +0000 2026",
+                                    "full_text": "original repost media",
+                                    "extended_entities": {
+                                      "media": [
+                                        {
+                                          "id_str": "rm1",
+                                          "type": "photo",
+                                          "media_url_https": "https://pbs.example.com/media/rt.jpg"
+                                        }
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "entryId": "tweet-deleted",
+                    "content": {
+                      "entryType": "TimelineTimelineItem",
+                      "itemContent": {
+                        "itemType": "TimelineTweet",
+                        "tweet_results": {
+                          "result": {
+                            "__typename": "TweetTombstone"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "entryId": "cursor-top-1",
+                    "content": {
+                      "entryType": "TimelineTimelineCursor",
+                      "cursorType": "Top",
+                      "value": "top-cursor"
+                    }
+                  },
+                  {
+                    "entryId": "cursor-bottom-1",
+                    "content": {
+                      "entryType": "TimelineTimelineCursor",
+                      "cursorType": "Bottom",
+                      "value": "bottom-cursor-page-1"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

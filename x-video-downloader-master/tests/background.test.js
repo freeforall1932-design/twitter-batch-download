@@ -47,6 +47,10 @@ function loadBackground(options = {}) {
       tabs: { query: options.tabsQuery || (async () => []) }
     }
   };
+  // Mirror a browser/service-worker global so background.js can hang listeners
+  // on globalThis and tests can install spies the same way.
+  context.globalThis = context;
+  context.global = context;
   vm.createContext(context);
   const source = fs.readFileSync(path.join(__dirname, "..", "background.js"), "utf8");
   vm.runInContext(source, context, { filename: "background.js" });
@@ -537,4 +541,219 @@ test("a stale discovery run cannot overwrite newer state", async () => {
   assert.equal(current.target, "@newer");
   assert.equal(current.status, "Newer run owns this state");
   assert.equal(current.error, null);
+});
+
+function loadFixture(name) {
+  return JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", name), "utf8"));
+}
+
+test("classifyDiscoveryError maps auth, protected, nsfw, not-found, and rate-limit cases", () => {
+  const background = loadBackground();
+  assert.equal(background.classifyDiscoveryError("rate limited", { status: 429 }).code, "rate_limited");
+  assert.equal(background.classifyDiscoveryError("X rate limit retries were exhausted.").code, "rate_limited");
+  assert.equal(background.classifyDiscoveryError("expired", { status: 401 }).code, "auth_expired");
+  assert.equal(background.classifyDiscoveryError("No signed-in X session was found.").code, "auth_required");
+  assert.equal(background.classifyDiscoveryError("blocked", { status: 403 }).code, "protected");
+  assert.equal(background.classifyDiscoveryError("Protected", { reason: "Protected" }).code, "protected");
+  assert.equal(background.classifyDiscoveryError("NsfwLoggedOut", { reason: "NsfwLoggedOut" }).code, "nsfw");
+  assert.equal(background.classifyDiscoveryError("could not find user").code, "not_found");
+  assert.equal(background.classifyDiscoveryError("Could not find current X operation metadata: UserMedia").code, "operation_metadata");
+  assert.equal(background.classifyDiscoveryError("Enter an X profile URL or @username.").code, "invalid_target");
+  assert.match(background.classifyDiscoveryError("blocked", { status: 403 }).message, /protected/i);
+});
+
+test("resolveUserResult classifies protected and missing profiles", () => {
+  const background = loadBackground();
+  const ok = background.resolveUserResult(loadFixture("user-by-screen-name-ok.json"));
+  assert.equal(ok.userId, "111");
+  assert.equal(ok.user.legacy.screen_name, "demo");
+
+  const protectedUser = background.resolveUserResult(loadFixture("user-by-screen-name-protected.json"));
+  assert.equal(protectedUser.error.code, "protected");
+  assert.match(protectedUser.error.message, /protected/i);
+
+  const missing = background.resolveUserResult({ data: { user: { result: null } } });
+  assert.equal(missing.error.code, "not_found");
+});
+
+test("sanitized UserMedia fixtures parse media, cursors, multi-photo, and repost rules", () => {
+  const background = loadBackground();
+  const page1 = loadFixture("user-media-page1.json");
+  const instructions = background.extractTimelineInstructions(page1);
+  assert.ok(Array.isArray(instructions));
+
+  const tweets = [];
+  background.collectTweets(instructions, tweets);
+  assert.equal(tweets.length, 3, "tombstone entries are skipped");
+
+  const withoutReposts = tweets.flatMap((tweet) => background.mediaFromTweet(tweet, "demo", false));
+  assert.deepEqual(Array.from(withoutReposts, (item) => item.id), ["1001-m1", "1001-m2", "1002-v1"]);
+  assert.equal(withoutReposts.find((item) => item.id === "1002-v1").url, "https://video.example.com/high.mp4");
+  assert.ok(withoutReposts.every((item) => item.type === "photo" ? item.url.includes("name=orig") : true));
+
+  const withReposts = tweets.flatMap((tweet) => background.mediaFromTweet(tweet, "demo", true));
+  assert.deepEqual(Array.from(withReposts, (item) => item.id), ["1001-m1", "1001-m2", "1002-v1", "9001-rm1"]);
+  const repost = withReposts.find((item) => item.id === "9001-rm1");
+  assert.equal(repost.isRepost, true);
+  assert.equal(repost.author, "@other");
+
+  assert.equal(background.findBottomCursor(instructions), "bottom-cursor-page-1");
+
+  const page2 = loadFixture("user-media-page2.json");
+  const page2Instructions = background.extractTimelineInstructions(page2);
+  assert.equal(background.findBottomCursor(page2Instructions), "bottom-cursor-page-2");
+  const page2Tweets = [];
+  background.collectTweets(page2Instructions, page2Tweets);
+  const page2Items = page2Tweets.flatMap((tweet) => background.mediaFromTweet(tweet, "demo", false));
+  assert.deepEqual(Array.from(page2Items, (item) => item.id), ["1004-m3"]);
+});
+
+test("discoveryFeatures includes current timeline navigation flags", () => {
+  const background = loadBackground();
+  const features = background.discoveryFeatures();
+  assert.equal(features.responsive_web_graphql_timeline_navigation_enabled, true);
+  assert.equal(features.view_counts_everywhere_api_enabled, true);
+  assert.equal(features.longform_notetweets_inline_media_enabled, true);
+  assert.equal(features.responsive_web_enhance_cards_enabled, false);
+  assert.equal(background.discoveryFieldToggles().withArticlePlainText, false);
+});
+
+test("rate-limit countdown sleep notifies remaining wait windows", async () => {
+  const background = loadBackground();
+  const events = [];
+  background.rateLimitStatusListener = async (info) => { events.push({ ...info }); };
+
+  const started = Date.now();
+  await background.sleepWithRateLimitCountdown(1200, { attempt: 1, maxAttempts: 4, status: 429 });
+  const elapsed = Date.now() - started;
+
+  assert.ok(elapsed >= 1100);
+  assert.ok(events.length >= 2);
+  assert.equal(events[0].attempt, 1);
+  assert.equal(events[0].status, 429);
+  assert.ok(events[0].waitMs >= 1000);
+  assert.equal(events[events.length - 1].waitMs, 0);
+  background.rateLimitStatusListener = null;
+});
+
+test("fetchWithRetry surfaces countdown callbacks on 429 before succeeding", async () => {
+  const background = loadBackground();
+  const events = [];
+  background.rateLimitStatusListener = async (info) => { events.push(info.waitMs); };
+
+  let calls = 0;
+  background.fetch = async () => {
+    calls++;
+    if (calls === 1) {
+      return {
+        status: 429,
+        ok: false,
+        headers: { get: (name) => (name.toLowerCase() === "retry-after" ? "0" : null) }
+      };
+    }
+    return {
+      status: 200,
+      ok: true,
+      headers: { get: () => null }
+    };
+  };
+  // Function declarations resolve on the VM global. Replace spacing/auth with
+  // no-ops so this test only exercises the 429 retry + countdown path.
+  background.rateLimitWait = async () => {};
+  background.refreshAuth = async () => ({ ok: true });
+
+  const response = await background.fetchWithRetry("https://x.com/i/api/graphql/test", {}, 2);
+  assert.equal(response.status, 200);
+  assert.equal(calls, 2);
+  assert.ok(events.includes(0));
+  background.rateLimitStatusListener = null;
+});
+
+test("network captures prefer live operation ids and headers without storing cookies", () => {
+  const background = loadBackground();
+  background.rememberNetworkCapture({
+    operationName: "UserMedia",
+    queryId: "LiveUserMediaQueryId99",
+    features: JSON.stringify({ responsive_web_graphql_timeline_navigation_enabled: true, custom_flag: true }),
+    fieldToggles: JSON.stringify({ withArticlePlainText: true }),
+    variables: JSON.stringify({ userId: "old", count: 30, withV2Timeline: true }),
+    headers: {
+      authorization: "Bearer CAPTURED_BEARER_TOKEN",
+      "x-csrf-token": "captured-csrf",
+      "x-client-transaction-id": "tx-123",
+      cookie: "auth_token=SHOULD_NOT_PERSIST; ct0=nope"
+    }
+  });
+
+  const captured = background.getCapturedOperation("UserMedia");
+  assert.equal(captured.queryId, "LiveUserMediaQueryId99");
+  const capturedHeaders = background.getCapturedHeaders();
+  assert.equal(capturedHeaders.cookie, undefined);
+  assert.equal(capturedHeaders.authorization, "Bearer CAPTURED_BEARER_TOKEN");
+  assert.equal(capturedHeaders["x-client-transaction-id"], "tx-123");
+  assert.equal(capturedHeaders["x-csrf-token"], "captured-csrf");
+  assert.equal(background.getLastTransactionId(), "tx-123");
+
+  const headers = background.makeHeaders();
+  assert.match(headers.authorization, /CAPTURED_BEARER_TOKEN/);
+  assert.equal(headers["x-client-transaction-id"], "tx-123");
+  assert.equal(headers["x-csrf-token"], "captured-csrf");
+
+  const variables = background.buildUserMediaVariables("user-42", "cursor-abc", captured);
+  assert.equal(variables.userId, "user-42");
+  assert.equal(variables.cursor, "cursor-abc");
+  assert.equal(variables.count, 30);
+  assert.equal(variables.withV2Timeline, true);
+  assert.equal(variables.screen_name, undefined);
+
+  const features = background.mergeDiscoveryFeatures(captured);
+  assert.equal(features.custom_flag, true);
+  assert.equal(features.responsive_web_graphql_timeline_navigation_enabled, true);
+});
+
+test("downloadFile falls back to safer paths after Invalid filename", async () => {
+  const attempts = [];
+  const background = loadBackground({
+    download: (options, callback) => {
+      attempts.push(options.filename);
+      if (attempts.length === 1) {
+        background.chrome.runtime.lastError = { message: "Invalid filename" };
+        callback(undefined);
+        background.chrome.runtime.lastError = null;
+        return;
+      }
+      background.chrome.runtime.lastError = null;
+      callback(99);
+    }
+  });
+
+  const result = await background.downloadFile(
+    "https://video.example.com/a.mp4",
+    'x-media/alice_hello:world?/<>_123_1.mp4'
+  );
+  assert.equal(result.success, true);
+  assert.equal(result.downloadId, 99);
+  assert.ok(attempts.length >= 2);
+  assert.notEqual(attempts[0], attempts[1]);
+  assert.ok(attempts.every((name) => !name.includes("?")));
+});
+
+test("normalizePhotoUrl forces orig and preserves format", () => {
+  const background = loadBackground();
+  assert.equal(
+    background.normalizePhotoUrl("https://pbs.example.com/media/abc?format=png"),
+    "https://pbs.example.com/media/abc?format=png&name=orig"
+  );
+  assert.match(
+    background.normalizePhotoUrl("https://pbs.example.com/media/abc.jpg"),
+    /name=orig/
+  );
+});
+
+test("buildFallbackFilenames produces a short safe ladder", () => {
+  const background = loadBackground();
+  const ladder = background.buildFallbackFilenames('x-media/alice:bad?/name_hello world_1.mp4');
+  assert.ok(ladder.length >= 3);
+  assert.ok(ladder.every((name) => !/[<>:"|?*]/.test(name)));
+  assert.ok(ladder.some((name) => name.startsWith("x-media/")));
 });

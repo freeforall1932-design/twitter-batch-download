@@ -11,18 +11,31 @@
   window.__xdl_active = false;
   console.log("[X-DL] Content script loaded on:", window.location.href);
 
+  // Forward MAIN-world network captures (Rank S insight) to the service worker.
+  // Tokens stay in extension memory only — never rendered in the Side Panel.
+  window.addEventListener("message", (event) => {
+    if (event.source !== window) return;
+    const payload = event.data;
+    if (!payload || payload.source !== "XDL_INJECTED") return;
+    if (payload.type === "xdlNetworkCapture" && payload.data) {
+      chrome.runtime.sendMessage({
+        action: "networkCapture",
+        capture: payload.data,
+        pageUrl: payload.capturedUrl || window.location.href
+      }).catch(() => {});
+    }
+  });
+
   // --- State ---
   let downloaded = 0;
   let maxMedia = 100;
   let scrollSpeed = "medium";
   let mediaFilter = "all"; // "all" | "video" | "photo"
-  let useZip = false;
   let running = false;
   let statusText = "Ready";
   let statusState = "";
   const processedTweets = new Set();
   let envReady = false;
-  let bulkId = 0; // unique ID for each bulk session
 
   const SCROLL_CONFIG = {
     slow: { distance: 400, interval: 3500 },
@@ -285,11 +298,22 @@
 
   function getPhotoExtension(url) {
     // Twitter photo URLs like: pbs.twimg.com/media/xxx.jpg?name=orig
-    // or pbs.twimg.com/media/xxx.png?name=orig
-    const cleanUrl = url.split("?")[0];
-    if (cleanUrl.endsWith(".png")) return "png";
-    if (cleanUrl.endsWith(".webp")) return "webp";
-    return "jpg"; // default
+    // or pbs.twimg.com/media/xxx?format=png&name=orig (Rank A style)
+    try {
+      const parsed = new URL(url, window.location.origin);
+      const format = (parsed.searchParams.get("format") || "").toLowerCase();
+      if (format === "png" || format === "webp" || format === "jpg" || format === "jpeg") {
+        return format === "jpeg" ? "jpg" : format;
+      }
+      const cleanUrl = parsed.pathname.toLowerCase();
+      if (cleanUrl.endsWith(".png")) return "png";
+      if (cleanUrl.endsWith(".webp")) return "webp";
+    } catch (_) {
+      const cleanUrl = String(url || "").split("?")[0].toLowerCase();
+      if (cleanUrl.endsWith(".png")) return "png";
+      if (cleanUrl.endsWith(".webp")) return "webp";
+    }
+    return "jpg";
   }
 
   function resetBtn(btn) {
@@ -337,15 +361,21 @@
     }
   }
 
-  // Watch for new tweets appearing in the DOM (virtualized list)
-  const observer = new MutationObserver(() => {
+  // Watch for new tweets appearing in the DOM (virtualized list).
+  // document_start may run before <body> exists.
+  function startDomWatchers() {
+    if (!document.body) {
+      document.addEventListener("DOMContentLoaded", startDomWatchers, { once: true });
+      return;
+    }
+    const observer = new MutationObserver(() => {
+      injectDownloadButtons();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
     injectDownloadButtons();
-  });
-  observer.observe(document.body, { childList: true, subtree: true });
-
-  // Initial injection + periodic fallback
-  injectDownloadButtons();
-  setInterval(injectDownloadButtons, 2000);
+    setInterval(injectDownloadButtons, 2000);
+  }
+  startDomWatchers();
 
   // ==========================================================================
   // BULK SCROLL LOOP — Auto-scroll and download all media
@@ -373,7 +403,6 @@
   async function mainLoop() {
     console.log("[X-DL] Initializing auth environment...");
     statusText = "Initializing...";
-    bulkId++;
 
     const envOk = await initEnv();
     if (!envOk) {
@@ -556,7 +585,6 @@
       maxMedia = msg.maxMedia || msg.maxVideos || 100;
       scrollSpeed = msg.scrollSpeed || "medium";
       mediaFilter = msg.mediaFilter || "all";
-      useZip = msg.useZip || false;
       downloaded = 0;
       running = true;
       window.__xdl_active = true;

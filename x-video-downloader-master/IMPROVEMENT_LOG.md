@@ -162,3 +162,101 @@ Chronological implementation record for X Media Downloader.
 ### Validation
 - Added a regression test for `normalizeDiscoveryLimit()`.
 - All local Node tests pass; no live X data or signed-in session required.
+
+## 2026-08-25 — P0 discovery hardening (errors, countdown, fixtures)
+
+### Added
+- `classifyDiscoveryError()` maps transport/API failures to stable codes:
+  `rate_limited`, `auth_expired`, `auth_required`, `protected`, `nsfw`,
+  `not_found`, `operation_metadata`, `invalid_target`, `unknown`.
+- `resolveUserResult()` classifies protected/suspended/missing profiles from
+  `UserByScreenName` payloads (`UserUnavailable`).
+- Visible rate-limit retry countdown during discovery:
+  - `fetchWithRetry()` publishes wait windows via `rateLimitStatusListener`
+  - discovery state carries `retryAfterMs`, `retryUntil`, and `errorCode`
+  - Side Panel shows a live yellow countdown and keeps it ticking between
+    `queueChanged` messages
+- Sanitized regression fixtures under `tests/fixtures/`:
+  - `user-by-screen-name-ok.json`
+  - `user-by-screen-name-protected.json`
+  - `user-media-page1.json` (multi-photo, video bitrate pick, repost, tombstone, bottom cursor)
+  - `user-media-page2.json` (cursor page)
+
+### Changed
+- Discovery GraphQL `features` / `fieldToggles` expanded toward current X web
+  timeline request shape (aligned with Rank S Plucker captures; still needs
+  live signed-in verification).
+- `UserMedia` variables now include `withV2Timeline`, `withVoice`, and
+  `withQuickPromoteEligibilityTweetFields`; page size set to 20 to reduce 429s.
+- Timeline instruction extraction accepts both `timeline_v2` and legacy
+  `timeline` paths.
+- Bottom-cursor finder prefers the last `TimelineTimelineCursor` / `Bottom`
+  entry (Plucker-style).
+- Soft-unwrap skips deleted/NSFW individual timeline entries without aborting
+  the whole scan; profile-level failures still stop discovery.
+- Session check now also requires an `auth_token` cookie (not only `ct0`).
+- Side Panel shows a small **repost** badge on reposted queue items.
+
+### Rank S scrapyard review (supporting only)
+- **Plucker XBD (RANK S):** Feature-rich batch UI + media timeline intercept, but
+  depends on `apixbd.plucker.io` license/plan gating. Reused only conceptual
+  patterns (features blob, cursor entry shape, filename ideas). No third-party
+  auth/tier code imported.
+- **Rank A action-bar downloader:** Clean local filename/folder helpers and
+  action-bar UX; useful later for per-tweet “Add to queue”, not required for P0.
+- **Rank B exporter:** Supporting filter/batch code; lower priority UI.
+
+### Validation
+- All **23** local Node tests pass (`node --test tests/background.test.js`).
+- No live X data or signed-in session required for these tests.
+- Live-X checklist in WORKLIST remains open before declaring P0 complete.
+
+## 2026-08-25 — Rank S/A stability review (live capture + download fallbacks)
+
+### Review priority applied
+1. **Rank S (Plucker XBD)** first — battle-tested intercept of live GraphQL query IDs, features/variables, and request headers (`authorization`, `x-csrf-token`, `x-client-transaction-id`). Rejected its `apixbd.plucker.io` / plan_code / daily-limit gates.
+2. **Rank A** second — Invalid-filename download ladder, photo `format=` extension detection, safer path sanitization.
+3. **Rank B** last — ExtPay licensing ignored; no useful GraphQL scanner to port.
+
+### Added
+- `injected.js` MAIN-world network bridge (document_start) that observes XHR/fetch GraphQL calls and posts operation metadata + safe headers to the isolated content script.
+- `content.js` forwards `xdlNetworkCapture` to the service worker (`networkCapture` message).
+- `background.js` capture bag (`__xdlNetworkCapture`) with 30-minute freshness:
+  - prefers live `UserMedia` / `UserPhotoTimeline` / `UserVideoTimeline` / `UserByScreenName` query IDs over bundle scrape
+  - merges live features/fieldToggles/variables templates into discovery requests
+  - reuses `x-client-transaction-id` and other captured X headers
+  - never stores Cookie header values in the capture bag
+- `downloadFile()` retries with safer path ladder on Chrome `Invalid filename` (Rank S/A pattern).
+- `normalizePhotoUrl()` forces `name=orig` while preserving `format=`.
+- Discovery stops after repeated empty pages (in addition to missing/repeated cursor).
+- Manifest v3.1: MAIN-world content script, dropped unused `webRequest` permission.
+
+### Deliberately not ported
+- Any third-party account, license, activation, tier, or daily download counter.
+- Plucker’s external webapp task pipeline.
+- Rank B ExtPay payment hooks.
+
+### Validation
+- All **27** local Node tests pass.
+- No live X session required for unit tests; live signed-in validation still required for P0 complete.
+
+## 2026-08-25 — Deprecation cleanup after big rewrite
+
+### Removed (no longer fits product)
+- Entire ZIP path: `lib/zip-writer.js`, `importScripts` of zip-writer, `zipBuffers`, runtime handlers `downloadZip` and `fetchAsArrayBuffer`.
+- Legacy unused runtime handlers: `getVideoUrl`, `downloadVideo` (nothing in-tree called them).
+- Dead bulk flags in `content.js`: `useZip`, `bulkId`.
+- Accidental single-tweet fallback to `TweetDetail` operation name (incompatible variables/response vs `TweetResultByRestId`).
+
+### Fixed / clarified
+- `getTweetMedia` stays on `TweetResultByRestId` only; may still use a **live-captured query id** for that operation.
+- Header comment and architecture docs no longer claim ZIP packaging is active.
+- Handoff/worklist now include an explicit “code-review checklist” for missing logic and accidental shipment.
+
+### Still intentional (not deleted)
+- Popup DOM auto-scroll bulk mode — legacy but still product-supported until a Side Panel migration.
+- Public Bearer fallback + bundle scrape — fallbacks when live capture is cold.
+- Rank S capture bridge — local reimplementation, not third-party.
+
+### Validation
+- Syntax check + full Node test suite after cleanup.
