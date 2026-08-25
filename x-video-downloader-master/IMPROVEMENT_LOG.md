@@ -133,3 +133,17 @@ Chronological implementation record for X Media Downloader.
 - Added a dual callback/promise helper for `chrome.downloads.search()` so the extension works on both modern and legacy Chrome downloads APIs.
 - Added local tests covering stranded `starting`, active `in_progress` slot preservation, `complete`, retryable and exhausted `interrupted`, missing download recovery, and restart resume without duplicating an active download.
 - All 14 local Node tests pass; no live X data or signed-in session required.
+
+## 2026-08-25 — Direct filenames by post username and text (ZIP export dropped)
+
+### Decision
+- ZIP output from the Side Panel queue is intentionally out of scope. A large queue could bundle into a multi-GB archive, so media stays as direct individual files.
+
+### Fixed
+- Added `sanitizeFilePart()` and `makeMediaFilename()` helpers.
+- Queue downloads are now named `x-media/{username}_{post-text}_{tweetId}_{index}.{ext}` instead of being grouped for a ZIP.
+- Multi-photo/video posts remain separate files, numbered by their media index, with `conflictAction: "uniquify"` preventing overwrites.
+
+### Validation
+- Added tests that verify a photo and animated GIF from one post use the post username/text in their filenames and that username/text sanitization is deterministic.
+- No live X data or signed-in session required.

@@ -27,7 +27,7 @@ No manual API key, password, `auth_token`, or cookie-pasting field will be added
 | Discovery progress and rate-limit status | Partial | Resolving/page/found/completed/stopped/error states are shown. A visible retry countdown remains to be added. |
 | Queue filename metadata | Implemented | Queue records include author, post date, tweet ID, media ID, thumbnail, repost flag, and filename. |
 | Queue retries / download byte progress | Implemented, requires browser validation | Up to three attempts for start/interruption failures, manual Retry failed action, and per-item percentage when Chrome exposes byte deltas. |
-| ZIP from Side Panel queue | Not connected | ZIP writer exists; old `useZip` flag is unused by current UI. |
+| Direct file naming | Implemented | Queue filenames use the post's username and text; history and larger direct media downloads do not need a huge ZIP. |
 | Bookmarks / likes full scan | Not implemented | Existing DOM bulk works on loaded content only. |
 | Automated browser/live-X verification | Not run | Requires a logged-in X browser session. |
 
@@ -70,7 +70,7 @@ Before marking the profile scanner complete, re-review the code and execute the 
 ### P3 — Robustness and optional features
 
 1. Download history UI and stronger resume policy after browser/extension restart.
-2. ZIP output as an explicit Side Panel queue export.
+2. Keep direct media files (ZIP export is intentionally out of scope so a large queue does not balloon into a multi-GB archive); filenames already use the post's username and text.
 3. HLS/live-media policy and support after direct MP4 coverage is verified.
 4. Firefox MV3 compatibility.
 5. Direct avatar/banner download.
@@ -82,8 +82,7 @@ Before marking the profile scanner complete, re-review the code and execute the 
 - Per-tweet action-bar controls for “Add to queue” / “Download this media.”
 - Gallery/list/grid queue view modes, preview modal, open-tweet links, and queue sorting choices.
 - Parallel download tuning above two only after rate-limit and reliability testing.
-- ZIP grouping by account/date/media type.
-- Custom folders and filename templates such as `{date}_{author}_{tweetId}_{index}`.
+- Custom folders and filename templates such as `{date}_{author}_{tweetId}_{index}` (default is already `@user_post-text_tweetId_index`).
 - Skip known/downloaded media and user-visible download history export.
 - Animated GIF conversion, HLS merging, or native companion integration only if there is a clear supported use case.
 - Firefox compatibility, accessibility pass, localization, and automated UI tests.

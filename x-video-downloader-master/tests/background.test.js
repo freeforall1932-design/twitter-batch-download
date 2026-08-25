@@ -440,6 +440,62 @@ test("restart resume starts waiting items without duplicating active downloads",
   assert.equal(state.items.find((item) => item.id === "waiting").status, "downloading");
 });
 
+test("media filenames use the post username and text instead of a ZIP archive", () => {
+  const background = loadBackground();
+  const tweet = {
+    rest_id: "12345",
+    core: {
+      user_results: {
+        result: {
+          legacy: { screen_name: "alice" }
+        }
+      }
+    },
+    legacy: {
+      created_at: "Sat Aug 23 12:00:00 +0000 2026",
+      full_text: "hello world https://t.co/abc",
+      extended_entities: {
+        media: [
+          {
+            id_str: "67812",
+            type: "photo",
+            media_url_https: "https://pbs.example.com/media/photo.jpg"
+          },
+          {
+            id_str: "67813",
+            type: "animated_gif",
+            video_info: {
+              variants: [
+                { content_type: "video/mp4", bitrate: 900, url: "https://video.example.com/gif.mp4" }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  };
+
+  const items = background.mediaFromTweet(tweet, "@fallback", false);
+  assert.deepEqual(Array.from(items, (item) => item.filename), [
+    "x-media/alice_hello world_12345_1.jpg",
+    "x-media/alice_hello world_12345_2.mp4"
+  ]);
+  assert.deepEqual(Array.from(items, (item) => item.author), ["@alice", "@alice"]);
+});
+
+test("makeMediaFilename sanitizes username and post text deterministically", () => {
+  const background = loadBackground();
+  const filename = background.makeMediaFilename({
+    username: "  alice:bad/name  ",
+    text: "look at this https://t.co/x \"quoted\" path\\file",
+    tweetId: "abc123",
+    mediaId: "987",
+    index: 0,
+    extension: "mp4"
+  });
+  assert.equal(filename, "x-media/alicebadname_look at this quoted pathfile_abc123_1.mp4");
+});
+
 test("a stale discovery run cannot overwrite newer state", async () => {
   let releaseTabs;
   let signalTabQuery;

@@ -814,6 +814,28 @@ function findBottomCursor(value) {
   return null;
 }
 
+function sanitizeFilePart(value, fallback) {
+  const cleaned = String(value || "")
+    .replace(/https?:\/\/\S+/g, "")
+    // Chrome disallows more common Windows path characters in filenames.
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[. ]+$/g, "");
+  return cleaned.slice(0, 64) || fallback;
+}
+
+function makeMediaFilename({ username, text, tweetId, mediaId, index, extension }) {
+  // Name downloads by the username and text from the post instead of bundling
+  // them into one large ZIP archive (which can balloon to several GB).
+  const user = sanitizeFilePart(username, "unknown");
+  const snippet = sanitizeFilePart(text, "media");
+  const ids = String(tweetId || mediaId || "").slice(0, 24).replace(/[^a-zA-Z0-9_-]/g, "") || "";
+  const number = Number.isFinite(Number(index)) ? Number(index) + 1 : 1;
+  const key = [user, snippet, ids, number].filter(Boolean).join("_");
+  return `x-media/${key}.${extension}`;
+}
+
 function mediaFromTweet(tweet, targetHandle, includeRetweets) {
   const legacy = tweet.legacy || {};
   const isRepost = Boolean(legacy.retweeted_status_result?.result || tweet.retweeted_status_result?.result);
@@ -837,12 +859,12 @@ function mediaFromTweet(tweet, targetHandle, includeRetweets) {
     if (!url) return null;
     const extension = type === "photo" ? ((url.match(/[?&]format=([^&]+)/)?.[1] || url.split("?")[0].split(".").pop() || "jpg").replace(/[^a-z0-9]/gi, "") || "jpg") : "mp4";
     const mediaId = item.id_str || item.id || index;
-    const safeText = String(text).replace(/https?:\/\/\S+/g, "").replace(/[<>:"/\\|?*\x00-\x1f]/g, "").replace(/\s+/g, " ").trim().slice(0, 48) || "media";
+    const tweetId = source.rest_id || tweet.rest_id || "";
     return {
-      id: `${source.rest_id || tweet.rest_id}-${mediaId}`,
+      id: `${tweetId}-${mediaId}`,
       url, type, thumbnail: item.media_url_https || item.media_url || "", author: `@${author}`,
-      date: timestamp, tweetId: source.rest_id || tweet.rest_id, mediaId: String(mediaId), isRepost,
-      filename: `x-media/${String(source.rest_id || tweet.rest_id)}_${author}_${safeText}_${index + 1}.${extension}`
+      date: timestamp, tweetId, mediaId: String(mediaId), isRepost,
+      filename: makeMediaFilename({ username: author, text, tweetId, mediaId, index, extension })
     };
   }).filter(Boolean);
 }
