@@ -72,3 +72,93 @@ Chronological implementation record for X Media Downloader.
 ### Remaining limitation
 - Chrome does not always expose total bytes for a CDN transfer; percentage may be unavailable even while a file downloads.
 - Retry/backoff timing needs live browser validation against actual CDN failures and rate limiting.
+
+## 2026-08-24 — Exact discovery caps and deterministic counting
+
+### Fixed
+- Discovery now counts unique media encountered during the current scan instead of inferring the count from the mutable global queue length.
+- The final page is trimmed to the remaining capacity, so a scan cannot overshoot its configured media limit.
+- Media repeated across cursor pages no longer consumes the cap more than once.
+- Queue additions now reject duplicate IDs within a single incoming batch as well as IDs already in the queue.
+
+### Validation
+- Added local Node tests for exact cap selection, cross-page deduplication, and same-batch queue deduplication.
+- No live X data or signed-in session is required for these deterministic tests.
+
+## 2026-08-24 — Stable newest-first discovery ordering
+
+### Fixed
+- Older cursor pages are now placed after media from earlier, newer pages instead of being prepended ahead of them.
+- A scan maintains the order supplied by the profile timeline rather than sorting potentially unreliable timestamps.
+- Media already present in the queue is moved into the current scan's authoritative order, while unrelated queue records retain their relative order behind the scanned group.
+
+### Validation
+- Added local tests covering multiple discovery pages, an existing unrelated queue record, and repair of matching records left in an older incorrect order.
+
+## 2026-08-24 — Serialized download scheduling
+
+### Fixed
+- Queue scheduling passes are now serialized so runtime commands, retry timers, and simultaneous Chrome terminal events cannot reserve slots concurrently.
+- Items in both `starting` and `downloading` states consume concurrency slots, preventing a slow `chrome.downloads.download()` callback from allowing extra starts.
+- The existing one-or-two active download policy and terminal-event refill behavior remain unchanged.
+
+### Validation
+- Added delayed-download tests that issue overlapping scheduling requests and verify only two downloads start, then exactly one replacement starts after a terminal event.
+- Added a focused test confirming a `starting` item blocks the sole slot when concurrency is one.
+
+## 2026-08-24 — Atomic discovery startup
+
+### Fixed
+- Discovery now claims and persists its running state before tab lookup, authentication, metadata extraction, or network requests begin.
+- Concurrent first-use state loads share one initialization promise, preventing two rapid starts from receiving separate state objects.
+- Each scan receives a run ID; stale async continuations cannot overwrite the status, errors, or completion state owned by a newer run.
+- Discovery-state writes are serialized snapshots so older writes cannot land after newer state.
+
+### Validation
+- Added a gated-tab test proving simultaneous Discover requests launch only one scan.
+- Added a stale-run test proving an older failed lookup cannot replace newer discovery state.
+
+## 2026-08-25 — Service-worker restart queue reconciliation
+
+### Fixed
+- When a service worker restarts, persisted `downloading` items are no longer blindly reset to `queued`. `chrome.downloads.search()` is used to inspect the stored download ID and reconcile the real state:
+  - `in_progress` keeps the item as `downloading` and preserves its `downloadId`, so the scheduler does not start a second copy of the same URL.
+  - `complete` marks the item `completed`, clears the `downloadId`, and applies the final byte counts.
+  - `interrupted` returns the item to `queued` when retry attempts remain, otherwise marks it `failed` and preserves Chrome's error.
+  - No matching Chrome download resets the item to `queued` and clears the ghost `downloadId`.
+- Persisted `starting` items (a worker killed while `chrome.downloads.download()` was in flight) are now recovered to `queued` instead of being stranded forever.
+- Added `chrome.runtime.onStartup` and `chrome.runtime.onInstalled` hooks that reconcile and resume a still-running queue after the browser or extension restarts.
+
+### Validation
+- Added a dual callback/promise helper for `chrome.downloads.search()` so the extension works on both modern and legacy Chrome downloads APIs.
+- Added local tests covering stranded `starting`, active `in_progress` slot preservation, `complete`, retryable and exhausted `interrupted`, missing download recovery, and restart resume without duplicating an active download.
+- All 14 local Node tests pass; no live X data or signed-in session required.
+
+## 2026-08-25 — Direct filenames by post username and text (ZIP export dropped)
+
+### Decision
+- ZIP output from the Side Panel queue is intentionally out of scope. A large queue could bundle into a multi-GB archive, so media stays as direct individual files.
+
+### Fixed
+- Added `sanitizeFilePart()` and `makeMediaFilename()` helpers.
+- Queue downloads are now named `x-media/{username}_{post-text}_{tweetId}_{index}.{ext}` instead of being grouped for a ZIP.
+- Multi-photo/video posts remain separate files, numbered by their media index, with `conflictAction: "uniquify"` preventing overwrites.
+
+### Validation
+- Added tests that verify a photo and animated GIF from one post use the post username/text in their filenames and that username/text sanitization is deterministic.
+- No live X data or signed-in session required.
+
+## 2026-08-25 — Community cap and abandoned-extension scope
+
+### Decision
+- Drop the idea of unlocking a "paid tier" or bypassing a third-party license gate. This project is self-hosted and uses only the signed-in X session.
+- The abandoned Chrome Web Store X-media extension is a **conceptual reference only** (batch fetch then download, sidebar-style review surface). It has no public source or verifiable license, so it is **not** unpacked, decompiled, or copied. Any aligned behavior is reimplemented locally.
+- No third-party account, subscription, activation, or tier-checking service is added. Host permissions remain X/Twitter-only.
+
+### Changed
+- Community discovery cap raised from 9,999 to **99,999** in Side Panel, popup, and background discovery.
+- Added `normalizeDiscoveryLimit()` for a single deterministic cap rule (invalid/blank → 99,999; zero/negative → 1; higher values clamped to 99,999).
+
+### Validation
+- Added a regression test for `normalizeDiscoveryLimit()`.
+- All local Node tests pass; no live X data or signed-in session required.

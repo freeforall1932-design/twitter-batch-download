@@ -39,7 +39,7 @@ openPanelBtn.addEventListener("click", () => {
 
 // Start button
 startBtn.addEventListener("click", () => {
-  const maxMedia = parseInt(maxMediaInput.value) || 9999;
+  const maxMedia = parseInt(maxMediaInput.value) || 99999;
   const scrollSpeed = scrollSpeedSelect.value;
   const mediaFilter = mediaFilterSelect.value;
 

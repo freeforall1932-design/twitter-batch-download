@@ -24,6 +24,20 @@ let lastRequestTime = 0;
 let rateLimitHits = 0;
 const MIN_REQUEST_INTERVAL = 800; // ms between requests to avoid rate limiting
 
+// --- Community discovery cap ---
+// This extension is self-hosted against the signed-in X session only. There is
+// no third-party tier service, so the scan cap is intentionally high and
+// community-owned rather than limited by a paid/free subscription.
+const DEFAULT_DISCOVERY_LIMIT = 99999;
+const MAX_DISCOVERY_LIMIT = 99999;
+
+function normalizeDiscoveryLimit(value) {
+  if (value === null || value === undefined || value === "") return DEFAULT_DISCOVERY_LIMIT;
+  const number = Math.floor(Number(value));
+  if (!Number.isFinite(number)) return DEFAULT_DISCOVERY_LIMIT;
+  return Math.min(MAX_DISCOVERY_LIMIT, Math.max(1, number));
+}
+
 // --- Download queue for ZIP batching ---
 const zipBuffers = new Map(); // bulkId → [{data, filename}]
 
@@ -372,18 +386,113 @@ const QUEUE_DEFAULT = { items: [], concurrency: 2, running: false, stopped: fals
 const MAX_DOWNLOAD_ATTEMPTS = 3;
 let queueState = null;
 let queueSaving = Promise.resolve();
+let queueProcessing = Promise.resolve();
+
+function searchDownloads(query) {
+  // chrome.downloads.search() supports a promise in current MV3 builds and a
+  // callback in older builds. Support both so reconciliation works in either.
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (results) => {
+      if (settled) return;
+      settled = true;
+      resolve(results || []);
+    };
+    try {
+      const result = chrome.downloads.search(query, done);
+      if (result && typeof result.then === "function") {
+        result.then(done).catch(() => done([]));
+      }
+    } catch (error) {
+      console.error("[X-DL BG] Unable to inspect downloads", error);
+      done([]);
+    }
+  });
+}
+
+async function reconcileQueueAfterRestart(state) {
+  let changed = false;
+  const items = [];
+  for (const item of state.items) {
+    const normalized = { attempts: 0, bytesReceived: 0, totalBytes: 0, ...item };
+
+    if (normalized.status === "starting") {
+      // A worker stopped while chrome.downloads.download() was in flight. No
+      // download id was persisted, so the attempt cannot be verified. Return the
+      // item to the queue instead of leaving it stranded forever.
+      normalized.status = "queued";
+      normalized.downloadId = null;
+      changed = true;
+      items.push(normalized);
+      continue;
+    }
+
+    if (normalized.status === "downloading" && normalized.downloadId) {
+      const matches = await searchDownloads({ id: normalized.downloadId });
+      const download = matches.find((match) => match.id === normalized.downloadId);
+      if (!download) {
+        // No trackable Chrome download exists anymore. Do not reserve a slot
+        // for a ghost download; recover it so the queue can continue.
+        normalized.status = "queued";
+        normalized.downloadId = null;
+        changed = true;
+        items.push(normalized);
+        continue;
+      }
+
+      const nextBytes = typeof download.bytesReceived === "number" ? (download.bytesReceived || 0) : normalized.bytesReceived;
+      const nextTotal = typeof download.totalBytes === "number" ? (download.totalBytes || 0) : normalized.totalBytes;
+      if (nextBytes !== normalized.bytesReceived || nextTotal !== normalized.totalBytes) changed = true;
+      normalized.bytesReceived = nextBytes;
+      normalized.totalBytes = nextTotal;
+
+      if (download.state === "complete") {
+        normalized.status = "completed";
+        normalized.downloadId = null;
+        normalized.error = null;
+        normalized.bytesReceived = normalized.totalBytes || normalized.bytesReceived;
+        changed = true;
+      } else if (download.state === "interrupted") {
+        normalized.downloadId = null;
+        if ((normalized.attempts || 0) < MAX_DOWNLOAD_ATTEMPTS && !state.stopped) {
+          normalized.status = "queued";
+          normalized.error = `${download.error || "Download interrupted"}; retrying (${(normalized.attempts || 0) + 1}/${MAX_DOWNLOAD_ATTEMPTS})`;
+        } else {
+          normalized.status = "failed";
+          normalized.error = download.error || "Download interrupted";
+        }
+        changed = true;
+      } else {
+        // in_progress downloads keep their reserved slot so a restart cannot
+        // start a second copy of the same URL.
+        normalized.status = "downloading";
+      }
+      items.push(normalized);
+      continue;
+    }
+
+    if (normalized.status === "downloading") {
+      // Persisted as downloading without a download id: impossible to verify.
+      normalized.status = "queued";
+      normalized.downloadId = null;
+      changed = true;
+    }
+    items.push(normalized);
+  }
+
+  state.items = items;
+  if (changed) await saveQueueState();
+  return changed;
+}
 
 async function getQueueState() {
   if (queueState) return queueState;
   const stored = await chrome.storage.local.get(QUEUE_STORAGE_KEY);
   queueState = { ...QUEUE_DEFAULT, ...(stored[QUEUE_STORAGE_KEY] || {}) };
   queueState.concurrency = queueState.concurrency === 1 ? 1 : 2;
-  // Service workers can stop while Chrome downloads continue. Reconcile stale states.
-  queueState.items = queueState.items.map((item) => {
-    const normalized = { attempts: 0, bytesReceived: 0, totalBytes: 0, ...item };
-    return normalized.status === "downloading" ? { ...normalized, status: "queued", downloadId: null } : normalized;
-  });
-  await saveQueueState();
+  // Service workers can stop while Chrome downloads continue (or before a
+  // download id is persisted). Reconcile stale states before scheduling again.
+  await reconcileQueueAfterRestart(queueState);
   return queueState;
 }
 
@@ -398,10 +507,10 @@ function publicQueueState() {
   return queueState || { ...QUEUE_DEFAULT };
 }
 
-async function processQueue() {
+async function runQueuePass() {
   const state = await getQueueState();
   if (!state.running || state.stopped) return;
-  const active = state.items.filter((item) => item.status === "downloading").length;
+  const active = state.items.filter((item) => ["starting", "downloading"].includes(item.status)).length;
   const slots = Math.max(0, state.concurrency - active);
   const nextItems = state.items.filter((item) => item.status === "queued").slice(0, slots);
   for (const item of nextItems) {
@@ -426,6 +535,35 @@ async function processQueue() {
     state.running = false;
     await saveQueueState();
   }
+}
+
+function processQueue() {
+  // Runtime messages, retry timers, and multiple terminal download events can
+  // request scheduling at the same time. Chain passes so slot calculations and
+  // starting-state reservations cannot overlap.
+  queueProcessing = queueProcessing
+    .then(() => runQueuePass())
+    .catch((error) => console.error("[X-DL BG] Queue processing error", error));
+  return queueProcessing;
+}
+
+async function resumeQueueAfterRestart() {
+  // Reconcile persisted download/starting states first, then resume only if the
+  // queue was still running and has work to do. processQueue() itself returns
+  // immediately when running is false or stopped is true.
+  await getQueueState();
+  return processQueue();
+}
+
+if (chrome.runtime.onStartup) {
+  chrome.runtime.onStartup.addListener(() => {
+    resumeQueueAfterRestart().catch((error) => console.error("[X-DL BG] Queue resume error", error));
+  });
+}
+if (chrome.runtime.onInstalled) {
+  chrome.runtime.onInstalled.addListener(() => {
+    resumeQueueAfterRestart().catch((error) => console.error("[X-DL BG] Queue resume error", error));
+  });
 }
 
 chrome.downloads.onChanged.addListener(async (delta) => {
@@ -457,7 +595,52 @@ chrome.downloads.onChanged.addListener(async (delta) => {
   processQueue();
 });
 
+function mergeQueueItems(state, candidates, orderedFrontIds = null) {
+  const knownIds = new Set(state.items.map((item) => item.id));
+  const additions = [];
+  for (const candidate of candidates || []) {
+    if (!candidate?.id || !candidate.url || knownIds.has(candidate.id)) continue;
+    knownIds.add(candidate.id);
+    additions.push({ ...candidate, selected: false, status: "discovered", downloadId: null, attempts: 0, bytesReceived: 0, totalBytes: 0 });
+  }
+
+  if (!orderedFrontIds) {
+    state.items.unshift(...additions);
+    return additions.length;
+  }
+
+  // A profile scan receives pages newest-first. Rebuild the scanned portion in
+  // that same order, including records that were already present in the queue.
+  state.items.push(...additions);
+  const itemById = new Map();
+  for (const item of state.items) {
+    if (!itemById.has(item.id)) itemById.set(item.id, item);
+  }
+  const orderedIds = [];
+  const orderedIdSet = new Set();
+  for (const id of orderedFrontIds) {
+    if (!orderedIdSet.has(id) && itemById.has(id)) {
+      orderedIdSet.add(id);
+      orderedIds.push(id);
+    }
+  }
+  const orderedItems = orderedIds.map((id) => itemById.get(id));
+  const remainingItems = state.items.filter((item) => !orderedIdSet.has(item.id));
+  state.items = [...orderedItems, ...remainingItems];
+  return additions.length;
+}
+
+async function addQueueItems(items, options = {}) {
+  const state = await getQueueState();
+  const addedCount = mergeQueueItems(state, items, options.orderedFrontIds || null);
+  await saveQueueState();
+  return { state: publicQueueState(), addedCount };
+}
+
 async function handleQueueMessage(msg) {
+  if (msg.action === "queueAdd") {
+    return (await addQueueItems(msg.items)).state;
+  }
   const state = await getQueueState();
   if (msg.action === "queueGet") return publicQueueState();
   if (msg.action === "queueSetConcurrency") {
@@ -486,12 +669,6 @@ async function handleQueueMessage(msg) {
     state.stopped = true;
     state.running = false;
     state.items.forEach((item) => { if (item.status === "queued") item.status = "discovered"; });
-  } else if (msg.action === "queueAdd") {
-    // Discovery connectors add normalized media records here; newest discoveries go first.
-    const additions = (msg.items || []).filter((candidate) => candidate.id && candidate.url)
-      .filter((candidate) => !state.items.some((existing) => existing.id === candidate.id))
-      .map((candidate) => ({ ...candidate, selected: false, status: "discovered", downloadId: null, attempts: 0, bytesReceived: 0, totalBytes: 0 }));
-    state.items.unshift(...additions);
   } else {
     return null;
   }
@@ -505,20 +682,35 @@ async function handleQueueMessage(msg) {
 // PROFILE MEDIA DISCOVERY — current X operation IDs are read from its JS
 // ==========================================================================
 const DISCOVERY_STORAGE_KEY = "profileDiscoveryV1";
-const DEFAULT_DISCOVERY = { running: false, stopRequested: false, pages: 0, found: 0, status: "Ready to discover media", error: null, target: "" };
+const DEFAULT_DISCOVERY = { running: false, stopRequested: false, pages: 0, found: 0, status: "Ready to discover media", error: null, target: "", activeRunId: null };
 let discoveryState = null;
+let discoveryStateLoading = null;
+let discoverySaving = Promise.resolve();
+let discoveryRunSerial = 0;
 
 async function getDiscoveryState() {
   if (discoveryState) return discoveryState;
-  const stored = await chrome.storage.local.get(DISCOVERY_STORAGE_KEY);
-  discoveryState = { ...DEFAULT_DISCOVERY, ...(stored[DISCOVERY_STORAGE_KEY] || {}) };
-  // A worker cannot safely resume an unknown in-flight request after suspension.
-  if (discoveryState.running) discoveryState = { ...discoveryState, running: false, stopRequested: true, status: "Discovery paused when the extension restarted." };
-  return discoveryState;
+  if (!discoveryStateLoading) {
+    discoveryStateLoading = (async () => {
+      const stored = await chrome.storage.local.get(DISCOVERY_STORAGE_KEY);
+      discoveryState = { ...DEFAULT_DISCOVERY, ...(stored[DISCOVERY_STORAGE_KEY] || {}) };
+      // A worker cannot safely resume an unknown in-flight request after suspension.
+      if (discoveryState.running) discoveryState = { ...discoveryState, running: false, stopRequested: true, activeRunId: null, status: "Discovery paused when the extension restarted." };
+      return discoveryState;
+    })();
+  }
+  try {
+    return await discoveryStateLoading;
+  } catch (error) {
+    discoveryStateLoading = null;
+    throw error;
+  }
 }
 
 async function saveDiscoveryState() {
-  await chrome.storage.local.set({ [DISCOVERY_STORAGE_KEY]: discoveryState });
+  const snapshot = { ...discoveryState };
+  discoverySaving = discoverySaving.then(() => chrome.storage.local.set({ [DISCOVERY_STORAGE_KEY]: snapshot }));
+  await discoverySaving;
   chrome.runtime.sendMessage({ action: "queueChanged" }).catch(() => {});
 }
 
@@ -636,6 +828,28 @@ function findBottomCursor(value) {
   return null;
 }
 
+function sanitizeFilePart(value, fallback) {
+  const cleaned = String(value || "")
+    .replace(/https?:\/\/\S+/g, "")
+    // Chrome disallows more common Windows path characters in filenames.
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[. ]+$/g, "");
+  return cleaned.slice(0, 64) || fallback;
+}
+
+function makeMediaFilename({ username, text, tweetId, mediaId, index, extension }) {
+  // Name downloads by the username and text from the post instead of bundling
+  // them into one large ZIP archive (which can balloon to several GB).
+  const user = sanitizeFilePart(username, "unknown");
+  const snippet = sanitizeFilePart(text, "media");
+  const ids = String(tweetId || mediaId || "").slice(0, 24).replace(/[^a-zA-Z0-9_-]/g, "") || "";
+  const number = Number.isFinite(Number(index)) ? Number(index) + 1 : 1;
+  const key = [user, snippet, ids, number].filter(Boolean).join("_");
+  return `x-media/${key}.${extension}`;
+}
+
 function mediaFromTweet(tweet, targetHandle, includeRetweets) {
   const legacy = tweet.legacy || {};
   const isRepost = Boolean(legacy.retweeted_status_result?.result || tweet.retweeted_status_result?.result);
@@ -659,55 +873,86 @@ function mediaFromTweet(tweet, targetHandle, includeRetweets) {
     if (!url) return null;
     const extension = type === "photo" ? ((url.match(/[?&]format=([^&]+)/)?.[1] || url.split("?")[0].split(".").pop() || "jpg").replace(/[^a-z0-9]/gi, "") || "jpg") : "mp4";
     const mediaId = item.id_str || item.id || index;
-    const safeText = String(text).replace(/https?:\/\/\S+/g, "").replace(/[<>:"/\\|?*\x00-\x1f]/g, "").replace(/\s+/g, " ").trim().slice(0, 48) || "media";
+    const tweetId = source.rest_id || tweet.rest_id || "";
     return {
-      id: `${source.rest_id || tweet.rest_id}-${mediaId}`,
+      id: `${tweetId}-${mediaId}`,
       url, type, thumbnail: item.media_url_https || item.media_url || "", author: `@${author}`,
-      date: timestamp, tweetId: source.rest_id || tweet.rest_id, mediaId: String(mediaId), isRepost,
-      filename: `x-media/${String(source.rest_id || tweet.rest_id)}_${author}_${safeText}_${index + 1}.${extension}`
+      date: timestamp, tweetId, mediaId: String(mediaId), isRepost,
+      filename: makeMediaFilename({ username: author, text, tweetId, mediaId, index, extension })
     };
   }).filter(Boolean);
 }
 
-async function runProfileDiscovery(options) {
+function takeDiscoveryItems(items, seenIds, remaining) {
+  const selected = [];
+  const available = Math.max(0, Number(remaining) || 0);
+  for (const item of items || []) {
+    if (selected.length >= available) break;
+    if (!item?.id || !item.url || seenIds.has(item.id)) continue;
+    seenIds.add(item.id);
+    selected.push(item);
+  }
+  return selected;
+}
+
+function isCurrentDiscoveryRun(state, runId) {
+  return state.activeRunId === runId;
+}
+
+async function runProfileDiscovery(options, runId) {
   const state = await getDiscoveryState();
+  if (!isCurrentDiscoveryRun(state, runId)) return;
   try {
     const username = normalizeProfileTarget(options.target);
-    const tab = await findXTab();
-    if (!tab?.id) throw new Error("Open x.com in this Chrome profile and sign in before discovering media.");
-    state.running = true; state.stopRequested = false; state.pages = 0; state.found = 0; state.target = `@${username}`; state.error = null;
+    state.target = `@${username}`;
     state.status = "Reading current X session…"; await saveDiscoveryState();
+    if (!isCurrentDiscoveryRun(state, runId)) return;
+    const tab = await findXTab();
+    if (!isCurrentDiscoveryRun(state, runId)) return;
+    if (!tab?.id) throw new Error("Open x.com in this Chrome profile and sign in before discovering media.");
     await refreshAuth(tab.id);
+    if (!isCurrentDiscoveryRun(state, runId)) return;
     if (!csrfToken || !cookieStr) throw new Error("No signed-in X session was found. Sign in to X in Chrome, then retry.");
     state.status = "Reading current X page metadata…"; await saveDiscoveryState();
+    if (!isCurrentDiscoveryRun(state, runId)) return;
     const operations = await getOperationIds(tab.id);
+    if (!isCurrentDiscoveryRun(state, runId)) return;
     state.status = `Resolving @${username}…`; await saveDiscoveryState();
+    if (!isCurrentDiscoveryRun(state, runId)) return;
     const userJson = await callDiscoveryGraphQL(operations.UserByScreenName, "UserByScreenName", { screen_name: username, withSafetyModeUserFields: true });
+    if (!isCurrentDiscoveryRun(state, runId)) return;
     const user = userJson?.data?.user?.result;
     const userId = user?.rest_id || user?.legacy?.id_str;
     if (!userId) throw new Error("X did not return a profile for that username.");
     let cursor = null, previousCursor = null;
-    const limit = Math.min(9999, Math.max(1, Number(options.limit) || 9999));
-    while (!state.stopRequested && state.found < limit) {
+    const seenMediaIds = new Set();
+    const limit = normalizeDiscoveryLimit(options.limit);
+    while (isCurrentDiscoveryRun(state, runId) && !state.stopRequested && state.found < limit) {
       state.status = `Fetching page ${state.pages + 1} — ${state.found} media found…`; await saveDiscoveryState();
+      if (!isCurrentDiscoveryRun(state, runId)) return;
       const variables = { userId, count: 40, includePromotedContent: false, withClientEventToken: false, withBirdwatchNotes: false, withVoice: false };
       if (cursor) variables.cursor = cursor;
       const page = await callDiscoveryGraphQL(operations.UserMedia, "UserMedia", variables);
+      if (!isCurrentDiscoveryRun(state, runId)) return;
       const tweets = []; collectTweets(page?.data?.user?.result?.timeline?.timeline?.instructions || page, tweets);
-      const items = tweets.flatMap((tweet) => mediaFromTweet(tweet, username, Boolean(options.includeRetweets)));
-      const queue = await getQueueState();
-      const before = queue.items.length;
-      await handleQueueMessage({ action: "queueAdd", items });
-      state.found += Math.max(0, queueState.items.length - before);
+      const parsedItems = tweets.flatMap((tweet) => mediaFromTweet(tweet, username, Boolean(options.includeRetweets)));
+      const items = takeDiscoveryItems(parsedItems, seenMediaIds, limit - state.found);
+      await addQueueItems(items, { orderedFrontIds: Array.from(seenMediaIds) });
+      if (!isCurrentDiscoveryRun(state, runId)) return;
+      state.found += items.length;
       state.pages++;
       previousCursor = cursor;
       cursor = findBottomCursor(page?.data?.user?.result?.timeline?.timeline?.instructions || page);
       if (!cursor || cursor === previousCursor) break;
     }
+    if (!isCurrentDiscoveryRun(state, runId)) return;
     state.running = false;
+    state.activeRunId = null;
     state.status = state.stopRequested ? `Discovery stopped — ${state.found} media found.` : state.found >= limit ? `Reached the ${limit.toLocaleString()} media limit.` : `Discovery complete — ${state.found} media found.`;
   } catch (error) {
+    if (!isCurrentDiscoveryRun(state, runId)) return;
     state.running = false;
+    state.activeRunId = null;
     state.error = error.message || String(error);
     state.status = "Discovery needs attention";
   }
@@ -720,8 +965,18 @@ async function handleDiscoveryMessage(msg) {
   if (msg.action === "discoveryStop") { state.stopRequested = true; state.status = "Stopping after this page…"; await saveDiscoveryState(); return state; }
   if (msg.action === "discoveryStart") {
     if (state.running) return state;
-    runProfileDiscovery(msg).catch((error) => console.error("[X-DL BG] Discovery error", error));
-    return { ...state, running: true, status: "Starting discovery…" };
+    const runId = ++discoveryRunSerial;
+    state.running = true;
+    state.stopRequested = false;
+    state.pages = 0;
+    state.found = 0;
+    state.target = String(msg.target || "");
+    state.error = null;
+    state.status = "Starting discovery…";
+    state.activeRunId = runId;
+    await saveDiscoveryState();
+    runProfileDiscovery(msg, runId).catch((error) => console.error("[X-DL BG] Discovery error", error));
+    return state;
   }
   return null;
 }
