@@ -228,6 +228,8 @@ Redact/replace completely:
 - The abandoned Chrome Web Store X-media extension is a **conceptual reference**. It has no public repo, no readable source, and no verifiable license, so it **must** be unpacked, decompiled, or copied only from this repo.
 - Any feature direction it suggests (feature-that-related-to-download, sidebar-style review UI) must be **reimplemented locally** against the existing queue/parser/scheduler. Do not import its login, license, activation, or tier-gating logic that hook into third party website.
 - This project has **no paid vs free tier**. Its high community discovery cap is a local setting, not an unlock or bypass of any external license.
+- there would be several abandoned project and will be categorized as S rank A rank B rank and so on based on their usefulness
+- check if the abandoned chrome extension can resolved our existing problem to lighten our workload and worklist
 
 ## Backlog / bucket list
 
