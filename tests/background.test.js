@@ -17,7 +17,7 @@ function loadBackground(options = {}) {
     URLSearchParams,
     clearTimeout,
     console,
-    fetch: async () => { throw new Error("Unexpected network request in unit test"); },
+    fetch: options.fetch || (async () => { throw new Error("Unexpected network request in unit test"); }),
     importScripts: () => {},
     setTimeout,
     chrome: {
@@ -914,6 +914,179 @@ test("mediaFromTweet stamps a CDN media key for cross-source dedupe", () => {
   const [item] = background.mediaFromTweet(tweet, "alice", false);
   assert.equal(item.mediaKey, "KeYaBc123");
   assert.equal(background.mediaKeyFromUrl("https://pbs.example.com/media/KeYaBc123.jpg?format=jpg&name=orig"), "KeYaBc123");
+});
+
+// The live round-3 report: "a GIF/video reaction to a mentioned post — the
+// small quote card with thumbnail and text — its media never listed." The
+// quoted post's full payload sits inside the same GraphQL response under
+// quoted_status_result (the Rank S Plucker resolution path), so it must list
+// without any extra request.
+function makeQuoteReactionTweet() {
+  return {
+    __typename: "Tweet",
+    rest_id: "7001",
+    core: { user_results: { result: { legacy: { screen_name: "reactor" } } } },
+    legacy: {
+      created_at: "Sat Aug 22 10:00:00 +0000 2026",
+      full_text: "my reaction to this https://t.co/x",
+      is_quote_status: true,
+      extended_entities: {
+        media: [{
+          id_str: "rm1",
+          type: "animated_gif",
+          media_url_https: "https://pbs.example.com/media/ReactionThumb.jpg",
+          video_info: { variants: [{ content_type: "video/mp4", bitrate: 832000, url: "https://video.example.com/reaction.mp4" }] }
+        }]
+      },
+      quoted_status_result: {
+        result: {
+          __typename: "Tweet",
+          rest_id: "7000",
+          core: { user_results: { result: { legacy: { screen_name: "original" } } } },
+          legacy: {
+            created_at: "Sat Aug 22 09:00:00 +0000 2026",
+            full_text: "the mentioned post itself",
+            extended_entities: {
+              media: [{
+                id_str: "qm1",
+                type: "video",
+                media_url_https: "https://pbs.example.com/media/QuotedThumb.jpg",
+                video_info: { variants: [{ content_type: "video/mp4", bitrate: 2176000, url: "https://video.example.com/quoted.mp4" }] }
+              }]
+            }
+          }
+        }
+      }
+    }
+  };
+}
+
+test("scroll capture lists quoted media from a GIF/video reaction", async () => {
+  const background = loadBackground();
+  const result = await background.handleLocalTimelineCapture({
+    capture: { operationName: "HomeTimeline", json: { data: { home: { home_timeline_urt: { instructions: [{ entries: [{ content: { itemContent: { tweet_results: { result: makeQuoteReactionTweet() } } } }] }] } } } } },
+    pageUrl: "https://x.com/home"
+  });
+  assert.equal(result.addedCount, 2);
+
+  const state = await background.handleQueueMessage({ action: "queueGet" });
+  const quoted = state.items.find((item) => item.isQuote);
+  const reaction = state.items.find((item) => !item.isQuote);
+  assert.ok(quoted, "the quoted card's media must be listed");
+  assert.equal(reaction.author, "@reactor");
+  assert.equal(reaction.tweetId, "7001");
+  assert.equal(quoted.author, "@original");
+  assert.equal(quoted.tweetId, "7000");
+  assert.equal(quoted.id, "7000-qm1");
+  assert.match(quoted.filename, /original_the mentioned post itself_7000_1\.mp4$/);
+  assert.equal(quoted.thumbnail, "https://pbs.example.com/media/QuotedThumb.jpg");
+});
+
+test("quoted media can be switched off per capture", async () => {
+  const background = loadBackground();
+  const result = await background.handleLocalTimelineCapture({
+    capture: { operationName: "HomeTimeline", json: { data: { home: { home_timeline_urt: { instructions: [{ entries: [{ content: { itemContent: { tweet_results: { result: makeQuoteReactionTweet() } } } }] }] } } } } },
+    pageUrl: "https://x.com/home",
+    includeQuoted: false
+  });
+  assert.equal(result.addedCount, 1);
+  const state = await background.handleQueueMessage({ action: "queueGet" });
+  assert.ok(!state.items.some((item) => item.isQuote), "includeQuoted=false must exclude the quote card");
+});
+
+test("a text reaction quoting a media post lists the quoted media", async () => {
+  const background = loadBackground();
+  const tweet = makeQuoteReactionTweet();
+  // The outer post is a bare text reaction: all its media lives in the quote.
+  delete tweet.legacy.extended_entities;
+  const result = await background.handleLocalTimelineCapture({
+    capture: { operationName: "HomeTimeline", json: { data: { home: { home_timeline_urt: { instructions: [{ entries: [{ content: { itemContent: { tweet_results: { result: tweet } } } }] }] } } } } },
+    pageUrl: "https://x.com/home"
+  });
+  assert.equal(result.addedCount, 1);
+  assert.deepEqual(Array.from(result.tweetIds), ["7001"], "the outer post's pending video resolve is cleared too");
+  const state = await background.handleQueueMessage({ action: "queueGet" });
+  assert.equal(state.items[0].tweetId, "7000");
+  assert.ok(state.items[0].isQuote);
+});
+
+test("a repost of a quote lists repost and quoted media with correct attribution", async () => {
+  const background = loadBackground();
+  const original = makeQuoteReactionTweet();
+  const repost = {
+    __typename: "Tweet",
+    rest_id: "7002",
+    core: { user_results: { result: { legacy: { screen_name: "booster" } } } },
+    legacy: {
+      created_at: "Sat Aug 22 11:00:00 +0000 2026",
+      retweeted_status_result: { result: original }
+    }
+  };
+  const items = background.mediaFromTweet(repost, "booster", { includeRetweets: true, includeQuoted: true });
+  assert.equal(items.length, 2);
+  assert.equal(items[0].isRepost, true);
+  assert.equal(items[0].author, "@reactor");
+  assert.equal(items[0].tweetId, "7001");
+  assert.equal(items[1].isQuote, true);
+  assert.equal(items[1].author, "@original");
+  assert.equal(items[1].tweetId, "7000");
+});
+
+test("a quoted photo collapses with a DOM-listed copy into one row", async () => {
+  const background = loadBackground();
+  // The DOM scan attributes a quote-card photo to the outer article; GraphQL
+  // then delivers the same file under the quoted post's id. The CDN media key
+  // must collapse them — no double entry.
+  await background.handleQueueMessage({
+    action: "queueAdd",
+    source: "scroll",
+    items: [{ id: "7100-DUPkey", mediaKey: "DUPkey", url: "https://pbs.example.com/media/DUPkey?format=jpg&name=orig", type: "photo", author: "@reactor", tweetId: "7100" }]
+  });
+  const tweet = {
+    __typename: "Tweet",
+    rest_id: "7100",
+    core: { user_results: { result: { legacy: { screen_name: "reactor" } } } },
+    legacy: {
+      full_text: "look at this one",
+      quoted_status_result: {
+        result: {
+          __typename: "Tweet",
+          rest_id: "7099",
+          core: { user_results: { result: { legacy: { screen_name: "original" } } } },
+          legacy: {
+            full_text: "quoted photo post",
+            extended_entities: { media: [{ id_str: "q1", type: "photo", media_url_https: "https://pbs.example.com/media/DUPkey.jpg" }] }
+          }
+        }
+      }
+    }
+  };
+  const result = await background.handleLocalTimelineCapture({
+    capture: { operationName: "HomeTimeline", json: { data: { home: { home_timeline_urt: { instructions: [{ entries: [{ content: { itemContent: { tweet_results: { result: tweet } } } }] }] } } } } },
+    pageUrl: "https://x.com/home"
+  });
+  assert.equal(result.addedCount, 0, "the quoted photo is the same CDN file as the DOM row");
+  const state = await background.handleQueueMessage({ action: "queueGet" });
+  assert.equal(state.items.length, 1);
+});
+
+test("getTweetMedia returns quoted media with owning-post attribution", async () => {
+  const payload = {
+    data: { tweetResult: { result: makeQuoteReactionTweet() } }
+  };
+  const background = loadBackground({
+    fetch: async () => ({ ok: true, status: 200, text: async () => "", json: async () => payload })
+  });
+  const media = await background.getTweetMedia("7001");
+  assert.equal(media.error, undefined);
+  assert.equal(media.videos.length, 2);
+  assert.equal(media.videos[0].tweetId, "7001");
+  assert.ok(!media.videos[0].isQuote);
+  const quotedVideo = media.videos[1];
+  assert.equal(quotedVideo.isQuote, true);
+  assert.equal(quotedVideo.username, "original");
+  assert.equal(quotedVideo.tweetId, "7000");
+  assert.equal(quotedVideo.text, "the mentioned post itself");
 });
 
 test("queueClearFinished drops only completed and failed rows", async () => {

@@ -124,8 +124,9 @@ function render() {
     const progress = item.status === "downloading" && item.totalBytes > 0 ? ` ${Math.round((item.bytesReceived || 0) * 100 / item.totalBytes)}%` : "";
     const retry = item.status === "failed" ? ` (${item.attempts || 0}/3)` : "";
     const repost = item.isRepost ? `<span class="type-badge repost">repost</span>` : "";
+    const quote = item.isQuote ? `<span class="type-badge quote" title="Media from a post quoted inside another post.">quote</span>` : "";
     const link = item.tweetId ? `<a class="item-link" href="https://x.com/i/status/${escapeHtml(item.tweetId)}" target="_blank" rel="noreferrer" title="Open post">↗</a>` : "";
-    return `<article class="queue-item"><input class="item-select" data-id="${escapeHtml(item.id)}" type="checkbox" ${item.selected ? "checked" : ""} aria-label="Select media"><div>${thumbnail}</div><div class="item-info"><div class="item-title">${escapeHtml(item.author || "X post")}${link}</div><div class="item-meta">${escapeHtml(item.date || "Captured while scrolling")}</div><span class="type-badge">${escapeHtml(item.type || "media")}</span>${repost}</div><div class="item-right"><span class="item-status ${escapeHtml(item.status || "discovered")}" title="${escapeHtml(item.error || "")}">${escapeHtml(item.status || "discovered")}${progress}${retry}</span><button class="item-remove" data-remove="${escapeHtml(item.id)}" title="Remove from list" aria-label="Remove from list">×</button></div></article>`;
+    return `<article class="queue-item"><input class="item-select" data-id="${escapeHtml(item.id)}" type="checkbox" ${item.selected ? "checked" : ""} aria-label="Select media"><div>${thumbnail}</div><div class="item-info"><div class="item-title">${escapeHtml(item.author || "X post")}${link}</div><div class="item-meta">${escapeHtml(item.date || "Captured while scrolling")}</div><span class="type-badge">${escapeHtml(item.type || "media")}</span>${repost}${quote}</div><div class="item-right"><span class="item-status ${escapeHtml(item.status || "discovered")}" title="${escapeHtml(item.error || "")}">${escapeHtml(item.status || "discovered")}${progress}${retry}</span><button class="item-remove" data-remove="${escapeHtml(item.id)}" title="Remove from list" aria-label="Remove from list">×</button></div></article>`;
   }).join("");
 }
 
@@ -136,7 +137,8 @@ function scrollSettings() {
   return {
     mediaFilter: $("localCaptureFilter").value,
     scrollSpeed: $("localScrollSpeed").value,
-    skipDownloaded: $("skipDownloaded").checked
+    skipDownloaded: $("skipDownloaded").checked,
+    includeQuoted: $("scrollIncludeQuoted").checked
   };
 }
 
@@ -225,11 +227,12 @@ document.querySelectorAll("[data-concurrency]").forEach((button) => button.addEv
 
 async function pushScrollSettings() {
   const settings = scrollSettings();
-  await chrome.storage.local.set({ scrollMediaFilter: settings.mediaFilter, scrollSpeed: settings.scrollSpeed });
+  await chrome.storage.local.set({ scrollMediaFilter: settings.mediaFilter, scrollSpeed: settings.scrollSpeed, scrollIncludeQuoted: settings.includeQuoted });
   await sendToActiveXTab({ action: "scrollSettings", ...settings });
 }
 $("localCaptureFilter").addEventListener("change", pushScrollSettings);
 $("localScrollSpeed").addEventListener("change", pushScrollSettings);
+$("scrollIncludeQuoted").addEventListener("change", pushScrollSettings);
 
 $("startLocalScrollBtn").addEventListener("click", async () => {
   const response = await sendToActiveXTab({ action: "scrollStart", ...scrollSettings() });
@@ -252,8 +255,8 @@ $("clearTargetBtn").addEventListener("click", () => { $("targetInput").value = "
 $("discoverBtn").addEventListener("click", async () => {
   const target = $("targetInput").value.trim();
   if (!target) { $("discoveryHint").textContent = "Enter a profile URL or @username first."; $("discoveryHint").classList.add("error"); return; }
-  const options = { target, limit: Math.min(99999, Math.max(1, Number($("discoveryLimit").value) || 99999)), includeRetweets: $("includeRetweets").checked };
-  await chrome.storage.local.set({ batchTarget: options.target, batchLimit: options.limit, includeRetweets: options.includeRetweets });
+  const options = { target, limit: Math.min(99999, Math.max(1, Number($("discoveryLimit").value) || 99999)), includeRetweets: $("includeRetweets").checked, includeQuoted: $("includeQuoted").checked };
+  await chrome.storage.local.set({ batchTarget: options.target, batchLimit: options.limit, includeRetweets: options.includeRetweets, includeQuoted: options.includeQuoted });
   discovery = await send({ action: "discoveryStart", ...options });
   render();
 });
@@ -265,14 +268,17 @@ chrome.tabs.onActivated.addListener(() => { pushScrollSettings(); pollLocalStatu
 chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
   if (changeInfo.status === "complete" || changeInfo.url) { pushScrollSettings(); pollLocalStatus(); }
 });
-chrome.storage.local.get(["batchTarget", "batchLimit", "includeRetweets", "sidePanelActiveTab", "scrollMediaFilter", "scrollSpeed", "skipDownloaded"], (saved) => {
+chrome.storage.local.get(["batchTarget", "batchLimit", "includeRetweets", "includeQuoted", "sidePanelActiveTab", "scrollMediaFilter", "scrollSpeed", "skipDownloaded", "scrollIncludeQuoted"], (saved) => {
   activeTab = saved.sidePanelActiveTab || "scroll";
   if (saved.batchTarget) $("targetInput").value = saved.batchTarget;
   if (saved.batchLimit) $("discoveryLimit").value = saved.batchLimit;
   if (saved.includeRetweets) $("includeRetweets").checked = true;
+  // Quoted-media inclusion defaults to ON; stored false is the only way off.
+  if (typeof saved.includeQuoted === "boolean") $("includeQuoted").checked = saved.includeQuoted;
   if (saved.scrollMediaFilter) $("localCaptureFilter").value = saved.scrollMediaFilter;
   if (saved.scrollSpeed) $("localScrollSpeed").value = saved.scrollSpeed;
   if (typeof saved.skipDownloaded === "boolean") $("skipDownloaded").checked = saved.skipDownloaded;
+  if (typeof saved.scrollIncludeQuoted === "boolean") $("scrollIncludeQuoted").checked = saved.scrollIncludeQuoted;
   render();
   pushScrollSettings();
   pollLocalStatus();

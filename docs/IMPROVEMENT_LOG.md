@@ -2,6 +2,104 @@
 
 Chronological implementation record for X Media Downloader.
 
+## 2026-08-26 — Quoted-post media capture (the "mentioned post" card) — v3.4
+
+### Report (live round 3)
+
+Live testing of v3.3 against real X: **all functions work, no double entries,
+UI/UX decent enough for deployment** — except one gap: *"mentioned post didn't
+get fetched — say this post is a GIF or video reaction to the mentioned post;
+there should [be a] small box post with thumbnail image and text from the
+post."* The user asked whether fetching that card's media is impossible and
+pointed at the scrapyard database code and community GitHub for comparison.
+
+### Root cause — deliberate exclusion, not an X limitation
+
+The quoted post's full payload (author, text, thumbnail, and every media
+variant, including GIF/video MP4s) is embedded **in the same GraphQL response**
+under `legacy.quoted_status_result.result` — the exact card X renders. Both
+scrapyard references prove it:
+
+- **Rank S (Plucker XBD):** media resolution ladder per timeline tweet —
+  own/RT media → **quoted post's `extended_entities` as fallback** → card
+  `binding_values.media_entities`, with an `is_quote` flag and an
+  "only himself" filter that excludes `is_rt || is_quote`.
+- **Rank B (X Exporter):** dedicated `tr()` extractor over
+  `legacy.quoted_status_result.result`.
+
+This repo skipped it on purpose: `collectTweets` pruned
+`quoted_status_result` subtrees (`background.js` v3.3 line ~1375), pending an
+explicit include option (see the 2026-08-24 "Deliberate boundaries" entry).
+So it was never impossible — it was switched off.
+
+### Changed
+
+- **`background.js`**
+  - `mediaFromTweet(tweet, handle, options)` now takes an options object
+    (`{ includeRetweets, includeQuoted }`; a bare boolean still means
+    `includeRetweets`, so old call sites/tests keep working). The per-tweet
+    mapping moved into `mediaItemsFromTweetObject(source, { isRepost, isQuote,
+    fallbackAuthor, fallbackDate })`, shared by own/RT/quoted media.
+  - New `quotedTweetFrom(tweet)` resolves `quoted_status_result.result` with
+    soft unwrap — a deleted/protected/NSFW quoted card skips quietly instead
+    of aborting the page. One level only (no quote-of-quote chasing), same as
+    Rank S.
+  - **Attribution:** quoted media lists as its own row owned by the *quoted*
+    post — `id: quotedTweetId-mediaId`, quoted author, quoted text in the
+    filename, `isQuote: true`. If the same quoted post later appears in the
+    timeline directly, the CDN `mediaKey` collapses the two into one row.
+  - Scroll capture (`handleLocalTimelineCapture`) passes
+    `includeQuoted: message.includeQuoted !== false` — **on by default**,
+    because the quote card is media the user visibly scrolled past.
+  - Remote fetch passes `includeQuoted: options.includeQuoted !== false`.
+  - `getTweetMedia` (per-post resolve + action-bar Download/Add to queue) now
+    returns the quoted card's media too, with **per-item attribution**
+    (`username`, `tweetId`, `text`, `isQuote` on each video/photo entry). This
+    covers the SPA-cache case where the page never re-issued the timeline
+    GraphQL: the outer post resolves once and both the reaction and the quoted
+    media come back.
+- **`content.js`**
+  - New `includeQuoted` state (default on), persisted as
+    `scrollIncludeQuoted`, updated by `scrollSettings`/`scrollStart`, reported
+    in `statusPayload`, and forwarded with every `localTimelineCapture`.
+  - `drainPendingVideoTweets` and `collectTweetMedia` (action bar) build ids,
+    filenames, authors, and `isQuote` from each media item's owning post
+    instead of always the outer tweet id.
+- **Side Panel** — new **Include quoted** checkbox in both tabs (Scroll
+  capture options row; Remote fetch next to *Include reposts*), both default
+  on, persisted (`scrollIncludeQuoted` / `includeQuoted`). Queue rows for
+  quoted media show a violet **quote** badge beside the existing repost badge.
+- `manifest.json` → **3.4**.
+
+### Deliberately kept
+
+- Quotes are one level deep; a quote-of-quote's nested card is not chased.
+- DOM-scan photos inside a quote card still attribute to the outer article
+  (no stable selector separates them today); the GraphQL-attributed copy wins
+  the mediaKey dedupe whenever both arrive, so no double row ever appears.
+- Replies remain excluded — still awaiting their own explicit switch.
+
+### Validation
+
+- `node --test tests/*.test.js` — **55** pass (was 48). Seven new tests:
+  quote-reaction capture lists both media; per-capture switch-off; text
+  reaction quoting a media post (the Rank S fallback case); repost-of-quote
+  attribution; quoted photo vs DOM row collapse (no double entry);
+  `getTweetMedia` per-item attribution; content-script setting flow
+  (default on → switch off).
+- Verified as real regressions: the five behaviour tests **fail** against the
+  pre-change tree; the two guard tests pass on both trees by design.
+- `node --check` clean on all five extension scripts. No new runtime actions,
+  so the message-contract test needed no changes.
+
+### Still not verified
+
+Nothing here ran in a signed-in Chrome. Live items: quote card with a video
+or GIF listed with the `quote` badge and correct author; Include quoted off
+suppresses card media in both tabs; action-bar Download on a reaction post
+fetches reaction + quoted media.
+
+
 ## 2026-08-25 — Full pre-release code review (WORKLIST checklist) — contract gaps found and closed
 
 ### Motivation

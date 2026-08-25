@@ -1,6 +1,6 @@
 # Development Worklist
 
-_Last audited: 2026-08-25 (post live-testing fix pass; `document_start` null-root crash fix; **full code-review checklist run** — see the IMPROVEMENT_LOG entry of the same date)_
+_Last audited: 2026-08-26 (live round-3 feedback: core flows verified working; **quoted-post media capture added — v3.4**; see the IMPROVEMENT_LOG entry of the same date)_
 
 ## Product target
 
@@ -26,8 +26,8 @@ No manual API key / password / cookie paste. Self-hosted against the signed-in X
 | Skip already-downloaded (Rank S "Ignore saved") | Done | `downloadedMediaIdsV1` stores completed item ids only. Toggle in the toolbar; resettable. |
 | Cross-source dedupe | Done | Every item carries a CDN-derived `mediaKey`, so DOM-found and GraphQL-found copies of one photo collapse into a single row. |
 | Bookmarks / likes full scan | Not implemented | |
-| Include replies / quoted | Not implemented | Must be explicit switches when added. |
-| Live signed-in verification | **Round 2 feedback applied; needs round 3** | v3.1 live test found: homepage never captured, capture only woke after reload/new tab, auto-scroll broken, redundant download buttons, dead `Watch current tab`. All addressed in v3.2 and still shipping in v3.3 — re-test needed. |
+| Include replies / quoted | **Quoted done (v3.4); replies not implemented** | Quote-card ("mentioned post") media now lists by default in both tabs with an **Include quoted** switch, correct quoted-post attribution, and a `quote` badge. Replies still need their own explicit switch. |
+| Live signed-in verification | **Round 3 mostly passed; one gap fixed, needs spot-check** | Round 3 (v3.3): all functions work, no double entries, UI/UX decent for deployment — except quote-card media never listed (now fixed in v3.4 with quoted-post parsing + Include quoted switches). Re-verify the quote case plus the v3.3 items below. |
 | `document_start` null-root crash | **Fixed + regression-tested** | Reported `Cannot read properties of null (reading 'appendChild')` at `content.js:105`. That file is a pre-v3.2 build (still has `localCapture*` + the popup bulk loop). The null-`<head>` case was already covered by a `documentElement` fallback; the null-`<head>`-and-null-`<html>` case still threw and killed capture. Now deferred-and-retried, never throws. 3 regression tests. |
 | Code-review checklist (fit + missing logic + dead code) | **Run in full** | Clean except two contract commands that were handled in `background.js` and listed in the handoff but had no UI sender (`queueClearFinished`, `queueClearDownloadedHistory`). Both now wired to toolbar buttons; a structural contract test guards the class. `scrollRescan` remains a documented hook with no button (read-only, allowlisted). |
 
@@ -90,7 +90,9 @@ Use this before claiming “ready” or merging large changes:
 - [x] Restart: in_progress kept; complete/interrupted/missing reconciled; no duplicate downloads.
 - [x] Capture bag: cookies never stored; CSRF from cookies preferred over stale capture when refreshing.
 - [x] Single-tweet path uses `TweetResultByRestId` shape only (not TweetDetail variables).
-- [x] Quotes still excluded until an explicit option exists; reposts honor Include reposts.
+- [x] Quotes are an explicit switch (**Include quoted**, default on, both tabs)
+      and quote rows carry `isQuote` + quoted-post attribution; reposts honor
+      Include reposts. Replies remain excluded.
 - [x] Filename sanitization + invalid-filename fallback ladder still works.
 
 ### Deprecated / dead code to keep out
@@ -127,14 +129,21 @@ Re-test **v3.3** against the exact v3.1 failures:
 9. **Action bar:** confirm both `Download` and `Add to queue` appear under media posts and that `Add to queue` lands in the Side Panel list.
 10. **Status pill:** confirm it reflects the current route, posts on screen, and pending video resolves; and that it warns when the tab is not X or needs a refresh.
 11. Remote fetch still works as the secondary path with clear rate-limit messaging.
-12. Replace synthetic fixtures with sanitized live captures when available.
+12. **Quoted post card (v3.4):** scroll past a post that is a GIF/video
+    reaction to a quoted ("mentioned") post. The card's media must list with
+    a violet `quote` badge, attributed to the quoted post's author (not the
+    reactor), and download named after the quoted post. Untick **Include
+    quoted** in both tabs and confirm card media stops listing (existing rows
+    stay). Also confirm the same quoted photo quoted by two different posts
+    still produces exactly one row.
+13. Replace synthetic fixtures with sanitized live captures when available.
 
 ## P1 — inclusion and review UX
 
 1. Diagnostics panel: active X tab URL, watching status, last captured operation names, capture warm/cold, queue counts, and sanitized copy-debug-report.
 2. Improve manual-scroll media support across more live X response shapes, especially video timeline variants.
 3. Clearer badges/counts: scroll vs remote, photo/video/GIF counts, repost/original when exposed.
-4. Explicit Include replies / Include quoted media.
+4. Explicit Include replies switch (quoted media shipped in v3.4).
 5. Filename templates + video quality preference.
 
 ## P2 — other sources
@@ -174,4 +183,4 @@ Re-test **v3.3** against the exact v3.1 failures:
 - Reposts off/on correct.
 - Protected / NSFW / logged-out / rate-limit messages specific.
 - Stop discovery; stop downloads; Side Panel reload retains state.
-- **48+** local Node tests still green after cleanup (`tests/background.test.js` + `tests/content.test.js`).
+- **55+** local Node tests still green after cleanup (`tests/background.test.js` + `tests/content.test.js`).

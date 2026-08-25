@@ -579,52 +579,74 @@ async function getTweetMedia(tweetId) {
     return { error: `unavailable: ${reason}` };
   }
 
-  // Extract media from legacy.extended_entities
+  // Extract media from legacy.extended_entities. The quoted ("mentioned") post
+  // shown as a small card on this post contributes its own media too — each
+  // item carries its owning post's attribution (username/tweetId/text/isQuote)
+  // so callers can name and dedupe it against the post that owns the media.
   const legacy = tweet.legacy || {};
-  const mediaItems = legacy.extended_entities?.media || [];
 
   // Extract user info
   const user = tweet.core?.user_results?.result?.legacy || {};
   const username = user.screen_name || "unknown";
   const tweetText = legacy.full_text || legacy.text || "";
 
-  // Extract all media (videos + photos)
+  // Extract all media (videos + photos), own post first, then the quoted card.
   const videos = [];
   const photos = [];
 
-  for (const m of mediaItems) {
-    if (m.type === "video" || m.type === "animated_gif") {
-      const variants = m.video_info?.variants || [];
-      let bestUrl = null;
-      let bestBitrate = -1;
-      for (const v of variants) {
-        if (v.content_type === "video/mp4") {
-          const br = v.bitrate || 0;
-          if (br > bestBitrate) {
-            bestBitrate = br;
-            bestUrl = v.url;
+  const collectTweetMediaEntries = (owner, isQuote) => {
+    const ownerLegacy = owner.legacy || {};
+    const ownerUser = owner.core?.user_results?.result?.legacy || {};
+    const ownerUsername = ownerUser.screen_name || username;
+    const ownerText = ownerLegacy.full_text || ownerLegacy.text || tweetText;
+    const ownerTweetId = owner.rest_id || tweetId;
+    const mediaItems = ownerLegacy.extended_entities?.media || ownerLegacy.entities?.media || [];
+    for (const m of mediaItems) {
+      if (m.type === "video" || m.type === "animated_gif") {
+        const variants = m.video_info?.variants || [];
+        let bestUrl = null;
+        let bestBitrate = -1;
+        for (const v of variants) {
+          if (v.content_type === "video/mp4") {
+            const br = v.bitrate || 0;
+            if (br > bestBitrate) {
+              bestBitrate = br;
+              bestUrl = v.url;
+            }
           }
         }
-      }
-      if (bestUrl) {
-        videos.push({
-          url: bestUrl,
-          bitrate: bestBitrate,
-          mediaId: m.id_str || m.id,
-          type: m.type
-        });
-      }
-    } else if (m.type === "photo") {
-      const photoUrl = normalizePhotoUrl(m.media_url_https || m.media_url || "");
-      if (photoUrl) {
-        photos.push({
-          url: photoUrl,
-          mediaId: m.id_str || m.id,
-          type: "photo"
-        });
+        if (bestUrl) {
+          videos.push({
+            url: bestUrl,
+            bitrate: bestBitrate,
+            mediaId: m.id_str || m.id,
+            type: m.type,
+            username: ownerUsername,
+            tweetId: ownerTweetId,
+            text: ownerText,
+            isQuote
+          });
+        }
+      } else if (m.type === "photo") {
+        const photoUrl = normalizePhotoUrl(m.media_url_https || m.media_url || "");
+        if (photoUrl) {
+          photos.push({
+            url: photoUrl,
+            mediaId: m.id_str || m.id,
+            type: "photo",
+            username: ownerUsername,
+            tweetId: ownerTweetId,
+            text: ownerText,
+            isQuote
+          });
+        }
       }
     }
-  }
+  };
+
+  collectTweetMediaEntries(tweet, false);
+  const quoted = quotedTweetFrom(tweet);
+  if (quoted?.rest_id && quoted.rest_id !== String(tweetId)) collectTweetMediaEntries(quoted, true);
 
   console.log(`[X-DL BG] Found ${videos.length} videos, ${photos.length} photos for tweet ${tweetId}`);
 
@@ -1371,8 +1393,9 @@ function resolveUserResult(userJson) {
 
 function collectTweets(value, output, seen = new Set(), parentKey = "") {
   if (!value || typeof value !== "object") return;
-  // Reposted media is resolved from its parent post below. Quoted results are
-  // deliberately excluded until an explicit Include quoted media option exists.
+  // Reposted and quoted posts are resolved from their parent post inside
+  // mediaFromTweet (with correct attribution and the includeQuoted switch),
+  // so their subtrees are pruned here to avoid collecting them twice.
   if (parentKey === "quoted_status_result" || parentKey === "retweeted_status_result") return;
   // Soft-unwrap skips unavailable/deleted individual timeline entries. Profile
   // unavailability is handled separately in resolveUserResult.
@@ -1459,19 +1482,30 @@ function makeMediaFilename({ username, text, tweetId, mediaId, index, extension 
   return `x-media/${key}.${extension}`;
 }
 
-function mediaFromTweet(tweet, targetHandle, includeRetweets) {
-  const legacy = tweet.legacy || {};
-  const repostResult = legacy.retweeted_status_result?.result || tweet.retweeted_status_result?.result;
-  const isRepost = Boolean(repostResult);
-  if (isRepost && !includeRetweets) return [];
-  // Soft-unwrap so one deleted/NSFW repost target does not abort the whole page.
-  const source = unwrapTweet(repostResult, { soft: true }) || tweet;
+// The quoted ("mentioned") post renders inside X as a small card with its own
+// thumbnail and text. Its full payload — author, text, and media variants — is
+// embedded in the same GraphQL response under legacy.quoted_status_result, so
+// no extra request is needed to fetch it (Rank S Plucker resolves media through
+// this exact field). One level only: a quote-of-quote is not chased.
+function quotedTweetFrom(tweet) {
+  const raw =
+    tweet?.legacy?.quoted_status_result?.result ||
+    tweet?.quoted_status_result?.result ||
+    null;
+  // Soft-unwrap so a deleted/protected/NSFW quoted card is skipped quietly
+  // instead of aborting the whole page's media.
+  return raw ? unwrapTweet(raw, { soft: true }) : null;
+}
+
+// Maps ONE tweet object's own extended_entities media to queue-item candidates.
+// Used for a post's own media, the reposted target's media, and the quoted
+// post's media — the flags only differ (isRepost / isQuote).
+function mediaItemsFromTweetObject(source, { isRepost = false, isQuote = false, fallbackAuthor = "", fallbackDate = "" } = {}) {
   const sourceLegacy = source.legacy || {};
   const author =
     source.core?.user_results?.result?.legacy?.screen_name ||
-    tweet.core?.user_results?.result?.legacy?.screen_name ||
-    String(targetHandle || "unknown").replace(/^@/, "");
-  const timestamp = sourceLegacy.created_at || legacy.created_at || "";
+    String(fallbackAuthor || "unknown").replace(/^@/, "");
+  const timestamp = sourceLegacy.created_at || fallbackDate || "";
   const text = sourceLegacy.full_text || sourceLegacy.text || "media";
   const media = sourceLegacy.extended_entities?.media || sourceLegacy.entities?.media || [];
   return media.map((item, index) => {
@@ -1486,7 +1520,7 @@ function mediaFromTweet(tweet, targetHandle, includeRetweets) {
     if (!url) return null;
     const extension = type === "photo" ? ((url.match(/[?&]format=([^&]+)/)?.[1] || url.split("?")[0].split(".").pop() || "jpg").replace(/[^a-z0-9]/gi, "") || "jpg") : "mp4";
     const mediaId = item.id_str || item.id || index;
-    const tweetId = source.rest_id || tweet.rest_id || "";
+    const tweetId = source.rest_id || "";
     return {
       id: `${tweetId}-${mediaId}`,
       // Same CDN key the content script derives, so a photo listed from the
@@ -1494,10 +1528,37 @@ function mediaFromTweet(tweet, targetHandle, includeRetweets) {
       // queue row instead of appearing twice.
       mediaKey: mediaKeyFromUrl(url),
       url, type, thumbnail: item.media_url_https || item.media_url || "", author: `@${author}`,
-      date: timestamp, tweetId, mediaId: String(mediaId), isRepost,
+      date: timestamp, tweetId, mediaId: String(mediaId), isRepost, isQuote,
       filename: makeMediaFilename({ username: author, text, tweetId, mediaId, index, extension })
     };
   }).filter(Boolean);
+}
+
+function mediaFromTweet(tweet, targetHandle, options = {}) {
+  // Back-compat: the third argument used to be a bare includeRetweets boolean.
+  const opts = typeof options === "boolean" ? { includeRetweets: options } : (options || {});
+  const includeRetweets = opts.includeRetweets !== false;
+  const includeQuoted = Boolean(opts.includeQuoted);
+  const legacy = tweet.legacy || {};
+  const repostResult = legacy.retweeted_status_result?.result || tweet.retweeted_status_result?.result;
+  const isRepost = Boolean(repostResult);
+  if (isRepost && !includeRetweets) return [];
+  // Soft-unwrap so one deleted/NSFW repost target does not abort the whole page.
+  const source = unwrapTweet(repostResult, { soft: true }) || tweet;
+  // Keep the pre-quote-parse fallbacks: a reposted target without core user
+  // data used to fall back to the outer (retweeting) post's author and date.
+  const outerAuthor = tweet.core?.user_results?.result?.legacy?.screen_name || targetHandle;
+  const outerDate = legacy.created_at || "";
+  const items = mediaItemsFromTweetObject(source, { isRepost, fallbackAuthor: outerAuthor, fallbackDate: outerDate });
+  if (includeQuoted) {
+    // A quote reaction ("GIF/video reacting to a mentioned post") carries the
+    // quoted post's media in the card; list it as its own row, attributed to
+    // the quoted post's author and id so filenames and skip-history match the
+    // post that actually owns the media.
+    const quoted = quotedTweetFrom(source);
+    if (quoted?.rest_id) items.push(...mediaItemsFromTweetObject(quoted, { isQuote: true, fallbackAuthor: outerAuthor }));
+  }
+  return items;
 }
 
 function takeDiscoveryItems(items, seenIds, remaining) {
@@ -1606,7 +1667,10 @@ async function runProfileDiscovery(options, runId) {
       const tweets = [];
       collectTweets(instructions, tweets);
       const parsedItems = tweets
-        .flatMap((tweet) => mediaFromTweet(tweet, username, Boolean(options.includeRetweets)))
+        .flatMap((tweet) => mediaFromTweet(tweet, username, {
+          includeRetweets: Boolean(options.includeRetweets),
+          includeQuoted: options.includeQuoted !== false
+        }))
         .map((item) => ({ ...item, source: "remote" }));
       const items = takeDiscoveryItems(parsedItems, seenMediaIds, limit - state.found);
       await addQueueItems(items, { orderedFrontIds: Array.from(seenMediaIds), source: "remote" });
@@ -1705,7 +1769,13 @@ async function handleLocalTimelineCapture(message) {
   const tweetIds = [];
   const items = [];
   for (const tweet of tweets) {
-    const parsed = mediaFromTweet(tweet, targetHandle, true)
+    const parsed = mediaFromTweet(tweet, targetHandle, {
+      includeRetweets: true,
+      // Quoted ("mentioned") post media is on by default for scroll capture —
+      // the quote card's GIF/video/photo is exactly what the user sees. The
+      // Side Panel can switch it off per its Include quoted checkbox.
+      includeQuoted: message.includeQuoted !== false
+    })
       .filter((item) => mediaFilter === "all" || item.type === mediaFilter);
     if (!parsed.length) continue;
     if (tweet.rest_id) tweetIds.push(String(tweet.rest_id));
