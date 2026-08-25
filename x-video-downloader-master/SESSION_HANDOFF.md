@@ -1,20 +1,19 @@
 # Session Handoff — X Media Downloader
 
-**Prepared:** 2026-08-24
+**Prepared:** 2026-08-25
 
 ## Project and branch
 
 - Repository: `freeforall1932-design/twitter-batch-download`
 - Extension directory: `x-video-downloader-master/`
-- Working branch for this Arena session: `arena/01a031d1-twitter-batch-download`
-- Current relevant commits:
-  - `00540d9` — Name downloads by post username and text
-  - `7058dce` — Harden queue scheduling, discovery, and restart reconciliation
-  - `5ee8ad3` — Add queue retry and download progress states
-  - `3947598` — Add profile media discovery to side panel
-  - `58c2f32` — Document queue discovery implementation worklist
-  - `b211e8b` — Add side panel batch queue foundation
-  - `5813597` — mainline v3.0 merge baseline
+- Working branch for this Arena session: `arena/01a0367e-twitter-batch-download`
+- Baseline upload commit on this branch: `14d2c4d` — Add files via upload
+- Prior product history (from handoff / improvement log; may not all be individual commits on this branch):
+  - Side Panel batch queue, profile discovery, 1–2 download scheduler
+  - Queue retries, byte progress, restart reconciliation
+  - Direct filenames by username/text; ZIP export dropped
+  - Community discovery cap 99,999
+  - **This session:** P0 discovery error classification, rate-limit countdown UI, richer GraphQL features/variables, sanitized fixtures (23 local tests)
 
 The extension has no build step, package manager, TypeScript, or server. Reload it in `chrome://extensions` after changes and load `x-video-downloader-master/` as the unpacked extension.
 
@@ -134,6 +133,8 @@ A custom STORE-mode ZIP writer exists. It is not yet connected to the Side Panel
 - `discoveryStart` with `{ target, limit, includeRetweets }`
 - `discoveryStop`
 
+Discovery state now also exposes `errorCode`, `retryAfterMs`, and `retryUntil` for the Side Panel countdown and classified errors.
+
 ## Normalized queue item shape
 
 Discovery sends items similar to:
@@ -171,17 +172,20 @@ Queue states are `discovered`, `queued`, `starting`, `downloading`, `completed`,
 - Progress-state plumbing.
 - Profile target validation.
 - Stop behavior and queue cleanup.
+- Classified discovery errors + Side Panel rate-limit countdown.
+- Local sanitized fixtures and 23 Node regression tests.
 
 ### Implemented but **must be verified against live X**
 
-- Existing signed-in session handling.
+- Existing signed-in session handling (`ct0` + `auth_token` + Bearer).
 - Single-tweet GraphQL fetching and photo/video parser.
 - DOM selectors and action-bar injection.
 - Dynamic operation-ID extraction from loaded X JavaScript.
-- `UserByScreenName` and `UserMedia` request variables/features.
-- Timeline-instruction/cursor parsing.
+- `UserByScreenName` and `UserMedia` request variables/features/fieldToggles.
+- Timeline-instruction/cursor parsing (`timeline_v2` and legacy paths).
 - Repost result parsing.
 - Download byte-progress availability.
+- Exact user-facing copy for protected/NSFW/rate-limit against real responses.
 
 Do not declare these complete merely because a reference repo used a similar approach. X frontend/query IDs/response layouts change frequently.
 
@@ -235,10 +239,10 @@ Redact/replace completely:
 
 ### Highest priority after live validation
 
-- Make UserMedia GraphQL variables/features and response parser exact from a sanitized current capture.
-- Improve error messages for expired login, protected account, deleted content, NSFW state, operation-metadata failure, and rate limits.
-- Add visible rate-limit retry countdown during discovery.
-- Add automated/manual regression fixtures from sanitized response samples.
+- Run the live-X checklist in WORKLIST with a signed-in Chrome session.
+- Make UserMedia GraphQL variables/features and response parser exact from a sanitized **current** capture (replace synthetic fixtures).
+- Optional: signed-in status pill in the Side Panel header.
+- Then P1 inclusion switches (replies / quoted media) and review UX polish.
 
 ### Profile/timeline sources
 

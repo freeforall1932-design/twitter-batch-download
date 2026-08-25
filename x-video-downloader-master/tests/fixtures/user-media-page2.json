@@ -1,0 +1,63 @@
+{
+  "data": {
+    "user": {
+      "result": {
+        "__typename": "User",
+        "timeline_v2": {
+          "timeline": {
+            "instructions": [
+              {
+                "type": "TimelineAddEntries",
+                "entries": [
+                  {
+                    "entryId": "tweet-1004",
+                    "content": {
+                      "entryType": "TimelineTimelineItem",
+                      "itemContent": {
+                        "itemType": "TimelineTweet",
+                        "tweet_results": {
+                          "result": {
+                            "__typename": "Tweet",
+                            "rest_id": "1004",
+                            "core": {
+                              "user_results": {
+                                "result": {
+                                  "legacy": { "screen_name": "demo" }
+                                }
+                              }
+                            },
+                            "legacy": {
+                              "created_at": "Sun Aug 23 09:00:00 +0000 2026",
+                              "full_text": "older photo",
+                              "extended_entities": {
+                                "media": [
+                                  {
+                                    "id_str": "m3",
+                                    "type": "photo",
+                                    "media_url_https": "https://pbs.example.com/media/three.jpg"
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "entryId": "cursor-bottom-2",
+                    "content": {
+                      "entryType": "TimelineTimelineCursor",
+                      "cursorType": "Bottom",
+                      "value": "bottom-cursor-page-2"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

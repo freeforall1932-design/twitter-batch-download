@@ -23,6 +23,9 @@ const GRAPHQL_ENDPOINT = "TweetResultByRestId";
 let lastRequestTime = 0;
 let rateLimitHits = 0;
 const MIN_REQUEST_INTERVAL = 800; // ms between requests to avoid rate limiting
+// Optional listener used by profile discovery to surface retry countdowns.
+// Kept on globalThis so unit tests can install a spy without fighting `let` TDZ.
+globalThis.rateLimitStatusListener = null;
 
 // --- Community discovery cap ---
 // This extension is self-hosted against the signed-in X session only. There is
@@ -36,6 +39,86 @@ function normalizeDiscoveryLimit(value) {
   const number = Math.floor(Number(value));
   if (!Number.isFinite(number)) return DEFAULT_DISCOVERY_LIMIT;
   return Math.min(MAX_DISCOVERY_LIMIT, Math.max(1, number));
+}
+
+// Classify transport/API failures into stable, user-facing codes. Live X still
+// needs verification, but the wording no longer depends on raw status text.
+function classifyDiscoveryError(raw, context = {}) {
+  const status = Number(context.status) || 0;
+  const message = String(raw?.message || raw || "");
+  const lower = message.toLowerCase();
+  const typename = String(context.typename || "");
+  const reason = String(context.reason || "");
+
+  if (context.code) {
+    return {
+      code: context.code,
+      message: context.message || message || "Discovery needs attention."
+    };
+  }
+
+  if (status === 429 || status === 503 || /rate limit|retries were exhausted|too many requests|service unavailable/.test(lower)) {
+    return {
+      code: "rate_limited",
+      message: "X rate-limited this scan. Wait for the countdown, then discovery will retry automatically."
+    };
+  }
+  if (status === 401 || /session has expired|sign in to x|not authenticated|unauthorized|csrf|auth error \(401\)/.test(lower)) {
+    return {
+      code: "auth_expired",
+      message: "Your X session has expired. Sign in to X in this Chrome profile, open any X tab, then retry."
+    };
+  }
+  if (
+    status === 403 ||
+    typename === "UserUnavailable" ||
+    reason === "Protected" ||
+    /protected|not authorized|you are not authorized|account is temporarily unavailable/.test(lower)
+  ) {
+    return {
+      code: "protected",
+      message: "This profile is protected or unavailable to your signed-in account."
+    };
+  }
+  if (reason === "NsfwLoggedOut" || /nsfw|sensitive media|age-restricted/.test(lower)) {
+    return {
+      code: "nsfw",
+      message: "This media is marked sensitive. Sign in to an X account that can view it, then retry."
+    };
+  }
+  // Operation-metadata failures also contain "could not find", so classify them
+  // before the generic not-found branch.
+  if (/operation metadata|could not find current x operation|current x operation metadata/.test(lower)) {
+    return {
+      code: "operation_metadata",
+      message: message || "Could not read current X operation metadata. Open the profile on x.com, refresh, then retry."
+    };
+  }
+  if (
+    typename === "TweetTombstone" ||
+    /could not find|deleted|no tweet result|not return a profile|user not found|doesn't exist/.test(lower)
+  ) {
+    return {
+      code: "not_found",
+      message: "X did not return that profile or post. It may be deleted, suspended, or mistyped."
+    };
+  }
+  if (/open x\.com|no signed-in x session/.test(lower)) {
+    return {
+      code: "auth_required",
+      message: message || "Open x.com in this Chrome profile and sign in before discovering media."
+    };
+  }
+  if (/enter an x profile|use @username|not an x profile|target must be/.test(lower)) {
+    return {
+      code: "invalid_target",
+      message: message || "Enter an X profile URL or @username."
+    };
+  }
+  return {
+    code: "unknown",
+    message: message || "Discovery needs attention."
+  };
 }
 
 // --- Download queue for ZIP batching ---
@@ -135,6 +218,32 @@ function makeHeaders() {
 // RATE LIMITING — Exponential backoff with jitter
 // ==========================================================================
 
+async function notifyRateLimitWait(waitMs, meta = {}) {
+  const listener = globalThis.rateLimitStatusListener;
+  if (typeof listener !== "function") return;
+  try {
+    await listener({
+      waitMs: Math.max(0, Math.round(waitMs || 0)),
+      attempt: meta.attempt || 0,
+      maxAttempts: meta.maxAttempts || 0,
+      status: meta.status || 0,
+      until: Date.now() + Math.max(0, Math.round(waitMs || 0))
+    });
+  } catch (_) { /* Discovery UI updates must never break the request loop. */ }
+}
+
+async function sleepWithRateLimitCountdown(waitMs, meta = {}) {
+  const total = Math.max(0, Math.round(waitMs || 0));
+  const endedAt = Date.now() + total;
+  await notifyRateLimitWait(total, meta);
+  while (Date.now() < endedAt) {
+    const remaining = endedAt - Date.now();
+    await new Promise((resolve) => setTimeout(resolve, Math.min(1000, remaining)));
+    if (Date.now() < endedAt) await notifyRateLimitWait(endedAt - Date.now(), meta);
+  }
+  await notifyRateLimitWait(0, meta);
+}
+
 async function rateLimitWait() {
   const now = Date.now();
   const elapsed = now - lastRequestTime;
@@ -147,6 +256,7 @@ async function rateLimitWait() {
     const jitter = Math.random() * 300;
     const waitTime = maxDelay - elapsed + jitter;
     console.log(`[X-DL BG] Rate limit wait: ${Math.round(waitTime)}ms`);
+    // Spacing delays stay quiet in the UI; only 429/503 retries show a countdown.
     await new Promise(r => setTimeout(r, waitTime));
   }
 
@@ -162,12 +272,17 @@ async function fetchWithRetry(url, headers, maxRetries = 4) {
     if (resp.status === 429 || resp.status === 503) {
       rateLimitHits++;
       const retryAfter = resp.headers.get("retry-after");
-      const waitTime = retryAfter
-        ? parseInt(retryAfter) * 1000
+      const parsedRetryAfter = retryAfter ? parseInt(retryAfter, 10) : NaN;
+      const waitTime = Number.isFinite(parsedRetryAfter)
+        ? parsedRetryAfter * 1000
         : Math.min(2000 * Math.pow(2, attempt) + Math.random() * 1000, 60000);
 
       console.log(`[X-DL BG] Rate limited (${resp.status}), attempt ${attempt + 1}/${maxRetries + 1}, waiting ${Math.round(waitTime / 1000)}s`);
-      await new Promise(r => setTimeout(r, waitTime));
+      await sleepWithRateLimitCountdown(waitTime, {
+        attempt: attempt + 1,
+        maxAttempts: maxRetries + 1,
+        status: resp.status
+      });
 
       // Refresh auth in case CSRF expired
       await refreshAuth(null);
@@ -682,7 +797,19 @@ async function handleQueueMessage(msg) {
 // PROFILE MEDIA DISCOVERY — current X operation IDs are read from its JS
 // ==========================================================================
 const DISCOVERY_STORAGE_KEY = "profileDiscoveryV1";
-const DEFAULT_DISCOVERY = { running: false, stopRequested: false, pages: 0, found: 0, status: "Ready to discover media", error: null, target: "", activeRunId: null };
+const DEFAULT_DISCOVERY = {
+  running: false,
+  stopRequested: false,
+  pages: 0,
+  found: 0,
+  status: "Ready to discover media",
+  error: null,
+  errorCode: null,
+  retryAfterMs: 0,
+  retryUntil: 0,
+  target: "",
+  activeRunId: null
+};
 let discoveryState = null;
 let discoveryStateLoading = null;
 let discoverySaving = Promise.resolve();
@@ -770,38 +897,117 @@ async function getOperationIds(tabId) {
 }
 
 function discoveryFeatures() {
+  // Feature flags aligned with current X web timeline requests (and Rank S
+  // Plucker captures). Exact live shapes still need signed-in verification.
   return {
+    profile_label_improvements_pcf_label_in_post_enabled: true,
+    rweb_tipjar_consumption_enabled: true,
+    responsive_web_graphql_exclude_directive_enabled: true,
+    verified_phone_label_enabled: false,
     creator_subscriptions_tweet_preview_api_enabled: true,
-    tweetypie_unmention_optimization_enabled: true,
+    responsive_web_graphql_timeline_navigation_enabled: true,
+    responsive_web_graphql_skip_user_profile_image_extensions_enabled: false,
+    premium_content_api_read_enabled: false,
+    communities_web_enable_tweet_community_results_fetch: true,
+    c9s_tweet_anatomy_moderator_badge_enabled: true,
+    responsive_web_grok_analyze_button_fetch_trends_enabled: false,
+    responsive_web_grok_analyze_post_followups_enabled: true,
+    responsive_web_jetfuel_frame: false,
+    responsive_web_grok_share_attachment_enabled: true,
+    articles_preview_enabled: true,
     responsive_web_edit_tweet_api_enabled: true,
     graphql_is_translatable_rweb_tweet_is_translatable_enabled: true,
     view_counts_everywhere_api_enabled: true,
     longform_notetweets_consumption_enabled: true,
+    responsive_web_twitter_article_tweet_consumption_enabled: true,
+    tweet_awards_web_tipping_enabled: false,
+    responsive_web_grok_analysis_button_from_backend: true,
+    creator_subscriptions_quote_tweet_preview_enabled: false,
+    freedom_of_speech_not_reach_fetch_enabled: true,
+    standardized_nudges_misinfo: true,
+    tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled: true,
+    rweb_video_timestamps_enabled: true,
     longform_notetweets_rich_text_read_enabled: true,
     longform_notetweets_inline_media_enabled: true,
-    responsive_web_graphql_exclude_directive_enabled: true,
-    responsive_web_graphql_timeline_navigation_enabled: true,
-    responsive_web_enhance_cards_enabled: false
+    responsive_web_grok_image_annotation_enabled: true,
+    responsive_web_enhance_cards_enabled: false,
+    tweetypie_unmention_optimization_enabled: true
   };
 }
 
+function discoveryFieldToggles() {
+  return { withArticlePlainText: false };
+}
+
+function throwClassifiedDiscoveryError(raw, context = {}) {
+  const classified = classifyDiscoveryError(raw, context);
+  const error = new Error(classified.message);
+  error.code = classified.code;
+  throw error;
+}
+
 async function callDiscoveryGraphQL(operationId, operationName, variables) {
-  const params = new URLSearchParams({ variables: JSON.stringify(variables), features: JSON.stringify(discoveryFeatures()) });
+  const params = new URLSearchParams({
+    variables: JSON.stringify(variables),
+    features: JSON.stringify(discoveryFeatures()),
+    fieldToggles: JSON.stringify(discoveryFieldToggles())
+  });
   const response = await fetchWithRetry(`https://x.com/i/api/graphql/${operationId}/${operationName}?${params}`, makeHeaders());
-  if (!response) throw new Error("X rate limit retries were exhausted.");
+  if (!response) throwClassifiedDiscoveryError("X rate limit retries were exhausted.", { code: "rate_limited" });
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    throw new Error(response.status === 401 ? "Your X session has expired. Sign in to X and retry." : response.status === 403 ? "This profile is protected or unavailable to your account." : `X returned ${response.status}: ${body.slice(0, 120)}`);
+    throwClassifiedDiscoveryError(body || `X returned ${response.status}`, { status: response.status });
   }
-  const json = await response.json();
-  if (json.errors?.length) throw new Error(json.errors.map((entry) => entry.message).join(", "));
+  let json;
+  try {
+    json = await response.json();
+  } catch (_) {
+    throwClassifiedDiscoveryError("Invalid JSON response from X.", { code: "unknown" });
+  }
+  if (json.errors?.length) {
+    const errMsg = json.errors.map((entry) => entry.message || entry.code || "X GraphQL error").join(", ");
+    throwClassifiedDiscoveryError(errMsg, { status: response.status });
+  }
   return json;
 }
 
-function unwrapTweet(result) {
+function unwrapTweet(result, options = {}) {
   if (!result || typeof result !== "object") return null;
   if (result.__typename === "TweetWithVisibilityResults") return result.tweet || null;
-  return result.__typename === "Tweet" ? result : null;
+  if (result.__typename === "TweetUnavailable") {
+    if (options.soft) return null;
+    const reason = result.reason || "unavailable";
+    if (reason === "Protected") throwClassifiedDiscoveryError(reason, { code: "protected", reason });
+    if (reason === "NsfwLoggedOut") throwClassifiedDiscoveryError(reason, { code: "nsfw", reason });
+    throwClassifiedDiscoveryError(`unavailable: ${reason}`, { reason, typename: "TweetUnavailable" });
+  }
+  if (result.__typename === "TweetTombstone") {
+    if (options.soft) return null;
+    throwClassifiedDiscoveryError("deleted", { code: "not_found", typename: "TweetTombstone" });
+  }
+  // Prefer an explicit Tweet typename. Fall back only when the object already
+  // looks like a tweet payload (rest_id + legacy) and is not a User result.
+  if (result.__typename === "Tweet") return result;
+  if (!result.__typename && result.rest_id && result.legacy && !result.timeline) return result;
+  return null;
+}
+
+function resolveUserResult(userJson) {
+  const user = userJson?.data?.user?.result || userJson?.data?.user_result?.result || null;
+  if (!user) return { error: classifyDiscoveryError("X did not return a profile for that username.", { code: "not_found" }) };
+  if (user.__typename === "UserUnavailable") {
+    const reason = user.reason || "";
+    if (/protect/i.test(reason) || reason === "Protected") {
+      return { error: classifyDiscoveryError(reason || "protected", { code: "protected", reason, typename: "UserUnavailable" }) };
+    }
+    if (/suspend/i.test(reason)) {
+      return { error: classifyDiscoveryError(reason || "suspended", { code: "not_found", reason, typename: "UserUnavailable" }) };
+    }
+    return { error: classifyDiscoveryError(reason || "User unavailable", { code: "not_found", reason, typename: "UserUnavailable" }) };
+  }
+  const userId = user.rest_id || user.legacy?.id_str;
+  if (!userId) return { error: classifyDiscoveryError("X did not return a profile for that username.", { code: "not_found" }) };
+  return { user, userId };
 }
 
 function collectTweets(value, output, seen = new Set(), parentKey = "") {
@@ -809,7 +1015,9 @@ function collectTweets(value, output, seen = new Set(), parentKey = "") {
   // Reposted media is resolved from its parent post below. Quoted results are
   // deliberately excluded until an explicit Include quoted media option exists.
   if (parentKey === "quoted_status_result" || parentKey === "retweeted_status_result") return;
-  const tweet = unwrapTweet(value);
+  // Soft-unwrap skips unavailable/deleted individual timeline entries. Profile
+  // unavailability is handled separately in resolveUserResult.
+  const tweet = unwrapTweet(value, { soft: true });
   if (tweet?.rest_id && !seen.has(tweet.rest_id)) { seen.add(tweet.rest_id); output.push(tweet); }
   if (Array.isArray(value)) value.forEach((entry) => collectTweets(entry, output, seen, parentKey));
   else Object.entries(value).forEach(([key, entry]) => collectTweets(entry, output, seen, key));
@@ -818,14 +1026,43 @@ function collectTweets(value, output, seen = new Set(), parentKey = "") {
 function findBottomCursor(value) {
   if (!value || typeof value !== "object") return null;
   if (Array.isArray(value)) {
-    for (const entry of value) { const cursor = findBottomCursor(entry); if (cursor) return cursor; }
-    return null;
+    // Prefer the last Bottom cursor in instruction entry lists (X media timelines).
+    let found = null;
+    for (const entry of value) {
+      const cursor = findBottomCursor(entry);
+      if (cursor) found = cursor;
+    }
+    return found;
   }
   const entryId = value.entryId || value.entry_id || "";
-  const cursorType = value.content?.cursorType || value.cursorType || "";
-  if ((String(entryId).includes("cursor-bottom") || cursorType === "Bottom") && value.content?.value) return value.content.value;
-  for (const child of Object.values(value)) { const cursor = findBottomCursor(child); if (cursor) return cursor; }
-  return null;
+  const content = value.content || value;
+  const entryType = content.entryType || content.__typename || value.entryType || "";
+  const cursorType = content.cursorType || value.cursorType || "";
+  const cursorValue = content.value || value.value || "";
+  if (
+    cursorValue &&
+    (cursorType === "Bottom" || String(entryId).includes("cursor-bottom")) &&
+    (!entryType || entryType === "TimelineTimelineCursor" || String(entryId).includes("cursor"))
+  ) {
+    return cursorValue;
+  }
+  let found = null;
+  for (const child of Object.values(value)) {
+    const cursor = findBottomCursor(child);
+    if (cursor) found = cursor;
+  }
+  return found;
+}
+
+function extractTimelineInstructions(page) {
+  return (
+    page?.data?.user?.result?.timeline_v2?.timeline?.instructions ||
+    page?.data?.user?.result?.timeline?.timeline?.instructions ||
+    page?.data?.user?.result?.timeline?.instructions ||
+    page?.data?.user_result?.result?.timeline_v2?.timeline?.instructions ||
+    page?.data?.user_result?.result?.timeline?.timeline?.instructions ||
+    null
+  );
 }
 
 function sanitizeFilePart(value, fallback) {
@@ -852,11 +1089,16 @@ function makeMediaFilename({ username, text, tweetId, mediaId, index, extension 
 
 function mediaFromTweet(tweet, targetHandle, includeRetweets) {
   const legacy = tweet.legacy || {};
-  const isRepost = Boolean(legacy.retweeted_status_result?.result || tweet.retweeted_status_result?.result);
+  const repostResult = legacy.retweeted_status_result?.result || tweet.retweeted_status_result?.result;
+  const isRepost = Boolean(repostResult);
   if (isRepost && !includeRetweets) return [];
-  const source = unwrapTweet(legacy.retweeted_status_result?.result || tweet.retweeted_status_result?.result) || tweet;
+  // Soft-unwrap so one deleted/NSFW repost target does not abort the whole page.
+  const source = unwrapTweet(repostResult, { soft: true }) || tweet;
   const sourceLegacy = source.legacy || {};
-  const author = source.core?.user_results?.result?.legacy?.screen_name || tweet.core?.user_results?.result?.legacy?.screen_name || targetHandle;
+  const author =
+    source.core?.user_results?.result?.legacy?.screen_name ||
+    tweet.core?.user_results?.result?.legacy?.screen_name ||
+    String(targetHandle || "unknown").replace(/^@/, "");
   const timestamp = sourceLegacy.created_at || legacy.created_at || "";
   const text = sourceLegacy.full_text || sourceLegacy.text || "media";
   const media = sourceLegacy.extended_entities?.media || sourceLegacy.entities?.media || [];
@@ -899,42 +1141,96 @@ function isCurrentDiscoveryRun(state, runId) {
   return state.activeRunId === runId;
 }
 
+async function clearDiscoveryRetry(state) {
+  if (!state) return;
+  state.retryAfterMs = 0;
+  state.retryUntil = 0;
+}
+
 async function runProfileDiscovery(options, runId) {
   const state = await getDiscoveryState();
   if (!isCurrentDiscoveryRun(state, runId)) return;
+
+  const previousListener = globalThis.rateLimitStatusListener;
+  globalThis.rateLimitStatusListener = async (info) => {
+    if (!isCurrentDiscoveryRun(state, runId)) return;
+    const waitMs = Math.max(0, Number(info?.waitMs) || 0);
+    state.retryAfterMs = waitMs;
+    state.retryUntil = waitMs > 0 ? (Number(info?.until) || (Date.now() + waitMs)) : 0;
+    if (waitMs > 0) {
+      const seconds = Math.max(1, Math.ceil(waitMs / 1000));
+      const attempt = info?.attempt && info?.maxAttempts ? ` (retry ${info.attempt}/${info.maxAttempts})` : "";
+      state.status = `Rate limited — retrying in ${seconds}s${attempt}…`;
+      state.error = null;
+      state.errorCode = "rate_limited";
+    } else if (state.errorCode === "rate_limited" && !state.error) {
+      state.errorCode = null;
+      state.status = `Fetching page ${state.pages + 1} — ${state.found} media found…`;
+    }
+    await saveDiscoveryState();
+  };
+
   try {
     const username = normalizeProfileTarget(options.target);
     state.target = `@${username}`;
-    state.status = "Reading current X session…"; await saveDiscoveryState();
+    state.status = "Reading current X session…";
+    await clearDiscoveryRetry(state);
+    await saveDiscoveryState();
     if (!isCurrentDiscoveryRun(state, runId)) return;
     const tab = await findXTab();
     if (!isCurrentDiscoveryRun(state, runId)) return;
-    if (!tab?.id) throw new Error("Open x.com in this Chrome profile and sign in before discovering media.");
+    if (!tab?.id) throwClassifiedDiscoveryError("Open x.com in this Chrome profile and sign in before discovering media.", { code: "auth_required" });
     await refreshAuth(tab.id);
     if (!isCurrentDiscoveryRun(state, runId)) return;
-    if (!csrfToken || !cookieStr) throw new Error("No signed-in X session was found. Sign in to X in Chrome, then retry.");
+    if (!csrfToken || !cookieStr) throwClassifiedDiscoveryError("No signed-in X session was found. Sign in to X in Chrome, then retry.", { code: "auth_required" });
+    // Prefer an explicit auth_token cookie when present; ct0 alone can remain
+    // after a partial logout and produce confusing 401s later.
+    const authToken = await getCookie("auth_token");
+    if (!authToken) throwClassifiedDiscoveryError("No signed-in X session was found. Sign in to X in Chrome, then retry.", { code: "auth_required" });
     state.status = "Reading current X page metadata…"; await saveDiscoveryState();
     if (!isCurrentDiscoveryRun(state, runId)) return;
     const operations = await getOperationIds(tab.id);
     if (!isCurrentDiscoveryRun(state, runId)) return;
     state.status = `Resolving @${username}…`; await saveDiscoveryState();
     if (!isCurrentDiscoveryRun(state, runId)) return;
-    const userJson = await callDiscoveryGraphQL(operations.UserByScreenName, "UserByScreenName", { screen_name: username, withSafetyModeUserFields: true });
+    const userJson = await callDiscoveryGraphQL(operations.UserByScreenName, "UserByScreenName", {
+      screen_name: username,
+      withSafetyModeUserFields: true
+    });
     if (!isCurrentDiscoveryRun(state, runId)) return;
-    const user = userJson?.data?.user?.result;
-    const userId = user?.rest_id || user?.legacy?.id_str;
-    if (!userId) throw new Error("X did not return a profile for that username.");
+    const resolved = resolveUserResult(userJson);
+    if (resolved.error) {
+      const error = new Error(resolved.error.message);
+      error.code = resolved.error.code;
+      throw error;
+    }
+    const { userId } = resolved;
     let cursor = null, previousCursor = null;
     const seenMediaIds = new Set();
     const limit = normalizeDiscoveryLimit(options.limit);
     while (isCurrentDiscoveryRun(state, runId) && !state.stopRequested && state.found < limit) {
-      state.status = `Fetching page ${state.pages + 1} — ${state.found} media found…`; await saveDiscoveryState();
+      state.status = `Fetching page ${state.pages + 1} — ${state.found} media found…`;
+      state.error = null;
+      if (state.errorCode === "rate_limited") state.errorCode = null;
+      await clearDiscoveryRetry(state);
+      await saveDiscoveryState();
       if (!isCurrentDiscoveryRun(state, runId)) return;
-      const variables = { userId, count: 40, includePromotedContent: false, withClientEventToken: false, withBirdwatchNotes: false, withVoice: false };
+      // Variables mirror current X UserMedia / timeline request shape used by
+      // Rank S Plucker captures. count stays moderate to reduce 429 pressure.
+      const variables = {
+        userId,
+        count: 20,
+        includePromotedContent: true,
+        withQuickPromoteEligibilityTweetFields: true,
+        withVoice: true,
+        withV2Timeline: true
+      };
       if (cursor) variables.cursor = cursor;
       const page = await callDiscoveryGraphQL(operations.UserMedia, "UserMedia", variables);
       if (!isCurrentDiscoveryRun(state, runId)) return;
-      const tweets = []; collectTweets(page?.data?.user?.result?.timeline?.timeline?.instructions || page, tweets);
+      const instructions = extractTimelineInstructions(page) || page;
+      const tweets = [];
+      collectTweets(instructions, tweets);
       const parsedItems = tweets.flatMap((tweet) => mediaFromTweet(tweet, username, Boolean(options.includeRetweets)));
       const items = takeDiscoveryItems(parsedItems, seenMediaIds, limit - state.found);
       await addQueueItems(items, { orderedFrontIds: Array.from(seenMediaIds) });
@@ -942,19 +1238,31 @@ async function runProfileDiscovery(options, runId) {
       state.found += items.length;
       state.pages++;
       previousCursor = cursor;
-      cursor = findBottomCursor(page?.data?.user?.result?.timeline?.timeline?.instructions || page);
+      cursor = findBottomCursor(instructions);
       if (!cursor || cursor === previousCursor) break;
     }
     if (!isCurrentDiscoveryRun(state, runId)) return;
     state.running = false;
     state.activeRunId = null;
-    state.status = state.stopRequested ? `Discovery stopped — ${state.found} media found.` : state.found >= limit ? `Reached the ${limit.toLocaleString()} media limit.` : `Discovery complete — ${state.found} media found.`;
+    state.error = null;
+    state.errorCode = null;
+    await clearDiscoveryRetry(state);
+    state.status = state.stopRequested
+      ? `Discovery stopped — ${state.found} media found.`
+      : state.found >= limit
+        ? `Reached the ${limit.toLocaleString()} media limit.`
+        : `Discovery complete — ${state.found} media found.`;
   } catch (error) {
     if (!isCurrentDiscoveryRun(state, runId)) return;
+    const classified = classifyDiscoveryError(error, { code: error.code });
     state.running = false;
     state.activeRunId = null;
-    state.error = error.message || String(error);
+    state.error = classified.message;
+    state.errorCode = classified.code;
     state.status = "Discovery needs attention";
+    await clearDiscoveryRetry(state);
+  } finally {
+    globalThis.rateLimitStatusListener = previousListener;
   }
   await saveDiscoveryState();
 }
@@ -962,7 +1270,12 @@ async function runProfileDiscovery(options, runId) {
 async function handleDiscoveryMessage(msg) {
   const state = await getDiscoveryState();
   if (msg.action === "discoveryGet") return state;
-  if (msg.action === "discoveryStop") { state.stopRequested = true; state.status = "Stopping after this page…"; await saveDiscoveryState(); return state; }
+  if (msg.action === "discoveryStop") {
+    state.stopRequested = true;
+    state.status = "Stopping after this page…";
+    await saveDiscoveryState();
+    return state;
+  }
   if (msg.action === "discoveryStart") {
     if (state.running) return state;
     const runId = ++discoveryRunSerial;
@@ -972,6 +1285,9 @@ async function handleDiscoveryMessage(msg) {
     state.found = 0;
     state.target = String(msg.target || "");
     state.error = null;
+    state.errorCode = null;
+    state.retryAfterMs = 0;
+    state.retryUntil = 0;
     state.status = "Starting discovery…";
     state.activeRunId = runId;
     await saveDiscoveryState();

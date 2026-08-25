@@ -162,3 +162,51 @@ Chronological implementation record for X Media Downloader.
 ### Validation
 - Added a regression test for `normalizeDiscoveryLimit()`.
 - All local Node tests pass; no live X data or signed-in session required.
+
+## 2026-08-25 — P0 discovery hardening (errors, countdown, fixtures)
+
+### Added
+- `classifyDiscoveryError()` maps transport/API failures to stable codes:
+  `rate_limited`, `auth_expired`, `auth_required`, `protected`, `nsfw`,
+  `not_found`, `operation_metadata`, `invalid_target`, `unknown`.
+- `resolveUserResult()` classifies protected/suspended/missing profiles from
+  `UserByScreenName` payloads (`UserUnavailable`).
+- Visible rate-limit retry countdown during discovery:
+  - `fetchWithRetry()` publishes wait windows via `rateLimitStatusListener`
+  - discovery state carries `retryAfterMs`, `retryUntil`, and `errorCode`
+  - Side Panel shows a live yellow countdown and keeps it ticking between
+    `queueChanged` messages
+- Sanitized regression fixtures under `tests/fixtures/`:
+  - `user-by-screen-name-ok.json`
+  - `user-by-screen-name-protected.json`
+  - `user-media-page1.json` (multi-photo, video bitrate pick, repost, tombstone, bottom cursor)
+  - `user-media-page2.json` (cursor page)
+
+### Changed
+- Discovery GraphQL `features` / `fieldToggles` expanded toward current X web
+  timeline request shape (aligned with Rank S Plucker captures; still needs
+  live signed-in verification).
+- `UserMedia` variables now include `withV2Timeline`, `withVoice`, and
+  `withQuickPromoteEligibilityTweetFields`; page size set to 20 to reduce 429s.
+- Timeline instruction extraction accepts both `timeline_v2` and legacy
+  `timeline` paths.
+- Bottom-cursor finder prefers the last `TimelineTimelineCursor` / `Bottom`
+  entry (Plucker-style).
+- Soft-unwrap skips deleted/NSFW individual timeline entries without aborting
+  the whole scan; profile-level failures still stop discovery.
+- Session check now also requires an `auth_token` cookie (not only `ct0`).
+- Side Panel shows a small **repost** badge on reposted queue items.
+
+### Rank S scrapyard review (supporting only)
+- **Plucker XBD (RANK S):** Feature-rich batch UI + media timeline intercept, but
+  depends on `apixbd.plucker.io` license/plan gating. Reused only conceptual
+  patterns (features blob, cursor entry shape, filename ideas). No third-party
+  auth/tier code imported.
+- **Rank A action-bar downloader:** Clean local filename/folder helpers and
+  action-bar UX; useful later for per-tweet “Add to queue”, not required for P0.
+- **Rank B exporter:** Supporting filter/batch code; lower priority UI.
+
+### Validation
+- All **23** local Node tests pass (`node --test tests/background.test.js`).
+- No live X data or signed-in session required for these tests.
+- Live-X checklist in WORKLIST remains open before declaring P0 complete.

@@ -1,0 +1,10 @@
+{
+  "data": {
+    "user": {
+      "result": {
+        "__typename": "UserUnavailable",
+        "reason": "Protected"
+      }
+    }
+  }
+}

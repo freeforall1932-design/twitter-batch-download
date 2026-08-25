@@ -1,6 +1,6 @@
 # Development Worklist
 
-_Last audited: 2026-08-24_
+_Last audited: 2026-08-25_
 
 ## Product target
 
@@ -15,7 +15,7 @@ The extension is **self-hosted against the signed-in X session only**. It does n
 | Area | Status | Evidence / gap |
 |---|---|---|
 | Manifest V3 extension / no build step | Done | Plain JS extension under this folder. |
-| Signed-in session setup | Partial | `background.js` reads `ct0`, cookie string, and Bearer token. Add a user-facing signed-in/error state and improve auth-error classification. |
+| Signed-in session setup | Partial | `background.js` reads `ct0`, `auth_token`, cookie string, and Bearer token. Auth/protected/rate-limit errors are classified for discovery; a dedicated signed-in status pill is still optional UX polish. |
 | Single-tweet GraphQL media lookup | Done, needs live verification | `TweetResultByRestId` query is implemented. Current yt-dlp still uses query ID `2ICDjqPd81tulZcYrtpTuQ`. |
 | Video and photo parsing | Done, needs live verification | Highest bitrate MP4 and `?name=orig` photos are parsed. |
 | Per-tweet action button | Done, needs selector verification | `content.js` injects into `article[data-testid="tweet"] [role="group"]`. |
@@ -23,10 +23,12 @@ The extension is **self-hosted against the signed-in X session only**. It does n
 | Side Panel UI | Done | Target input, discovery cap defaulting to 99,999, queue view, media filter, individual selection, Select all, Download selected/all. |
 | Persistent queue | Done | `chrome.storage.local` queue state in `background.js`. |
 | 1–2 download scheduler | Done | A new item starts only after `chrome.downloads.onChanged` reports a prior item terminal; default 2. |
-| Side Panel profile-media discovery | Implemented, requires live-X validation | The Discover control normalizes a profile target, reads current X bundle metadata, resolves the user, and pushes discovered media into the queue. |
-| Full-profile pagination / end-of-timeline completion | Implemented, requires live-X validation | Follows the bottom cursor until the cap, no/repeated cursor, or Stop discovery. |
-| Original post / repost / reply / quote inclusion rules | Partial | Original posts are scanned; the existing Include reposts option is now consumed. Replies and quoted media remain explicit future options. |
-| Discovery progress and rate-limit status | Partial | Resolving/page/found/completed/stopped/error states are shown. A visible retry countdown remains to be added. |
+| Side Panel profile-media discovery | Implemented, requires live-X validation | The Discover control normalizes a profile target, reads current X bundle metadata, resolves the user, and pushes discovered media into the queue. Features/variables expanded from Rank S captures; live response shapes still must be verified. |
+| Full-profile pagination / end-of-timeline completion | Implemented, requires live-X validation | Follows the bottom cursor until the cap, no/repeated cursor, or Stop discovery. Supports `timeline_v2` and legacy timeline paths. |
+| Original post / repost / reply / quote inclusion rules | Partial | Original posts are scanned; Include reposts is consumed and reposts get a queue badge. Replies and quoted media remain explicit future options. |
+| Discovery progress and rate-limit status | Implemented, requires live validation | Resolving/page/found/completed/stopped/error states are shown. 429/503 retries publish a visible Side Panel countdown (`retryAfterMs` / `retryUntil`). |
+| Specific discovery error classification | Implemented, requires live validation | Auth expired, auth required, protected, NSFW, not found, operation metadata, rate limited, and invalid target map to stable codes + user-facing copy. |
+| Sanitized regression fixtures | Partial | Local fixtures cover UserByScreenName ok/protected and UserMedia page1/page2 parsing. Replace/extend with sanitized live captures when available. |
 | Queue filename metadata | Implemented | Queue records include author, post date, tweet ID, media ID, thumbnail, repost flag, and filename. |
 | Queue retries / download byte progress | Implemented, requires browser validation | Up to three attempts for start/interruption failures, manual Retry failed action, and per-item percentage when Chrome exposes byte deltas. |
 | Direct file naming | Implemented | Queue filenames use the post's username and text; history and larger direct media downloads do not need a huge ZIP. |
@@ -51,11 +53,11 @@ Before marking the profile scanner complete, re-review the code and execute the 
 
 ### P0 — Live-X validation and hardening
 
-1. Run the re-review checklist with a signed-in X account and a small public profile.
-2. Use sanitized current first/cursor-page media responses to make operation extraction, variables, features, instruction parsing, cursor parsing, and repost logic exact.
-3. Add specific error handling for expired login, protected account, deleted content, NSFW state, operation metadata failure, and rate limiting.
-4. Add a visible rate-limit retry countdown and regression fixtures from sanitized data.
-
+1. ~~Add specific error handling for expired login, protected account, deleted content, NSFW state, operation metadata failure, and rate limiting.~~ Done locally (needs live wording check).
+2. ~~Add a visible rate-limit retry countdown and regression fixtures from sanitized data.~~ Done with synthetic fixtures; swap in live captures when available.
+3. **Next:** Run the re-review checklist with a signed-in X account and a small public profile.
+4. **Next:** Use sanitized current first/cursor-page media responses to make operation extraction, variables, features, instruction parsing, cursor parsing, and repost logic exact against live X.
+5. Optional: surface a persistent “signed in / not signed in” pill in the Side Panel header.
 ### P1 — Inclusion and review UX
 
 1. Add explicit Include replies and Include quoted media switches; do not include these implicitly.
@@ -103,6 +105,13 @@ Before marking the profile scanner complete, re-review the code and execute the 
 - Any behavior borrowed from that concept must be **reimplemented locally** against the signed-in X session using this repo's existing parser/queue/scheduler. Do **not** import third-party login, license checks, activation calls, or tier-gating logic.
 - Do **not** port the abandoned extension's "paid unlimited vs free limited" behavior. This extension has no paid/free distinction; its high community cap is just a local number.
 
+### Local scrapyard review (2026-08-25)
+
+| Rank | Extension | Usefulness for our worklist |
+|---|---|---|
+| **S** | Plucker XBD Media One-click Downloader | Highest conceptual value: media timeline intercept (`UserPhotoTimeline`/`UserVideoTimeline`/`UserMedia`), features blob, bottom-cursor entry parsing, batch download queue, filename templates, sidebar review UI. **Blocked as drop-in:** calls `apixbd.plucker.io`, plan_code / daily download gates. Reimplement patterns only. |
+| **A** | X/Twitter Video Downloader (Download Without Leaving X) | Strong local action-bar + filename/folder helpers (`{username}_{tweetId}_{date}_{type}_{index}`, optional username/tweet folders). Good later source for per-tweet “Add to queue” UX. No full-profile GraphQL scanner. |
+| **B** | X Exporter (tweets/followers/media/bookmarks) | Supporting batch/filter patterns; weaker UX; includes ExtPay-style licensing — do not import. |
 ### yt-dlp (`yt_dlp/extractor/twitter.py`)
 
 - The reviewed current file used `2ICDjqPd81tulZcYrtpTuQ/TweetResultByRestId` for a single tweet.
