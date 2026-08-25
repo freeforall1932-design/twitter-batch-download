@@ -109,34 +109,39 @@ New this session (2026-08-25): restructure so the extension can be **Load unpack
 - [x] Moved docs to `docs/`, tests to `tests/`, LICENSE + README to repo root; `extension/` now contains only browser-loaded files + icons.
 - [x] Flattened scrapyard to `reference/scrapyard/{rank-s-plucker-xbd, rank-a-video-downloader, rank-b-x-exporter}` (rank A/B were nested inside rank S; rank A extension was double-nested). Context notes + install instructions preserved per rank.
 - [x] Added `scripts/package-release.sh` → `releases/x-media-downloader-v<version>.zip` (manifest at zip root, optional date tag, Windows fallback documented); `releases/*.zip` gitignored.
-- [ ] **Try it out:** load `extension/` unpacked in a signed-in Chrome, then run the live-X checklist below end-to-end.
+- [x] **Try it out:** loaded unpacked and live-tested across rounds 1–3. Round 3 (2026-08-26, v3.3) passed the core checklist — user report: all functions work, no double entries, UI/UX already decent for deployment. Only the v3.4 quote-case spot-check (item 12 below) remains.
 - [ ] Cut the first release zip (`scripts/package-release.sh`) and confirm it loads from the unzipped folder.
-- [x] Bump `extension/manifest.json` version when shipping the next user-visible change — now at **3.3** (two new toolbar buttons + crash fix are user-visible); optionally start a `CHANGELOG.md` per release.
+- [x] Bump `extension/manifest.json` version when shipping the next user-visible change — now at **3.4** (quoted-media capture + Include quoted switches are user-visible); optionally start a `CHANGELOG.md` per release.
 
 ## P0 — remaining (live-X, round 3)
 
 Re-test **v3.3** against the exact v3.1 failures:
 
-1. **Homepage capture:** open `x.com/home`, scroll, confirm media lists without any reload.
-2. **In-tab route change:** from home click into a post, then to a profile, then to `/media`, all without reloading. Media must list on every view within a couple of seconds.
-3. **Profile posts vs /media:** on `https://x.com/real_loonarae` (the reported case) confirm the *posts* tab lists media, not only `/media`.
-4. **Video posts:** confirm videos appear (per-post resolve is rate-bounded to ~1/700ms, so a video-heavy view fills in progressively).
-5. **Auto-scroll:** start from the panel, confirm the in-page badge appears, that it scrolls continuously without waiting on downloads, and that Stop works from both the badge and the panel.
-6. **Speed:** compare Fast vs Medium; Fast should advance as soon as X renders the next batch.
-7. **One download action:** confirm `Select all` + `Download selected` is sufficient and nothing references a removed `Download all in tab`.
-8. **Skip already downloaded:** download a few items, clear the list, re-scroll the same view, and confirm they do not come back. Then untick the toggle and confirm they do.
-   - **New in v3.3 — never rendered in a browser yet:** confirm the two toolbar buttons added this session actually appear and work. `Clear finished` must drop only completed/failed rows and keep the rest. `Reset downloaded history` must make previously skipped media list again on the next scroll.
-9. **Action bar:** confirm both `Download` and `Add to queue` appear under media posts and that `Add to queue` lands in the Side Panel list.
-10. **Status pill:** confirm it reflects the current route, posts on screen, and pending video resolves; and that it warns when the tab is not X or needs a refresh.
-11. Remote fetch still works as the secondary path with clear rate-limit messaging.
-12. **Quoted post card (v3.4):** scroll past a post that is a GIF/video
+**Status (2026-08-26): items 1–11 PASSED** — user round-3 report: "all
+function work no double entry and the ui ux already decent for deployment."
+Still open: **item 12** (the v3.4 quote case, shipped after that test ran, so
+never executed in a browser) and **item 13** (live fixtures).
+
+1. ✅ **Homepage capture:** open `x.com/home`, scroll, confirm media lists without any reload.
+2. ✅ **In-tab route change:** from home click into a post, then to a profile, then to `/media`, all without reloading. Media must list on every view within a couple of seconds.
+3. ✅ **Profile posts vs /media:** on `https://x.com/real_loonarae` (the reported case) confirm the *posts* tab lists media, not only `/media`.
+4. ✅ **Video posts:** confirm videos appear (per-post resolve is rate-bounded to ~1/700ms, so a video-heavy view fills in progressively).
+5. ✅ **Auto-scroll:** start from the panel, confirm the in-page badge appears, that it scrolls continuously without waiting on downloads, and that Stop works from both the badge and the panel.
+6. ✅ **Speed:** compare Fast vs Medium; Fast should advance as soon as X renders the next batch.
+7. ✅ **One download action:** confirm `Select all` + `Download selected` is sufficient and nothing references a removed `Download all in tab`.
+8. ✅ **Skip already downloaded:** download a few items, clear the list, re-scroll the same view, and confirm they do not come back. Then untick the toggle and confirm they do.
+   - **v3.3 toolbar buttons** (`Clear finished`, `Reset downloaded history`): shipped in v3.3 and covered by the round-3 "all functions work" pass.
+9. ✅ **Action bar:** confirm both `Download` and `Add to queue` appear under media posts and that `Add to queue` lands in the Side Panel list.
+10. ✅ **Status pill:** confirm it reflects the current route, posts on screen, and pending video resolves; and that it warns when the tab is not X or needs a refresh.
+11. ✅ Remote fetch still works as the secondary path with clear rate-limit messaging.
+12. **PENDING — Quoted post card (v3.4):** scroll past a post that is a GIF/video
     reaction to a quoted ("mentioned") post. The card's media must list with
     a violet `quote` badge, attributed to the quoted post's author (not the
     reactor), and download named after the quoted post. Untick **Include
     quoted** in both tabs and confirm card media stops listing (existing rows
     stay). Also confirm the same quoted photo quoted by two different posts
     still produces exactly one row.
-13. Replace synthetic fixtures with sanitized live captures when available.
+13. **Open —** replace synthetic fixtures with sanitized live captures when available.
 
 ## P1 — inclusion and review UX
 

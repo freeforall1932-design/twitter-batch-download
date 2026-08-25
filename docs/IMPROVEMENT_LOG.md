@@ -4,6 +4,12 @@ Chronological implementation record for X Media Downloader.
 
 ## 2026-08-26 — Quoted-post media capture (the "mentioned post" card) — v3.4
 
+**Commits:** `08e68d0` (feature) + `b943a84` (review pass) on
+`arena/01a03ae9-twitter-batch-download` · **Round-3 context:** items 1–11 of
+the live checklist passed the same day (user report: all functions work, no
+double entries, UI/UX decent for deployment); this entry closes the one gap
+that test found.
+
 ### Report (live round 3)
 
 Live testing of v3.3 against real X: **all functions work, no double entries,

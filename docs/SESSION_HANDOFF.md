@@ -47,8 +47,10 @@ overrides, not the shim's defaults.
 
 Open questions to ask the user if they are available:
 
-- Did homepage / in-tab route-change capture actually work in v3.2?
-- Is auto-scroll "Fast" fast enough now, or should the pacing be more aggressive?
+- ~~Did homepage / in-tab route-change capture actually work in v3.2?~~ —
+  **answered by live round 3 (2026-08-26): all functions work, no double entries.**
+- ~~Is auto-scroll "Fast" fast enough now?~~ — no complaint raised in round 3;
+  revisit only if the user asks for more aggressive pacing.
 - Should the two tab lists (Scroll capture / Remote fetch) finally be unified?
   They were kept separate on explicit past request — do not merge without a new decision.
 - Are per-batch subfolders (e.g. `x-media/{username}/`) wanted? Rank A does this.
@@ -59,15 +61,17 @@ Open questions to ask the user if they are available:
 
 - Repository: `freeforall1932-design/twitter-batch-download`
 - Extension directory: `extension/` (the **Load unpacked** target)
-- Working branch for the last Arena session: `arena/01a03748-twitter-batch-download`
+- Working branch for the last Arena session: `arena/01a03ae9-twitter-batch-download`
 - Recent history:
   - **(v3.4, this branch)** — Quoted-post ("mentioned post" card) media
     capture: quote parsing in `mediaFromTweet`/`getTweetMedia` with
     quoted-post attribution, `isQuote` flag + `quote` badge, per-tab
-    **Include quoted** switches (default on), 7 new tests
-  - `arena/01a03748` — `document_start` null-root crash fix; `queueClearFinished` +
-    `queueClearDownloadedHistory` wired to toolbar buttons; message-contract and
-    style-injection regression tests (**v3.3**)
+    **Include quoted** switches (default on), 7 new tests; plus the
+    post-interrupt review pass (repost `rest_id` fallback restored,
+    README updated, seams documented) — commits `08e68d0` + `b943a84`
+  - `abb3062` — Merge PR #8 (**v3.3**: `document_start` null-root crash fix;
+    `queueClearFinished` + `queueClearDownloadedHistory` wired to toolbar
+    buttons; message-contract and style-injection regression tests)
   - `6370ba8` — Live-testing fixes: always-on capture, SPA routes, single download action (**v3.2**)
   - `4cded49` — Merge PR #6 (repo restructure + release packaging)
   - `4cc3782` — Rank S live capture bridge + Rank A download fallbacks
@@ -259,23 +263,21 @@ its owning post's `username` / `tweetId` / `text` / `isQuote`), `downloadFile`
 
 ## 5. What still needs live-X validation
 
-Offline tests cover logic, not X's live response shapes or rate limits. The full
-round-3 checklist lives in `docs/WORKLIST.md` → **"P0 — remaining (live-X, round 3)"**.
-Headline items:
+**Round 3 passed (2026-08-26, against v3.3).** The user reported: all
+functions work, no double entries, UI/UX already decent for deployment. That
+covers checklist items 1–11 of `docs/WORKLIST.md` → "P0 — remaining (live-X,
+round 3)". Offline tests still cover only logic, not X's live shapes, so two
+browser items remain open:
 
-- **Quote-card media (new in v3.4, checklist item 12):** a GIF/video reaction
-  to a quoted post must list the card's media too, with the quoted author and
-  a `quote` badge; **Include quoted** off must suppress it; the same quoted
-  photo quoted twice must stay a single row.
-- Homepage capture and in-tab route changes with no reload (the v3.1 failures).
-- A profile's **posts** listing media, not only `/media`.
-- Video posts filling in via the rate-bounded per-post resolve.
-- Auto-scroll start/stop, badge, and whether "Fast" is fast enough.
-- Skip-already-downloaded surviving a list clear.
-- `UserByScreenName` + `UserMedia` shapes for Remote fetch; 429 countdown;
-  protected / NSFW / expired-session messaging.
+- **Quote-card media (v3.4, checklist item 12)** — shipped *after* the
+  round-3 test, so it has never run in a browser: a GIF/video reaction to a
+  quoted post must list the card's media too, with the quoted author and a
+  `quote` badge; **Include quoted** off must suppress it; the same quoted
+  photo quoted by two different posts must stay a single row.
+- **First release zip** — `scripts/package-release.sh` output must be
+  confirmed to load from the unzipped folder.
 
-Do **not** declare P0 complete without a signed-in Chrome check.
+Do **not** declare P0 complete without the signed-in quote-case check.
 
 ### Required live data if something fails
 
@@ -342,15 +344,21 @@ capture bug should land there first as a failing test.
 
 ## 9. Next session priorities
 
-1. **Run the live checklist** in `docs/WORKLIST.md` → "P0 — remaining (live-X,
-   round 3)". It is written directly against the v3.1 failures v3.2 fixed.
-2. If capture still misses a view, get a sanitized GraphQL response from that
-   exact view and add it to `tests/fixtures/` as a regression test.
-3. If video posts fill in too slowly, tune the 700ms gap in `content.js`
-   (`drainPendingVideoTweets`) against real rate limits before raising it.
-4. Cut the first release zip once the round-3 spot-check (quote card + the
-   v3.3 items) passes; the manifest is already at **3.4**.
-5. P1 afterwards: Side Panel diagnostics + sanitized copy-debug-report, explicit
-   Include replies / quoted media switches, filename templates, per-batch
-   subfolders.
-6. Before finishing: update all three docs (log entry, worklist statuses, this file).
+1. **Live spot-check the v3.4 quote case** — WORKLIST round-3 item 12. Reload
+   `extension/` unpacked (manifest 3.4), scroll past a GIF/video reaction to a
+   quoted post, and confirm the card's media lists with the `quote` badge
+   under the quoted post's author; test the **Include quoted** switch in both
+   tabs. If a specific card still does not list, get a sanitized GraphQL
+   response from that exact view (§5 below) and add it to `tests/fixtures/`.
+2. **Cut the first release zip** (`scripts/package-release.sh` →
+   `releases/x-media-downloader-v3.4.zip`) and confirm it loads from the
+   unzipped folder. Optionally start `CHANGELOG.md`. With that plus item 1,
+   P0 is complete.
+3. P1 afterwards: Side Panel diagnostics + sanitized copy-debug-report,
+   explicit Include replies switch (quoted shipped in v3.4), filename
+   templates + video quality preference, per-batch subfolders if requested.
+4. Settled decisions that stay settled: separate scroll/remote lists (do not
+   merge without a new user decision), one download action, no ZIP,
+   no reply capture until it has its own switch.
+5. Before finishing: update all three docs (log entry, worklist statuses,
+   this file).
