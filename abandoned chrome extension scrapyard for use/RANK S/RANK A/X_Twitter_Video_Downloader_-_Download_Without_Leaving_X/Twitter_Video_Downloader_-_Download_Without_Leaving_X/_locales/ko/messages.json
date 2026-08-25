@@ -1,0 +1,329 @@
+{
+  "extName": {
+    "message": "X/Twitter 비디오 다운로더 - 동영상, 이미지, GIF 저장"
+  },
+  "extDescription": {
+    "message": "지원되는 공개 X/Twitter 게시물의 동영상, 이미지, GIF를 Chrome에서 바로 다운로드하세요. 계정이나 외부 다운로드 사이트가 필요하지 않습니다."
+  },
+  "extShortName": {
+    "message": "X/Twitter 다운로더"
+  },
+  "appSubtitle": {
+    "message": "공개 X/Twitter 미디어를 Chrome에서 바로 다운로드"
+  },
+  "badgeLocalOnly": {
+    "message": "로컬 우선"
+  },
+  "badgeNoMediaUpload": {
+    "message": "업로드 없음"
+  },
+  "badgeXTwitter": {
+    "message": "X/Twitter"
+  },
+  "tabQueue": {
+    "message": "대기열"
+  },
+  "tabSettings": {
+    "message": "설정"
+  },
+  "queueTitle": {
+    "message": "X/Twitter 다운로더"
+  },
+  "queueSubtitle": {
+    "message": "다운로드 대기열"
+  },
+  "queueEmptyTitle": {
+    "message": "다운로드 없음"
+  },
+  "queueEmptyDescription": {
+    "message": "지원되는 미디어가 있는 공개 X/Twitter 게시물을 열고 동영상, 이미지 또는 GIF를 저장하세요."
+  },
+  "onboardingBatchTitle": {
+    "message": "배치 대기열 진입"
+  },
+  "onboardingBatchBody": {
+    "message": "게시물 아래 버튼을 눌러 먼저 항목을 모은 뒤, 한 번에 다운로드하세요."
+  },
+  "queueSummaryDownloading": {
+    "message": "다운로드 중"
+  },
+  "queueSummaryWaiting": {
+    "message": "대기 중"
+  },
+  "queueSummaryDone": {
+    "message": "완료"
+  },
+  "queueSummaryFailed": {
+    "message": "실패"
+  },
+  "queueStatusWaiting": {
+    "message": "대기 중"
+  },
+  "queueStatusDownloading": {
+    "message": "다운로드 중"
+  },
+  "queueStatusDone": {
+    "message": "완료"
+  },
+  "queueStatusFailed": {
+    "message": "실패"
+  },
+  "queueRetry": {
+    "message": "재시도"
+  },
+  "queueRetrying": {
+    "message": "재시도 중..."
+  },
+  "queueRetryAllFailed": {
+    "message": "실패 항목 모두 재시도"
+  },
+  "queueClearCompleted": {
+    "message": "완료 항목 삭제"
+  },
+  "queueRefresh": {
+    "message": "새로고침"
+  },
+  "queueDownloadsContinue": {
+    "message": "팝업을 닫아도 다운로드는 계속됩니다."
+  },
+  "queueRetryQueued": {
+    "message": "재시도 대기열에 추가되었습니다."
+  },
+  "queueRetryFailed": {
+    "message": "다운로드를 재시도할 수 없습니다."
+  },
+  "queueNoDownloadsYet": {
+    "message": "다운로드 기록 없음."
+  },
+  "settingsStorage": {
+    "message": "저장소"
+  },
+  "skipDuplicateDownloads": {
+    "message": "중복 미디어 건너뛰기"
+  },
+  "skipDuplicateDownloadsHelp": {
+    "message": "이미 큐에 있거나 다운로드한 URL은 새 묶음에서 제외합니다."
+  },
+  "usernameFolder": {
+    "message": "사용자명 폴더"
+  },
+  "usernameFolderHelp": {
+    "message": "계정별로 그룹화합니다."
+  },
+  "tweetFolder": {
+    "message": "게시물 폴더"
+  },
+  "tweetFolderHelp": {
+    "message": "게시물별로 묶어 저장합니다."
+  },
+  "settingsDownload": {
+    "message": "다운로드"
+  },
+  "downloadConcurrency": {
+    "message": "동시 다운로드 수"
+  },
+  "downloadConcurrencyHelp": {
+    "message": "파일을 병렬로 다운로드합니다."
+  },
+  "concurrencySafe": {
+    "message": "1 · 안전"
+  },
+  "concurrencyRecommended": {
+    "message": "3 · 권장"
+  },
+  "concurrencyFast": {
+    "message": "5 · 빠름"
+  },
+  "settingsFilename": {
+    "message": "파일명"
+  },
+  "filenamePreset": {
+    "message": "파일명 프리셋"
+  },
+  "filenameCustom": {
+    "message": "사용자 지정"
+  },
+  "filenameTemplate": {
+    "message": "파일명 템플릿"
+  },
+  "filenameTemplateHelp": {
+    "message": "각 파일의 이름 형식을 설정합니다."
+  },
+  "filenameVariables": {
+    "message": "변수: {username} {tweetId} {date} {type} {index} {ext}"
+  },
+  "previewFilename": {
+    "message": "파일명 미리보기"
+  },
+  "savePath": {
+    "message": "저장 경로"
+  },
+  "saveSettings": {
+    "message": "설정 저장"
+  },
+  "settingsReady": {
+    "message": "준비 완료. 지원되는 미디어가 있는 공개 X/Twitter 게시물을 열고 '미디어 저장'을 클릭하세요."
+  },
+  "settingsSaved": {
+    "message": "설정이 저장되었습니다."
+  },
+  "settingsSaveFailed": {
+    "message": "설정을 저장할 수 없습니다."
+  },
+  "settingsLoadFailed": {
+    "message": "기본 설정을 사용합니다."
+  },
+  "filenameTemplateMissingExt": {
+    "message": "파일명 템플릿에 {ext}가 필요합니다."
+  },
+  "filenameTemplateTipTweetId": {
+    "message": "저장됨. 팁: {tweetId}를 포함하면 중복을 방지할 수 있습니다."
+  },
+  "filenameTemplateEmpty": {
+    "message": "파일명 템플릿을 입력하세요."
+  },
+  "saveMedia": {
+    "message": "미디어 저장"
+  },
+  "bulkSaveMedia": {
+    "message": "미디어 일괄 저장"
+  },
+  "checking": {
+    "message": "확인 중..."
+  },
+  "adding": {
+    "message": "추가 중..."
+  },
+  "inQueue": {
+    "message": "대기열에 있음"
+  },
+  "downloading": {
+    "message": "다운로드 중"
+  },
+  "done": {
+    "message": "완료"
+  },
+  "retry": {
+    "message": "재시도"
+  },
+  "noMedia": {
+    "message": "미디어 없음"
+  },
+  "alreadyDownloaded": {
+    "message": "이미 다운로드됨."
+  },
+  "toastNoMediaFound": {
+    "message": "이 게시물에서 미디어를 찾을 수 없습니다."
+  },
+  "toastAddedToQueue": {
+    "message": "다운로드 대기열에 추가되었습니다."
+  },
+  "toastAlreadyInQueue": {
+    "message": "이 게시물은 이미 대기열에 있습니다."
+  },
+  "toastBulkQueuedSummary": {
+    "message": "$1개를 추가했고 $2개 중복을 건너뛰었습니다."
+  },
+  "toastRetryQueued": {
+    "message": "재시도 대기열에 추가되었습니다."
+  },
+  "toastRetryFailed": {
+    "message": "다운로드를 재시도할 수 없습니다."
+  },
+  "toastCouldNotAddToQueue": {
+    "message": "대기열에 추가할 수 없습니다."
+  },
+  "toastExtensionUpdated": {
+    "message": "확장 프로그램이 업데이트되었습니다. 페이지를 새로고침 후 다시 시도하세요."
+  },
+  "openXAndClickSaveMedia": {
+    "message": "지원되는 미디어가 있는 공개 X/Twitter 게시물을 열고 동영상, 이미지 또는 GIF를 저장하세요."
+  },
+  "localPrivacyNote": {
+    "message": "지원되는 공개 게시물의 미디어는 브라우저 안에서 로컬로 처리됩니다. 업로드할 필요가 없고 계정도 필요하지 않습니다."
+  },
+  "bulkQueueTitle": {
+    "message": "Review Queue"
+  },
+  "bulkQueueSubtitle": {
+    "message": "Edit what gets downloaded"
+  },
+  "bulkQueueSummary": {
+    "message": "$1 items from $2 posts ready to review."
+  },
+  "bulkQueueEmpty": {
+    "message": "Open a public X/Twitter post with media to add videos, images, or GIFs."
+  },
+  "bulkQueueRefresh": {
+    "message": "Refresh"
+  },
+  "bulkQueueClear": {
+    "message": "Clear"
+  },
+  "bulkQueueDownloadAll": {
+    "message": "Download All"
+  },
+  "bulkQueueStarting": {
+    "message": "Starting..."
+  },
+  "toastQueueReady": {
+    "message": "Queue ready. Review and edit before downloading."
+  },
+  "toastQueueOpened": {
+    "message": "Queue opened."
+  },
+  "toastQueueCleared": {
+    "message": "Queue cleared."
+  },
+  "toastQueueItemRemoved": {
+    "message": "Removed from queue."
+  },
+  "toastQueueGroupRemoved": {
+    "message": "Post removed from queue."
+  },
+  "bulkQueueRemovePost": {
+    "message": "Remove post"
+  },
+  "bulkQueueGroupMeta": {
+    "message": "$1 items · $2"
+  },
+  "bulkQueueOnePost": {
+    "message": "One post"
+  },
+  "bulkQueueFromPost": {
+    "message": "Post media"
+  },
+  "bulkQueueLooseMedia": {
+    "message": "Unsorted media"
+  },
+  "unknownSource": {
+    "message": "Unknown source"
+  },
+  "hideQueue": {
+    "message": "Hide queue"
+  },
+  "addToBatch": {
+    "message": "Batch"
+  },
+  "addToBatchHint": {
+    "message": "Add this post's media to the batch queue."
+  },
+  "addingToBatch": {
+    "message": "Adding..."
+  },
+  "toastAddedToBatch": {
+    "message": "Added to batch queue."
+  },
+  "toastAlreadyInBatch": {
+    "message": "This post is already in the batch queue."
+  },
+  "toastQueueRefreshed": {
+    "message": "Queue refreshed."
+  },
+  "scanning": {
+    "message": "Scanning..."
+  },
+  "preparingQueue": {
+    "message": "Preparing queue..."
+  }
+}

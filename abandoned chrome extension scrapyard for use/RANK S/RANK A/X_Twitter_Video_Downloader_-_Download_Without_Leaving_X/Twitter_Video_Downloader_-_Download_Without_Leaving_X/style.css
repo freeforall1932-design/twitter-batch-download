@@ -1,0 +1,164 @@
+.xmv-download-wrapper {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 6px !important;
+  width: auto !important;
+  height: auto !important;
+  margin-top: 8px !important;
+  margin-left: 0 !important;
+  padding: 0 !important;
+  position: relative !important;
+  flex: 0 0 auto !important;
+  align-self: flex-start !important;
+  z-index: 10 !important;
+}
+
+.xmv-button-group {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  flex-wrap: nowrap !important;
+  white-space: nowrap !important;
+}
+
+.xmv-download-button {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: auto !important;
+  min-width: 112px !important;
+  max-width: 160px !important;
+  height: 32px !important;
+  min-height: 32px !important;
+  max-height: 32px !important;
+  padding: 0 12px !important;
+  margin: 0 !important;
+  border: none !important;
+  border-radius: 999px !important;
+  background: #118577 !important;
+  color: #ffffff !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+  cursor: pointer !important;
+  position: relative !important;
+  flex: 0 0 auto !important;
+  align-self: flex-start !important;
+  writing-mode: horizontal-tb !important;
+  text-orientation: mixed !important;
+  transform: none !important;
+  box-sizing: border-box !important;
+  z-index: 9999 !important;
+}
+
+.xmv-download-button:hover {
+  background: #0c6d62 !important;
+}
+
+.xmv-download-button:active {
+  transform: scale(0.98) !important;
+}
+
+.xmv-add-batch-button {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: auto !important;
+  min-width: 112px !important;
+  max-width: 160px !important;
+  height: 32px !important;
+  min-height: 32px !important;
+  max-height: 32px !important;
+  padding: 0 12px !important;
+  margin: 0 !important;
+  border: none !important;
+  border-radius: 999px !important;
+  background: #118577 !important;
+  color: #ffffff !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+  cursor: pointer !important;
+  position: relative !important;
+  flex: 0 0 auto !important;
+  align-self: flex-start !important;
+  box-sizing: border-box !important;
+  z-index: 9999 !important;
+}
+
+.xmv-add-batch-button:hover {
+  background: #0c6d62 !important;
+}
+
+.xmv-add-batch-button:disabled {
+  opacity: 0.75 !important;
+  cursor: wait !important;
+}
+
+.xmv-toast {
+  position: fixed !important;
+  right: 24px !important;
+  bottom: 24px !important;
+  padding: 10px 14px !important;
+  border-radius: 999px !important;
+  background: #111827 !important;
+  color: #ffffff !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  z-index: 2147483647 !important;
+  opacity: 0 !important;
+  transform: translateY(8px) !important;
+  transition: opacity 160ms ease, transform 160ms ease !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18) !important;
+  pointer-events: none !important;
+}
+
+.xmv-toast-visible {
+  opacity: 1 !important;
+  transform: translateY(0) !important;
+}
+
+.xmv-toast-success {
+  background: #118577 !important;
+}
+
+.xmv-toast-warning {
+  background: #b45309 !important;
+}
+
+.xmv-toast-error {
+  background: #b91c1c !important;
+}
+
+.xmv-download-button.xmv-state-queued {
+  background: #475467 !important;
+}
+
+.xmv-download-button.xmv-state-downloading {
+  background: #2563eb !important;
+}
+
+.xmv-download-button.xmv-state-completed {
+  background: #15803d !important;
+}
+
+.xmv-download-button.xmv-state-failed {
+  background: #b91c1c !important;
+}
+
+.xmv-download-button.xmv-state-no-media {
+  background: #9ca3af !important;
+  cursor: not-allowed !important;
+}
+
+.xmv-download-button:disabled {
+  opacity: 0.85 !important;
+  cursor: wait !important;
+}
+
+.xmv-download-button.xmv-state-no-media:disabled {
+  cursor: not-allowed !important;
+}

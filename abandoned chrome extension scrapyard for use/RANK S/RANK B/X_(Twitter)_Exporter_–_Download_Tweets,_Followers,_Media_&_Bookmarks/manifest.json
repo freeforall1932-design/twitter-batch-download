@@ -1,0 +1,52 @@
+{
+"update_url": "https://clients2.google.com/service/update2/crx",
+
+  "manifest_version": 3,
+  "name": "X (Twitter) Exporter – Download Tweets, Followers, Media & Bookmarks",
+  "version": "1.0.3",
+  "description": "Export tweets, bookmarks, lists and much more from Twitter(X) web app.",
+  "permissions": [
+    "scripting",
+    "activeTab",
+    "storage"
+  ],
+  "host_permissions": [
+    "*://twitter.com/*",
+    "*://x.com/*"
+  ],
+  "icons": {
+    "16": "icon16.png",
+    "64": "icon64.png",
+    "128": "icon128.png"
+  },
+  "action": {
+    "default_title": "Toggle Control Panel",
+    "default_icon": {
+      "16": "icon16.png",
+      "64": "icon64.png",
+      "128": "icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://twitter.com/*", "*://x.com/*"],
+      "js": ["content-script.js"],
+      "css": ["injected.css"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://extensionpay.com/*"],
+      "js": ["ExtPay.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["injected.js", "injected.css", "assets/*"],
+      "matches": ["*://twitter.com/*", "*://x.com/*"]
+    }
+  ]
+}

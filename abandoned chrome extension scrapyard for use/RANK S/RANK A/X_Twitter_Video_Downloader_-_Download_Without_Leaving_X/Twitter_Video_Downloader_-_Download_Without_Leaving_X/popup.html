@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title></title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="app">
+      <header class="header">
+        <img class="logo" src="icons/icon48.png" alt="X/Twitter Downloader logo" width="40" height="40">
+        <div>
+          <h1 class="title" data-i18n="queueTitle"></h1>
+          <p class="subtitle" data-i18n="appSubtitle"></p>
+        </div>
+      </header>
+
+      <section class="card compact-section">
+        <div class="badge-row">
+          <span class="badge" data-i18n="badgeLocalOnly"></span>
+          <span class="badge" data-i18n="badgeNoMediaUpload"></span>
+          <span class="badge" data-i18n="badgeXTwitter"></span>
+        </div>
+      </section>
+
+      <div class="tab-row">
+        <button id="queueTabButton" class="tab-button active" type="button" data-i18n="tabQueue"></button>
+        <button id="settingsTabButton" class="tab-button" type="button" data-i18n="tabSettings"></button>
+      </div>
+
+      <div id="queuePanel" class="panel queue-panel">
+        <section id="emptyStateCard" class="card empty-state-card">
+          <p class="empty-state-eyebrow" data-i18n="onboardingEyebrow"></p>
+          <h2 class="empty-state-title" data-i18n="queueEmptyTitle"></h2>
+          <p class="empty-state-body" data-i18n="queueEmptyDescription"></p>
+          <div class="empty-state-demo">
+            <div class="tweet-mock">
+              <div class="tweet-mock-header">
+                <span class="tweet-avatar"></span>
+                <div class="tweet-lines">
+                  <span class="tweet-line tweet-line-strong"></span>
+                  <span class="tweet-line"></span>
+                </div>
+              </div>
+              <div class="tweet-media-grid">
+                <span class="tweet-media-block"></span>
+                <span class="tweet-media-block tweet-media-block-soft"></span>
+              </div>
+              <div class="tweet-save-row">
+                <span class="tweet-save-pill" data-i18n="saveMedia"></span>
+                <span class="tweet-save-hint" data-i18n="onboardingButtonHint"></span>
+              </div>
+            </div>
+
+            <div class="queue-mock">
+              <div class="queue-mock-header">
+                <span data-i18n="onboardingQueueTitle"></span>
+                <span class="queue-mock-status" data-i18n="onboardingQueueDone"></span>
+              </div>
+              <div class="queue-mock-bar">
+                <span class="queue-mock-fill"></span>
+              </div>
+              <p class="queue-mock-copy" data-i18n="onboardingQueueBody"></p>
+            </div>
+          </div>
+          <div class="empty-state-steps">
+            <div class="empty-state-step">
+              <span class="step-number">1</span>
+              <span data-i18n="onboardingStepOne"></span>
+            </div>
+            <div class="empty-state-step">
+              <span class="step-number">2</span>
+              <span data-i18n="onboardingStepTwo"></span>
+            </div>
+            <div class="empty-state-step">
+              <span class="step-number">3</span>
+              <span data-i18n="onboardingStepThree"></span>
+            </div>
+          </div>
+          <div class="empty-state-batch-tip">
+            <p class="empty-state-batch-title" data-i18n="onboardingBatchTitle"></p>
+            <p class="empty-state-batch-body" data-i18n="onboardingBatchBody"></p>
+          </div>
+          <p class="empty-state-note" data-i18n="localPrivacyNote"></p>
+        </section>
+
+        <section id="batchQueueCard" class="card queue-card hidden">
+          <div class="queue-card-header">
+            <div>
+              <p class="queue-card-eyebrow" data-i18n="batchQueueEyebrow"></p>
+              <h2 class="queue-card-title" data-i18n="batchQueueTitle"></h2>
+            </div>
+          </div>
+          <div id="batchQueueSummary" class="queue-summary"></div>
+          <div id="batchQueueList" class="queue-list"></div>
+          <div class="queue-actions">
+            <button id="refreshBatchQueueButton" class="secondary-button" type="button" data-i18n="batchQueueRefresh"></button>
+            <button id="clearBatchQueueButton" class="secondary-button" type="button" data-i18n="batchQueueClear"></button>
+            <button id="downloadBatchQueueButton" class="secondary-button batch-download-button" type="button" data-i18n="batchQueueDownloadAll"></button>
+          </div>
+          <p class="queue-hint" data-i18n="batchQueueHint"></p>
+        </section>
+
+        <section id="queueCard" class="card queue-card hidden">
+          <div class="queue-card-header">
+            <div>
+              <p class="queue-card-eyebrow" data-i18n="tabQueue"></p>
+              <h2 class="queue-card-title" data-i18n="queueSubtitle"></h2>
+            </div>
+          </div>
+          <div id="queueSummary" class="queue-summary"></div>
+          <div id="queueList" class="queue-list"></div>
+          <div class="queue-actions">
+            <button id="clearCompletedButton" class="secondary-button" type="button" data-i18n="queueClearCompleted"></button>
+            <button id="retryAllFailedButton" class="secondary-button retry-button" type="button" data-i18n="queueRetryAllFailed"></button>
+            <button id="refreshQueueButton" class="secondary-button" type="button" data-i18n="queueRefresh"></button>
+          </div>
+          <p class="queue-hint" data-i18n="queueDownloadsContinue"></p>
+        </section>
+      </div>
+
+      <div id="settingsPanel" class="panel settings-panel hidden">
+        <div class="settings-scroll">
+          <section class="card settings-hero">
+            <p class="settings-eyebrow" data-i18n="tabSettings"></p>
+            <h2 class="settings-title" data-i18n="settingsHeroTitle"></h2>
+            <p class="settings-body" data-i18n="settingsHeroBody"></p>
+          </section>
+
+          <section class="card settings-card">
+            <div class="section-title" data-i18n="settingsStorage"></div>
+
+            <div class="setting-row setting-row-card">
+              <div class="setting-label">
+                <strong data-i18n="usernameFolder"></strong>
+                <span data-i18n="usernameFolderHelp"></span>
+              </div>
+              <label class="switch">
+                <input id="usernameFolderCheckbox" type="checkbox">
+                <span class="switch-slider"></span>
+              </label>
+            </div>
+
+            <div class="setting-row setting-row-card">
+              <div class="setting-label">
+                <strong data-i18n="skipDuplicateDownloads"></strong>
+                <span data-i18n="skipDuplicateDownloadsHelp"></span>
+              </div>
+              <label class="switch">
+                <input id="skipDuplicateDownloadsCheckbox" type="checkbox">
+                <span class="switch-slider"></span>
+              </label>
+            </div>
+
+            <div class="setting-row setting-row-card">
+              <div class="setting-label">
+                <strong data-i18n="tweetFolder"></strong>
+                <span data-i18n="tweetFolderHelp"></span>
+              </div>
+              <label class="switch">
+                <input id="tweetFolderCheckbox" type="checkbox">
+                <span class="switch-slider"></span>
+              </label>
+            </div>
+          </section>
+
+          <section class="card settings-card">
+            <div class="section-title" data-i18n="settingsDownload"></div>
+            <div class="setting-row setting-row-stack">
+              <label class="setting-label" for="concurrencySelect">
+                <strong data-i18n="downloadConcurrency"></strong>
+                <span data-i18n="downloadConcurrencyHelp"></span>
+              </label>
+              <select id="concurrencySelect"></select>
+            </div>
+          </section>
+
+          <details class="card advanced-card">
+            <summary class="advanced-summary">
+              <span class="advanced-copy">
+                <span class="advanced-title" data-i18n="settingsAdvancedTitle"></span>
+                <span class="advanced-subtitle" data-i18n="settingsAdvancedBody"></span>
+              </span>
+              <span class="advanced-chevron" aria-hidden="true"></span>
+            </summary>
+
+            <div class="advanced-content">
+              <div class="section-title" data-i18n="settingsFilename"></div>
+              <div class="setting-row setting-row-stack">
+                <label class="setting-label" for="filenamePresetSelect">
+                  <strong data-i18n="filenamePreset"></strong>
+                </label>
+                <select id="filenamePresetSelect" class="preset-select">
+                  <option value="organized">{username}_{tweetId}_{date}_{type}_{index}.{ext}</option>
+                  <option value="short">{username}_{type}_{index}.{ext}</option>
+                  <option value="dateFirst">{date}_{username}_{type}_{index}.{ext}</option>
+                  <option value="custom" data-i18n-option="filenameCustom">Custom</option>
+                </select>
+              </div>
+
+              <div class="setting-row setting-row-stack">
+                <label class="setting-label" for="filenameTemplateInput">
+                  <strong data-i18n="filenameTemplate"></strong>
+                </label>
+                <input
+                  id="filenameTemplateInput"
+                  type="text"
+                  spellcheck="false"
+                  data-i18n-placeholder="filenameVariables"
+                >
+                <p class="variables-line" data-i18n="filenameVariables"></p>
+              </div>
+
+              <div class="preview-box">
+                <div class="preview-label" data-i18n="previewFilename"></div>
+                <div id="filenamePreview" class="preview-code"></div>
+              </div>
+
+              <div class="preview-box">
+                <div class="preview-label" data-i18n="savePath"></div>
+                <div id="pathPreview" class="preview-code"></div>
+              </div>
+            </div>
+          </details>
+        </div>
+
+        <div class="settings-footer">
+          <div id="statusMessage" class="status" aria-live="polite"></div>
+          <button id="saveButton" class="primary-button" type="button" data-i18n="saveSettings"></button>
+        </div>
+      </div>
+
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -1,0 +1,443 @@
+{
+  "extName": {
+    "message": "X/Twitter 视频下载器 - 不离开 X 直接保存"
+  },
+  "extDescription": {
+    "message": "直接在 X/Twitter 页面保存公开帖子里的视频、图片和 GIF。无需账号、无需上传、无需第三方下载网站。"
+  },
+  "extShortName": {
+    "message": "X/Twitter 下载器"
+  },
+  "appSubtitle": {
+    "message": "在 X/Twitter 页面批量保存公开视频、图片和 GIF，无需上传或跳转第三方网站"
+  },
+  "badgeLocalOnly": {
+    "message": "本地优先"
+  },
+  "badgeNoMediaUpload": {
+    "message": "无上传"
+  },
+  "badgeXTwitter": {
+    "message": "X/Twitter"
+  },
+  "tabQueue": {
+    "message": "下载"
+  },
+  "tabSettings": {
+    "message": "设置"
+  },
+  "queueTitle": {
+    "message": "X/Twitter 下载器"
+  },
+  "queueSubtitle": {
+    "message": "下载记录"
+  },
+  "queueEmptyTitle": {
+    "message": "还没有下载记录"
+  },
+  "queueEmptyDescription": {
+    "message": "打开包含视频、图片或 GIF 的公开 X/Twitter 帖子，即可开始保存。"
+  },
+  "onboardingEyebrow": {
+    "message": "开始使用"
+  },
+  "onboardingTitle": {
+    "message": "不用离开 X，直接保存媒体"
+  },
+  "onboardingBody": {
+    "message": "第一次成功下载通常只需要几秒。打开一条公开帖子，点击帖子上的“保存媒体”，文件就会直接在 Chrome 中本地保存。"
+  },
+  "onboardingButtonHint": {
+    "message": "按钮会直接出现在帖子下方"
+  },
+  "onboardingQueueTitle": {
+    "message": "下载队列会自动更新"
+  },
+  "onboardingQueueDone": {
+    "message": "保存中"
+  },
+  "onboardingQueueBody": {
+    "message": "点击后，这里会显示进度、完成状态和失败重试。"
+  },
+  "onboardingStepOne": {
+    "message": "打开一条包含视频、图片组或 GIF 的公开 X/Twitter 帖子。"
+  },
+  "onboardingStepTwo": {
+    "message": "点击帖子上出现的“保存媒体”按钮。"
+  },
+  "onboardingStepThree": {
+    "message": "回到这里查看队列，Chrome 会自动继续保存每个文件。"
+  },
+  "onboardingBatchTitle": {
+    "message": "批量队列入口"
+  },
+  "onboardingBatchBody": {
+    "message": "在帖子下方点击“批量队列”，先加入队列再统一下载。"
+  },
+  "queueSummaryDownloading": {
+    "message": "下载中"
+  },
+  "queueSummaryWaiting": {
+    "message": "等待中"
+  },
+  "queueSummaryDone": {
+    "message": "已完成"
+  },
+  "queueSummaryFailed": {
+    "message": "失败"
+  },
+  "queueStatusWaiting": {
+    "message": "等待中"
+  },
+  "queueStatusDownloading": {
+    "message": "下载中"
+  },
+  "queueStatusDone": {
+    "message": "已完成"
+  },
+  "queueStatusFailed": {
+    "message": "失败"
+  },
+  "queueRetry": {
+    "message": "重试"
+  },
+  "queueRetrying": {
+    "message": "重试中..."
+  },
+  "queueRetryAllFailed": {
+    "message": "重试所有失败"
+  },
+  "queueClearCompleted": {
+    "message": "清除已完成"
+  },
+  "queueRefresh": {
+    "message": "刷新"
+  },
+  "queueDownloadsContinue": {
+    "message": "关闭弹窗后下载仍会继续。"
+  },
+  "queueRetryQueued": {
+    "message": "已加入重试队列。"
+  },
+  "queueRetryFailed": {
+    "message": "无法重试下载。"
+  },
+  "queueNoDownloadsYet": {
+    "message": "还没有下载记录。"
+  },
+  "settingsStorage": {
+    "message": "保存方式"
+  },
+  "skipDuplicateDownloads": {
+    "message": "跳过重复媒体"
+  },
+  "skipDuplicateDownloadsHelp": {
+    "message": "将已在队列中或已下载的 URL 排除在新批次之外。"
+  },
+  "settingsHeroTitle": {
+    "message": "按你的方式保存媒体"
+  },
+  "settingsHeroBody": {
+    "message": "常用设置放前面，高级命名按需展开。"
+  },
+  "settingsAdvancedTitle": {
+    "message": "高级命名"
+  },
+  "settingsAdvancedBody": {
+    "message": "文件名模板、保存路径预览和自定义命名规则都在这里。"
+  },
+  "usernameFolder": {
+    "message": "用户名文件夹"
+  },
+  "usernameFolderHelp": {
+    "message": "按账号分组保存。"
+  },
+  "tweetFolder": {
+    "message": "推文文件夹"
+  },
+  "tweetFolderHelp": {
+    "message": "每条推文单独存放。"
+  },
+  "settingsDownload": {
+    "message": "下载速度"
+  },
+  "downloadConcurrency": {
+    "message": "并发下载数"
+  },
+  "downloadConcurrencyHelp": {
+    "message": "同时保存多个文件。"
+  },
+  "concurrencySafe": {
+    "message": "1 · 安全"
+  },
+  "concurrencyRecommended": {
+    "message": "3 · 推荐"
+  },
+  "concurrencyFast": {
+    "message": "5 · 快速"
+  },
+  "settingsFilename": {
+    "message": "文件名"
+  },
+  "filenamePreset": {
+    "message": "文件名预设"
+  },
+  "filenameCustom": {
+    "message": "自定义"
+  },
+  "filenameTemplate": {
+    "message": "文件名模板"
+  },
+  "filenameTemplateHelp": {
+    "message": "控制每个文件下载前的命名方式。"
+  },
+  "filenameVariables": {
+    "message": "变量: {username} {tweetId} {date} {type} {index} {ext}"
+  },
+  "previewFilename": {
+    "message": "文件名预览"
+  },
+  "savePath": {
+    "message": "保存路径"
+  },
+  "saveSettings": {
+    "message": "保存设置"
+  },
+  "settingsReady": {
+    "message": "就绪。打开带有媒体的公开 X/Twitter 帖子，然后点击“保存媒体”。"
+  },
+  "settingsSaved": {
+    "message": "设置已保存。"
+  },
+  "settingsSaveFailed": {
+    "message": "无法保存设置。"
+  },
+  "settingsLoadFailed": {
+    "message": "已使用默认设置。"
+  },
+  "filenameTemplateMissingExt": {
+    "message": "文件名模板必须包含 {ext}。"
+  },
+  "filenameTemplateTipTweetId": {
+    "message": "已保存。提示: 加入 {tweetId} 可以避免重名。"
+  },
+  "filenameTemplateEmpty": {
+    "message": "文件名模板不能为空。"
+  },
+  "saveMedia": {
+    "message": "保存媒体"
+  },
+  "bulkSaveMedia": {
+    "message": "批量保存媒体"
+  },
+  "addToBatch": {
+    "message": "批量队列"
+  },
+  "addToBatchHint": {
+    "message": "将这条帖子的媒体加入批量队列。"
+  },
+  "checking": {
+    "message": "检查中..."
+  },
+  "adding": {
+    "message": "添加中..."
+  },
+  "inQueue": {
+    "message": "队列中"
+  },
+  "downloading": {
+    "message": "下载中"
+  },
+  "done": {
+    "message": "已完成"
+  },
+  "retry": {
+    "message": "重试"
+  },
+  "noMedia": {
+    "message": "无媒体"
+  },
+  "alreadyDownloaded": {
+    "message": "已下载过。"
+  },
+  "toastNoMediaFound": {
+    "message": "这条帖子里没有找到媒体。"
+  },
+  "toastAddedToQueue": {
+    "message": "已加入下载队列。"
+  },
+  "toastAlreadyInQueue": {
+    "message": "这条帖子已在下载队列中。"
+  },
+  "toastBulkQueuedSummary": {
+    "message": "已添加 $1 项，跳过 $2 个重复项。"
+  },
+  "toastRetryQueued": {
+    "message": "已加入重试队列。"
+  },
+  "toastRetryFailed": {
+    "message": "无法重试下载。"
+  },
+  "toastCouldNotAddToQueue": {
+    "message": "无法加入队列。"
+  },
+  "toastExtensionUpdated": {
+    "message": "插件已更新，请刷新当前 X 页面后重试。"
+  },
+  "openXAndClickSaveMedia": {
+    "message": "打开带有视频、图片或 GIF 的公开 X/Twitter 帖子，然后点击“保存媒体”。"
+  },
+  "localPrivacyNote": {
+    "message": "支持的公开帖子媒体只会在浏览器本地处理，无需上传，也不需要账号。"
+  },
+  "bulkQueueTitle": {
+    "message": "批量队列"
+  },
+  "batchQueueEyebrow": {
+    "message": "批量队列"
+  },
+  "batchQueueTitle": {
+    "message": "批量队列"
+  },
+  "batchQueueSummary": {
+    "message": "$1 项媒体，来自 $2 条帖子，可先下载。"
+  },
+  "batchQueueEmpty": {
+    "message": "批量队列里还没有内容。"
+  },
+  "batchQueueRefresh": {
+    "message": "刷新"
+  },
+  "batchQueueClear": {
+    "message": "清空"
+  },
+  "batchQueueDownloadAll": {
+    "message": "全部下载"
+  },
+  "batchQueueHint": {
+    "message": "从 X/Twitter 帖子加入的媒体会保留在这里，直到下载或移除。"
+  },
+  "batchQueueRemoveItem": {
+    "message": "移除"
+  },
+  "batchQueueCleared": {
+    "message": "批量队列已清空。"
+  },
+  "batchQueueClearFailed": {
+    "message": "无法清空批量队列。"
+  },
+  "batchQueueDownloading": {
+    "message": "下载中..."
+  },
+  "batchQueueDownloadStarted": {
+    "message": "已加入下载队列。"
+  },
+  "batchQueueDownloadFailed": {
+    "message": "无法开始批量下载。"
+  },
+  "batchQueueItemRemoved": {
+    "message": "已从批量队列移除。"
+  },
+  "batchQueueRemoveFailed": {
+    "message": "无法移除项目。"
+  },
+  "bulkQueueSubtitle": {
+    "message": "先检查，再下载"
+  },
+  "bulkQueueSummary": {
+    "message": "$1 项媒体，来自 $2 条帖子，可先检查后下载。"
+  },
+  "bulkQueueEmpty": {
+    "message": "打开一条带有媒体的公开 X/Twitter 帖子，即可把视频、图片或 GIF 加入队列。"
+  },
+  "bulkQueueRefresh": {
+    "message": "重新扫描"
+  },
+  "bulkQueueClear": {
+    "message": "清空"
+  },
+  "bulkQueueDownloadAll": {
+    "message": "全部下载"
+  },
+  "bulkQueueStarting": {
+    "message": "开始中..."
+  },
+  "toastQueueReady": {
+    "message": "队列已准备好，先检查再下载。"
+  },
+  "toastQueueOpened": {
+    "message": "队列已打开。"
+  },
+  "toastQueueCleared": {
+    "message": "队列已清空。"
+  },
+  "toastQueueItemRemoved": {
+    "message": "已从队列移除。"
+  },
+  "toastQueueGroupRemoved": {
+    "message": "已将这条帖子从队列移除。"
+  },
+  "bulkQueueRemovePost": {
+    "message": "移除帖子"
+  },
+  "bulkQueueGroupMeta": {
+    "message": "$1 项 · $2"
+  },
+  "bulkQueueOnePost": {
+    "message": "一条帖子"
+  },
+  "bulkQueueFromPost": {
+    "message": "帖子媒体"
+  },
+  "bulkQueueLooseMedia": {
+    "message": "未分组媒体"
+  },
+  "unknownSource": {
+    "message": "未知来源"
+  },
+  "hideQueue": {
+    "message": "隐藏队列"
+  },
+  "addingToBatch": {
+    "message": "加入中..."
+  },
+  "toastAddedToBatch": {
+    "message": "已加入批量队列。"
+  },
+  "toastAlreadyInBatch": {
+    "message": "这条帖子已在批量队列中。"
+  },
+  "toastQueueRefreshed": {
+    "message": "队列已重新扫描。"
+  },
+  "scanning": {
+    "message": "扫描中..."
+  },
+  "preparingQueue": {
+    "message": "准备队列..."
+  },
+  "bulkQueueMoveGroupUp": {
+    "message": "上移帖子"
+  },
+  "bulkQueueMoveGroupDown": {
+    "message": "下移帖子"
+  },
+  "bulkQueueMoveItemUp": {
+    "message": "上移媒体"
+  },
+  "bulkQueueMoveItemDown": {
+    "message": "下移媒体"
+  },
+  "bulkQueueRemoveItem": {
+    "message": "移除"
+  },
+  "dragQueueHandle": {
+    "message": "拖动移动"
+  },
+  "showQueue": {
+    "message": "显示队列"
+  },
+  "moreActions": {
+    "message": "更多操作"
+  }
+}

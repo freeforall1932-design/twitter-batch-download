@@ -1,0 +1,371 @@
+{
+  "extName": {
+    "message": "X/Twitter Video Downloader - Download Without Leaving X"
+  },
+  "extDescription": {
+    "message": "Save videos, images, and GIFs from public X/Twitter posts on X. No uploads, accounts, or third-party sites."
+  },
+  "extShortName": {
+    "message": "X/Twitter Downloader"
+  },
+  "appSubtitle": {
+    "message": "Save public X/Twitter media on X, with no uploads or extra sites"
+  },
+  "badgeLocalOnly": {
+    "message": "Local-first"
+  },
+  "badgeNoMediaUpload": {
+    "message": "No uploads"
+  },
+  "badgeXTwitter": {
+    "message": "X/Twitter"
+  },
+  "tabQueue": {
+    "message": "Downloads"
+  },
+  "tabSettings": {
+    "message": "Settings"
+  },
+  "queueTitle": {
+    "message": "X/Twitter Downloader"
+  },
+  "queueSubtitle": {
+    "message": "Recent downloads"
+  },
+  "queueEmptyTitle": {
+    "message": "No downloads yet"
+  },
+  "queueEmptyDescription": {
+    "message": "Open a supported public X/Twitter post with media to save videos, images, or GIFs."
+  },
+  "onboardingEyebrow": {
+    "message": "Start here"
+  },
+  "onboardingTitle": {
+    "message": "Download media without leaving X"
+  },
+  "onboardingBody": {
+    "message": "Your first successful download should take less than 30 seconds. Open a public post, tap the page button, and the files save locally in Chrome."
+  },
+  "onboardingButtonHint": {
+    "message": "The button appears right on the post"
+  },
+  "onboardingQueueTitle": {
+    "message": "The queue updates automatically"
+  },
+  "onboardingQueueDone": {
+    "message": "Saving"
+  },
+  "onboardingQueueBody": {
+    "message": "After you click, this panel shows progress, completion, and retry states."
+  },
+  "onboardingStepOne": {
+    "message": "Open a public X/Twitter post with a video, image set, or GIF."
+  },
+  "onboardingStepTwo": {
+    "message": "Click the \"Save Media\" button that appears on the post itself."
+  },
+  "onboardingStepThree": {
+    "message": "Watch this queue fill automatically while Chrome saves each file."
+  },
+  "onboardingBatchTitle": {
+    "message": "Wejście do kolejki zbiorczej"
+  },
+  "onboardingBatchBody": {
+    "message": "Kliknij przycisk pod postem, najpierw zbierz elementy, a potem pobierz je razem."
+  },
+  "queueSummaryDownloading": {
+    "message": "downloading"
+  },
+  "queueSummaryWaiting": {
+    "message": "waiting"
+  },
+  "queueSummaryDone": {
+    "message": "done"
+  },
+  "queueSummaryFailed": {
+    "message": "failed"
+  },
+  "queueStatusWaiting": {
+    "message": "Waiting"
+  },
+  "queueStatusDownloading": {
+    "message": "Downloading"
+  },
+  "queueStatusDone": {
+    "message": "Done"
+  },
+  "queueStatusFailed": {
+    "message": "Failed"
+  },
+  "queueRetry": {
+    "message": "Retry"
+  },
+  "queueRetrying": {
+    "message": "Retrying..."
+  },
+  "queueRetryAllFailed": {
+    "message": "Retry all failed"
+  },
+  "queueClearCompleted": {
+    "message": "Clear completed"
+  },
+  "queueRefresh": {
+    "message": "Refresh"
+  },
+  "queueDownloadsContinue": {
+    "message": "Downloads continue after this popup closes."
+  },
+  "queueRetryQueued": {
+    "message": "Retry queued."
+  },
+  "queueRetryFailed": {
+    "message": "Could not retry download."
+  },
+  "queueNoDownloadsYet": {
+    "message": "No downloads yet."
+  },
+  "settingsStorage": {
+    "message": "Save layout"
+  },
+  "skipDuplicateDownloads": {
+    "message": "Skip duplicate media"
+  },
+  "skipDuplicateDownloadsHelp": {
+    "message": "Keep URLs already queued or downloaded out of new batches."
+  },
+  "settingsHeroTitle": {
+    "message": "Save media your way"
+  },
+  "settingsHeroBody": {
+    "message": "Keep everyday choices upfront and open advanced naming only when you need it."
+  },
+  "settingsAdvancedTitle": {
+    "message": "Advanced naming"
+  },
+  "settingsAdvancedBody": {
+    "message": "Filename templates, path preview, and custom file naming rules."
+  },
+  "usernameFolder": {
+    "message": "Username folder"
+  },
+  "usernameFolderHelp": {
+    "message": "Group by account handle."
+  },
+  "tweetFolder": {
+    "message": "Tweet folder"
+  },
+  "tweetFolderHelp": {
+    "message": "Keep each post together."
+  },
+  "settingsDownload": {
+    "message": "Download speed"
+  },
+  "downloadConcurrency": {
+    "message": "Download concurrency"
+  },
+  "downloadConcurrencyHelp": {
+    "message": "Save multiple files at once."
+  },
+  "concurrencySafe": {
+    "message": "1 · Safe"
+  },
+  "concurrencyRecommended": {
+    "message": "3 · Recommended"
+  },
+  "concurrencyFast": {
+    "message": "5 · Fast"
+  },
+  "settingsFilename": {
+    "message": "Filename"
+  },
+  "filenamePreset": {
+    "message": "Filename preset"
+  },
+  "filenameCustom": {
+    "message": "Custom"
+  },
+  "filenameTemplate": {
+    "message": "Filename template"
+  },
+  "filenameTemplateHelp": {
+    "message": "Control how each file is named before download."
+  },
+  "filenameVariables": {
+    "message": "Variables: {username} {tweetId} {date} {type} {index} {ext}"
+  },
+  "previewFilename": {
+    "message": "Preview filename"
+  },
+  "savePath": {
+    "message": "Save path"
+  },
+  "saveSettings": {
+    "message": "Save Settings"
+  },
+  "settingsReady": {
+    "message": "Ready. Open a supported public X/Twitter post with media and click \"Save Media\"."
+  },
+  "settingsSaved": {
+    "message": "Settings saved."
+  },
+  "settingsSaveFailed": {
+    "message": "Could not save settings."
+  },
+  "settingsLoadFailed": {
+    "message": "Using default settings."
+  },
+  "filenameTemplateMissingExt": {
+    "message": "Filename template must include {ext}."
+  },
+  "filenameTemplateTipTweetId": {
+    "message": "Saved. Tip: include {tweetId} to avoid duplicate names."
+  },
+  "filenameTemplateEmpty": {
+    "message": "Filename template cannot be empty."
+  },
+  "saveMedia": {
+    "message": "Save Media"
+  },
+  "bulkSaveMedia": {
+    "message": "Bulk Save Media"
+  },
+  "checking": {
+    "message": "Checking..."
+  },
+  "adding": {
+    "message": "Adding..."
+  },
+  "inQueue": {
+    "message": "In Queue"
+  },
+  "downloading": {
+    "message": "Downloading"
+  },
+  "done": {
+    "message": "Done"
+  },
+  "retry": {
+    "message": "Retry"
+  },
+  "noMedia": {
+    "message": "No Media"
+  },
+  "alreadyDownloaded": {
+    "message": "Already downloaded."
+  },
+  "toastNoMediaFound": {
+    "message": "No media found in this post."
+  },
+  "toastAddedToQueue": {
+    "message": "Added to download queue."
+  },
+  "toastAlreadyInQueue": {
+    "message": "This post is already in the download queue."
+  },
+  "toastBulkQueuedSummary": {
+    "message": "Added $1 items, skipped $2 duplicates."
+  },
+  "toastRetryQueued": {
+    "message": "Retry queued."
+  },
+  "toastRetryFailed": {
+    "message": "Could not retry download."
+  },
+  "toastCouldNotAddToQueue": {
+    "message": "Could not add to queue."
+  },
+  "toastExtensionUpdated": {
+    "message": "Extension updated. Refresh this X page and try again."
+  },
+  "openXAndClickSaveMedia": {
+    "message": "Open a supported public X/Twitter post with media to save videos, images, or GIFs."
+  },
+  "localPrivacyNote": {
+    "message": "Media is handled locally in your browser for supported public posts. No uploads required and no account is needed."
+  },
+  "bulkQueueTitle": {
+    "message": "Review Queue"
+  },
+  "bulkQueueSubtitle": {
+    "message": "Edit what gets downloaded"
+  },
+  "bulkQueueSummary": {
+    "message": "$1 items from $2 posts ready to review."
+  },
+  "bulkQueueEmpty": {
+    "message": "Open a public X/Twitter post with media to add videos, images, or GIFs."
+  },
+  "bulkQueueRefresh": {
+    "message": "Refresh"
+  },
+  "bulkQueueClear": {
+    "message": "Clear"
+  },
+  "bulkQueueDownloadAll": {
+    "message": "Download All"
+  },
+  "bulkQueueStarting": {
+    "message": "Starting..."
+  },
+  "toastQueueReady": {
+    "message": "Queue ready. Review and edit before downloading."
+  },
+  "toastQueueOpened": {
+    "message": "Queue opened."
+  },
+  "toastQueueCleared": {
+    "message": "Queue cleared."
+  },
+  "toastQueueItemRemoved": {
+    "message": "Removed from queue."
+  },
+  "toastQueueGroupRemoved": {
+    "message": "Post removed from queue."
+  },
+  "bulkQueueRemovePost": {
+    "message": "Remove post"
+  },
+  "bulkQueueGroupMeta": {
+    "message": "$1 items · $2"
+  },
+  "bulkQueueOnePost": {
+    "message": "One post"
+  },
+  "bulkQueueFromPost": {
+    "message": "Post media"
+  },
+  "bulkQueueLooseMedia": {
+    "message": "Unsorted media"
+  },
+  "unknownSource": {
+    "message": "Unknown source"
+  },
+  "hideQueue": {
+    "message": "Hide queue"
+  },
+  "addToBatch": {
+    "message": "Batch"
+  },
+  "addToBatchHint": {
+    "message": "Add this post's media to the batch queue."
+  },
+  "addingToBatch": {
+    "message": "Adding..."
+  },
+  "toastAddedToBatch": {
+    "message": "Added to batch queue."
+  },
+  "toastAlreadyInBatch": {
+    "message": "This post is already in the batch queue."
+  },
+  "toastQueueRefreshed": {
+    "message": "Queue refreshed."
+  },
+  "scanning": {
+    "message": "Scanning..."
+  },
+  "preparingQueue": {
+    "message": "Preparing queue..."
+  }
+}

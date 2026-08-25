@@ -1,0 +1,401 @@
+{
+  "extName": {
+    "message": "X/Twitter 影片下載器 - 下載影片、圖片和 GIF"
+  },
+  "extDescription": {
+    "message": "直接在 Chrome 下載受支援的公開 X/Twitter 貼文中的影片、圖片和 GIF，不需帳號，也不需第三方下載網站。"
+  },
+  "extShortName": {
+    "message": "X/Twitter 下載器"
+  },
+  "appSubtitle": {
+    "message": "在 X/Twitter 頁面批量保存公開影片、圖片和 GIF，無需上傳或跳轉第三方網站"
+  },
+  "badgeLocalOnly": {
+    "message": "本地優先"
+  },
+  "badgeNoMediaUpload": {
+    "message": "不需上傳"
+  },
+  "badgeXTwitter": {
+    "message": "X/Twitter"
+  },
+  "tabQueue": {
+    "message": "佇列"
+  },
+  "tabSettings": {
+    "message": "設定"
+  },
+  "queueTitle": {
+    "message": "X/Twitter 下載器"
+  },
+  "queueSubtitle": {
+    "message": "下載佇列"
+  },
+  "queueEmptyTitle": {
+    "message": "尚無下載"
+  },
+  "queueEmptyDescription": {
+    "message": "開啟包含影片、圖片或 GIF 的公開 X/Twitter 貼文，即可開始儲存。"
+  },
+  "queueSummaryDownloading": {
+    "message": "下載中"
+  },
+  "queueSummaryWaiting": {
+    "message": "等待中"
+  },
+  "queueSummaryDone": {
+    "message": "已完成"
+  },
+  "queueSummaryFailed": {
+    "message": "失敗"
+  },
+  "queueStatusWaiting": {
+    "message": "等待中"
+  },
+  "queueStatusDownloading": {
+    "message": "下載中"
+  },
+  "queueStatusDone": {
+    "message": "已完成"
+  },
+  "queueStatusFailed": {
+    "message": "失敗"
+  },
+  "queueRetry": {
+    "message": "重試"
+  },
+  "queueRetrying": {
+    "message": "重試中..."
+  },
+  "queueRetryAllFailed": {
+    "message": "重試所有失敗"
+  },
+  "queueClearCompleted": {
+    "message": "清除已完成"
+  },
+  "queueRefresh": {
+    "message": "重新整理"
+  },
+  "queueDownloadsContinue": {
+    "message": "關閉彈窗後下載仍會繼續。"
+  },
+  "queueRetryQueued": {
+    "message": "已加入重試佇列。"
+  },
+  "queueRetryFailed": {
+    "message": "無法重試下載。"
+  },
+  "queueNoDownloadsYet": {
+    "message": "尚無下載記錄。"
+  },
+  "onboardingBatchTitle": {
+    "message": "批次佇列入口"
+  },
+  "onboardingBatchBody": {
+    "message": "在貼文下方點擊「批次佇列」，先加入佇列再一起下載。"
+  },
+  "settingsStorage": {
+    "message": "儲存"
+  },
+  "skipDuplicateDownloads": {
+    "message": "跳過重複媒體"
+  },
+  "skipDuplicateDownloadsHelp": {
+    "message": "將已在佇列中或已下載的 URL 排除在新批次之外。"
+  },
+  "usernameFolder": {
+    "message": "使用者名稱資料夾"
+  },
+  "usernameFolderHelp": {
+    "message": "依帳號分組儲存。"
+  },
+  "tweetFolder": {
+    "message": "推文資料夾"
+  },
+  "tweetFolderHelp": {
+    "message": "每則推文單獨存放。"
+  },
+  "settingsDownload": {
+    "message": "下載"
+  },
+  "downloadConcurrency": {
+    "message": "並行下載數"
+  },
+  "downloadConcurrencyHelp": {
+    "message": "同時下載多個檔案。"
+  },
+  "concurrencySafe": {
+    "message": "1 · 安全"
+  },
+  "concurrencyRecommended": {
+    "message": "3 · 建議"
+  },
+  "concurrencyFast": {
+    "message": "5 · 快速"
+  },
+  "settingsFilename": {
+    "message": "檔案名稱"
+  },
+  "filenamePreset": {
+    "message": "檔名預設"
+  },
+  "filenameCustom": {
+    "message": "自訂"
+  },
+  "filenameTemplate": {
+    "message": "檔名範本"
+  },
+  "filenameTemplateHelp": {
+    "message": "控制每個檔案的命名方式。"
+  },
+  "filenameVariables": {
+    "message": "變數：{username} {tweetId} {date} {type} {index} {ext}"
+  },
+  "previewFilename": {
+    "message": "檔名預覽"
+  },
+  "savePath": {
+    "message": "儲存路徑"
+  },
+  "saveSettings": {
+    "message": "儲存設定"
+  },
+  "settingsReady": {
+    "message": "就緒。開啟受支援且含有媒體的公開 X/Twitter 貼文，並點擊「儲存媒體」。"
+  },
+  "settingsSaved": {
+    "message": "設定已儲存。"
+  },
+  "settingsSaveFailed": {
+    "message": "無法儲存設定。"
+  },
+  "settingsLoadFailed": {
+    "message": "使用預設設定。"
+  },
+  "filenameTemplateMissingExt": {
+    "message": "檔名範本必須包含 {ext}。"
+  },
+  "filenameTemplateTipTweetId": {
+    "message": "已儲存。提示：加入 {tweetId} 可避免重名。"
+  },
+  "filenameTemplateEmpty": {
+    "message": "檔名範本不能為空。"
+  },
+  "saveMedia": {
+    "message": "儲存媒體"
+  },
+  "bulkSaveMedia": {
+    "message": "批次儲存媒體"
+  },
+  "checking": {
+    "message": "檢查中..."
+  },
+  "adding": {
+    "message": "新增中..."
+  },
+  "inQueue": {
+    "message": "佇列中"
+  },
+  "downloading": {
+    "message": "下載中"
+  },
+  "done": {
+    "message": "已完成"
+  },
+  "retry": {
+    "message": "重試"
+  },
+  "noMedia": {
+    "message": "無媒體"
+  },
+  "alreadyDownloaded": {
+    "message": "已下載。"
+  },
+  "toastNoMediaFound": {
+    "message": "此推文未找到媒體。"
+  },
+  "toastAddedToQueue": {
+    "message": "已加入下載佇列。"
+  },
+  "toastAlreadyInQueue": {
+    "message": "此推文已在下載佇列中。"
+  },
+  "toastBulkQueuedSummary": {
+    "message": "已新增 $1 項，略過 $2 個重複項。"
+  },
+  "toastRetryQueued": {
+    "message": "已加入重試佇列。"
+  },
+  "toastRetryFailed": {
+    "message": "無法重試下載。"
+  },
+  "toastCouldNotAddToQueue": {
+    "message": "無法加入佇列。"
+  },
+  "toastExtensionUpdated": {
+    "message": "擴充功能已更新，請重新整理頁面後再試。"
+  },
+  "openXAndClickSaveMedia": {
+    "message": "開啟受支援且含有媒體的公開 X/Twitter 貼文，即可儲存影片、圖片或 GIF。"
+  },
+  "localPrivacyNote": {
+    "message": "受支援的公開貼文媒體會在瀏覽器中本地處理，不需要上傳，也不需要帳號。"
+  },
+  "bulkQueueTitle": {
+    "message": "批次佇列"
+  },
+  "batchQueueEyebrow": {
+    "message": "批次佇列"
+  },
+  "batchQueueTitle": {
+    "message": "批次佇列"
+  },
+  "batchQueueSummary": {
+    "message": "$1 個媒體，來自 $2 則貼文，可先下載。"
+  },
+  "batchQueueEmpty": {
+    "message": "批次佇列裡還沒有內容。"
+  },
+  "batchQueueRefresh": {
+    "message": "重新整理"
+  },
+  "batchQueueClear": {
+    "message": "清空"
+  },
+  "batchQueueDownloadAll": {
+    "message": "全部下載"
+  },
+  "batchQueueHint": {
+    "message": "從 X/Twitter 貼文加入的媒體會保留在這裡，直到下載或移除。"
+  },
+  "batchQueueRemoveItem": {
+    "message": "移除"
+  },
+  "batchQueueCleared": {
+    "message": "批次佇列已清空。"
+  },
+  "batchQueueClearFailed": {
+    "message": "無法清空批次佇列。"
+  },
+  "batchQueueDownloading": {
+    "message": "下載中..."
+  },
+  "batchQueueDownloadStarted": {
+    "message": "已加入下載佇列。"
+  },
+  "batchQueueDownloadFailed": {
+    "message": "無法開始批次下載。"
+  },
+  "batchQueueItemRemoved": {
+    "message": "已從批次佇列移除。"
+  },
+  "batchQueueRemoveFailed": {
+    "message": "無法移除項目。"
+  },
+  "bulkQueueSubtitle": {
+    "message": "先檢查，再下載"
+  },
+  "bulkQueueSummary": {
+    "message": "$1 個媒體，來自 $2 則貼文，可先檢查後下載。"
+  },
+  "bulkQueueEmpty": {
+    "message": "開啟一則含有媒體的公開 X/Twitter 貼文，即可將影片、圖片或 GIF 加入佇列。"
+  },
+  "bulkQueueRefresh": {
+    "message": "重新掃描"
+  },
+  "bulkQueueClear": {
+    "message": "清空"
+  },
+  "bulkQueueDownloadAll": {
+    "message": "全部下載"
+  },
+  "bulkQueueStarting": {
+    "message": "開始中..."
+  },
+  "toastQueueReady": {
+    "message": "佇列已準備好，先檢查再下載。"
+  },
+  "toastQueueOpened": {
+    "message": "佇列已開啟。"
+  },
+  "toastQueueCleared": {
+    "message": "佇列已清空。"
+  },
+  "toastQueueItemRemoved": {
+    "message": "已從佇列移除。"
+  },
+  "toastQueueGroupRemoved": {
+    "message": "已將這則貼文從佇列移除。"
+  },
+  "bulkQueueRemovePost": {
+    "message": "移除貼文"
+  },
+  "bulkQueueGroupMeta": {
+    "message": "$1 個項目 · $2"
+  },
+  "bulkQueueOnePost": {
+    "message": "一則貼文"
+  },
+  "bulkQueueFromPost": {
+    "message": "貼文媒體"
+  },
+  "bulkQueueLooseMedia": {
+    "message": "未分類媒體"
+  },
+  "unknownSource": {
+    "message": "未知來源"
+  },
+  "hideQueue": {
+    "message": "隱藏佇列"
+  },
+  "addToBatch": {
+    "message": "批量隊列"
+  },
+  "addToBatchHint": {
+    "message": "將這則貼文的媒體加入批次佇列。"
+  },
+  "addingToBatch": {
+    "message": "加入中..."
+  },
+  "toastAddedToBatch": {
+    "message": "已加入批次佇列。"
+  },
+  "toastAlreadyInBatch": {
+    "message": "這則貼文已在批次佇列中。"
+  },
+  "toastQueueRefreshed": {
+    "message": "佇列已重新掃描。"
+  },
+  "scanning": {
+    "message": "掃描中..."
+  },
+  "preparingQueue": {
+    "message": "準備佇列..."
+  },
+  "bulkQueueMoveGroupUp": {
+    "message": "上移貼文"
+  },
+  "bulkQueueMoveGroupDown": {
+    "message": "下移貼文"
+  },
+  "bulkQueueMoveItemUp": {
+    "message": "上移媒體"
+  },
+  "bulkQueueMoveItemDown": {
+    "message": "下移媒體"
+  },
+  "bulkQueueRemoveItem": {
+    "message": "移除"
+  },
+  "dragQueueHandle": {
+    "message": "拖曳移動"
+  },
+  "showQueue": {
+    "message": "顯示隊列"
+  },
+  "moreActions": {
+    "message": "更多操作"
+  }
+}

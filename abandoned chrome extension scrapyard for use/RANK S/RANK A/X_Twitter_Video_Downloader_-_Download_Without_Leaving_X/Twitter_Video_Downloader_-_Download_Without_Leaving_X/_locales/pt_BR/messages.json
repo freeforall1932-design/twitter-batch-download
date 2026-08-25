@@ -1,0 +1,329 @@
+{
+  "extName": {
+    "message": "Baixador de vídeos do X/Twitter - Vídeos, imagens e GIFs"
+  },
+  "extDescription": {
+    "message": "Baixe vídeos, imagens e GIFs de posts públicos compatíveis do X/Twitter direto no Chrome, sem conta e sem site de download de terceiros."
+  },
+  "extShortName": {
+    "message": "Baixador X/Twitter"
+  },
+  "appSubtitle": {
+    "message": "Baixe mídias públicas do X/Twitter direto no Chrome"
+  },
+  "badgeLocalOnly": {
+    "message": "Prioridade local"
+  },
+  "badgeNoMediaUpload": {
+    "message": "Sem uploads"
+  },
+  "badgeXTwitter": {
+    "message": "X/Twitter"
+  },
+  "tabQueue": {
+    "message": "Fila"
+  },
+  "tabSettings": {
+    "message": "Configurações"
+  },
+  "queueTitle": {
+    "message": "Baixador X/Twitter"
+  },
+  "queueSubtitle": {
+    "message": "Fila de download"
+  },
+  "queueEmptyTitle": {
+    "message": "Nenhum download"
+  },
+  "queueEmptyDescription": {
+    "message": "Abra um post público compatível do X/Twitter com mídia para salvar vídeos, imagens ou GIFs."
+  },
+  "onboardingBatchTitle": {
+    "message": "Entrada da fila em lote"
+  },
+  "onboardingBatchBody": {
+    "message": "Clique no botão abaixo da postagem para reunir os itens primeiro e baixar tudo junto."
+  },
+  "queueSummaryDownloading": {
+    "message": "baixando"
+  },
+  "queueSummaryWaiting": {
+    "message": "aguardando"
+  },
+  "queueSummaryDone": {
+    "message": "concluído"
+  },
+  "queueSummaryFailed": {
+    "message": "falhou"
+  },
+  "queueStatusWaiting": {
+    "message": "Aguardando"
+  },
+  "queueStatusDownloading": {
+    "message": "Baixando"
+  },
+  "queueStatusDone": {
+    "message": "Concluído"
+  },
+  "queueStatusFailed": {
+    "message": "Falhou"
+  },
+  "queueRetry": {
+    "message": "Tentar novamente"
+  },
+  "queueRetrying": {
+    "message": "Tentando novamente..."
+  },
+  "queueRetryAllFailed": {
+    "message": "Tentar novamente todos os falhos"
+  },
+  "queueClearCompleted": {
+    "message": "Limpar concluídos"
+  },
+  "queueRefresh": {
+    "message": "Atualizar"
+  },
+  "queueDownloadsContinue": {
+    "message": "Os downloads continuam após fechar este popup."
+  },
+  "queueRetryQueued": {
+    "message": "Nova tentativa na fila."
+  },
+  "queueRetryFailed": {
+    "message": "Não foi possível tentar novamente."
+  },
+  "queueNoDownloadsYet": {
+    "message": "Nenhum histórico de download."
+  },
+  "settingsStorage": {
+    "message": "Armazenamento"
+  },
+  "skipDuplicateDownloads": {
+    "message": "Ignorar mídias duplicadas"
+  },
+  "skipDuplicateDownloadsHelp": {
+    "message": "Deixe de fora URLs já na fila ou já baixadas em novos lotes."
+  },
+  "usernameFolder": {
+    "message": "Pasta por usuário"
+  },
+  "usernameFolderHelp": {
+    "message": "Agrupa por conta."
+  },
+  "tweetFolder": {
+    "message": "Pasta por publicação"
+  },
+  "tweetFolderHelp": {
+    "message": "Mantém cada publicação separada."
+  },
+  "settingsDownload": {
+    "message": "Download"
+  },
+  "downloadConcurrency": {
+    "message": "Downloads simultâneos"
+  },
+  "downloadConcurrencyHelp": {
+    "message": "Baixa vários arquivos ao mesmo tempo."
+  },
+  "concurrencySafe": {
+    "message": "1 · Seguro"
+  },
+  "concurrencyRecommended": {
+    "message": "3 · Recomendado"
+  },
+  "concurrencyFast": {
+    "message": "5 · Rápido"
+  },
+  "settingsFilename": {
+    "message": "Nome do arquivo"
+  },
+  "filenamePreset": {
+    "message": "Modelo predefinido"
+  },
+  "filenameCustom": {
+    "message": "Personalizado"
+  },
+  "filenameTemplate": {
+    "message": "Modelo de nome"
+  },
+  "filenameTemplateHelp": {
+    "message": "Controla como cada arquivo é nomeado."
+  },
+  "filenameVariables": {
+    "message": "Variáveis: {username} {tweetId} {date} {type} {index} {ext}"
+  },
+  "previewFilename": {
+    "message": "Pré-visualização do nome"
+  },
+  "savePath": {
+    "message": "Caminho de salvamento"
+  },
+  "saveSettings": {
+    "message": "Salvar configurações"
+  },
+  "settingsReady": {
+    "message": "Pronto. Abra um post público compatível do X/Twitter com mídia e clique em \"Salvar mídia\"."
+  },
+  "settingsSaved": {
+    "message": "Configurações salvas."
+  },
+  "settingsSaveFailed": {
+    "message": "Não foi possível salvar as configurações."
+  },
+  "settingsLoadFailed": {
+    "message": "Usando configurações padrão."
+  },
+  "filenameTemplateMissingExt": {
+    "message": "O modelo deve incluir {ext}."
+  },
+  "filenameTemplateTipTweetId": {
+    "message": "Salvo. Dica: inclua {tweetId} para evitar duplicatas."
+  },
+  "filenameTemplateEmpty": {
+    "message": "O modelo não pode estar vazio."
+  },
+  "saveMedia": {
+    "message": "Salvar mídia"
+  },
+  "bulkSaveMedia": {
+    "message": "Salvar mídia em lote"
+  },
+  "checking": {
+    "message": "Verificando..."
+  },
+  "adding": {
+    "message": "Adicionando..."
+  },
+  "inQueue": {
+    "message": "Na fila"
+  },
+  "downloading": {
+    "message": "Baixando"
+  },
+  "done": {
+    "message": "Concluído"
+  },
+  "retry": {
+    "message": "Tentar novamente"
+  },
+  "noMedia": {
+    "message": "Sem mídia"
+  },
+  "alreadyDownloaded": {
+    "message": "Já baixado."
+  },
+  "toastNoMediaFound": {
+    "message": "Nenhuma mídia encontrada nesta publicação."
+  },
+  "toastAddedToQueue": {
+    "message": "Adicionado à fila de download."
+  },
+  "toastAlreadyInQueue": {
+    "message": "Esta publicação já está na fila."
+  },
+  "toastBulkQueuedSummary": {
+    "message": "$1 itens adicionados, $2 duplicados ignorados."
+  },
+  "toastRetryQueued": {
+    "message": "Nova tentativa na fila."
+  },
+  "toastRetryFailed": {
+    "message": "Não foi possível tentar novamente."
+  },
+  "toastCouldNotAddToQueue": {
+    "message": "Não foi possível adicionar à fila."
+  },
+  "toastExtensionUpdated": {
+    "message": "Extensão atualizada. Recarregue a página e tente novamente."
+  },
+  "openXAndClickSaveMedia": {
+    "message": "Abra um post público compatível do X/Twitter com mídia para salvar vídeos, imagens ou GIFs."
+  },
+  "localPrivacyNote": {
+    "message": "As mídias de posts públicos compatíveis são processadas localmente no seu navegador. Não há uploads e nenhuma conta é necessária."
+  },
+  "bulkQueueTitle": {
+    "message": "Review Queue"
+  },
+  "bulkQueueSubtitle": {
+    "message": "Edit what gets downloaded"
+  },
+  "bulkQueueSummary": {
+    "message": "$1 items from $2 posts ready to review."
+  },
+  "bulkQueueEmpty": {
+    "message": "Open a public X/Twitter post with media to add videos, images, or GIFs."
+  },
+  "bulkQueueRefresh": {
+    "message": "Refresh"
+  },
+  "bulkQueueClear": {
+    "message": "Clear"
+  },
+  "bulkQueueDownloadAll": {
+    "message": "Download All"
+  },
+  "bulkQueueStarting": {
+    "message": "Starting..."
+  },
+  "toastQueueReady": {
+    "message": "Queue ready. Review and edit before downloading."
+  },
+  "toastQueueOpened": {
+    "message": "Queue opened."
+  },
+  "toastQueueCleared": {
+    "message": "Queue cleared."
+  },
+  "toastQueueItemRemoved": {
+    "message": "Removed from queue."
+  },
+  "toastQueueGroupRemoved": {
+    "message": "Post removed from queue."
+  },
+  "bulkQueueRemovePost": {
+    "message": "Remove post"
+  },
+  "bulkQueueGroupMeta": {
+    "message": "$1 items · $2"
+  },
+  "bulkQueueOnePost": {
+    "message": "One post"
+  },
+  "bulkQueueFromPost": {
+    "message": "Post media"
+  },
+  "bulkQueueLooseMedia": {
+    "message": "Unsorted media"
+  },
+  "unknownSource": {
+    "message": "Unknown source"
+  },
+  "hideQueue": {
+    "message": "Hide queue"
+  },
+  "addToBatch": {
+    "message": "Batch"
+  },
+  "addToBatchHint": {
+    "message": "Add this post's media to the batch queue."
+  },
+  "addingToBatch": {
+    "message": "Adding..."
+  },
+  "toastAddedToBatch": {
+    "message": "Added to batch queue."
+  },
+  "toastAlreadyInBatch": {
+    "message": "This post is already in the batch queue."
+  },
+  "toastQueueRefreshed": {
+    "message": "Queue refreshed."
+  },
+  "scanning": {
+    "message": "Scanning..."
+  },
+  "preparingQueue": {
+    "message": "Preparing queue..."
+  }
+}
