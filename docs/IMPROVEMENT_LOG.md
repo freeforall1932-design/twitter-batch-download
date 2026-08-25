@@ -2,6 +2,26 @@
 
 Chronological implementation record for X Media Downloader.
 
+## 2026-08-25 — Repo restructure: load-unpacked layout + release packaging
+
+### Motivation
+The repo root mixed the shippable extension (in `x-video-downloader-master/`, a leftover source-zip name), project docs, tests, and the abandoned-extension scrapyard (whose rank A/B folders were accidentally nested inside the rank S folder, and whose rank A extension was double-nested).
+
+### Changed
+- Project folder renamed to **`extension/`** — the single **Load unpacked** target (`manifest.json` at its root). It now contains only browser-loaded files + icons.
+- Docs moved to `docs/` (`WORKLIST.md`, `SESSION_HANDOFF.md`, `IMPROVEMENT_LOG.md`); tests to `tests/`; `LICENSE` and the full `README.md` to the repo root.
+- Scrapyard flattened to `reference/scrapyard/{rank-s-plucker-xbd, rank-a-video-downloader, rank-b-x-exporter}`; each rank keeps its original `comment and context.txt` and `HOW_TO_INSTALL.txt`; `reference/scrapyard/README.md` documents the reference-only policy and rank table.
+- Added `scripts/package-release.sh`: reads the version from `extension/manifest.json` and zips the finished `extension/` folder (manifest at zip root) to `releases/x-media-downloader-v<version>.zip` (optional date tag). Windows/PowerShell fallback documented. `releases/*.zip` is gitignored; `releases/README.md` explains the artifacts.
+- `tests/background.test.js` now loads `../extension/background.js`.
+- README, WORKLIST (new "P0 — repo layout & release packaging" section), and SESSION_HANDOFF (layout map, branch, commands, priorities) updated to the new paths.
+
+### Unchanged
+- Extension code, manifest, and permissions — no product change. Still **no build step**; the release script is distribution packaging only, not a build.
+
+### Validation
+- `node --check` on all five extension scripts; all **27** local Node tests pass (`node --test tests/background.test.js`).
+- Sample release zip produced and verified with `manifest.json` at the zip root.
+
 ## 2026-08-24 — Persistent Side Panel batch queue
 
 **Commit:** `b211e8b Add side panel batch queue foundation`

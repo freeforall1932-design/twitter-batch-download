@@ -52,7 +52,7 @@ function loadBackground(options = {}) {
   context.globalThis = context;
   context.global = context;
   vm.createContext(context);
-  const source = fs.readFileSync(path.join(__dirname, "..", "background.js"), "utf8");
+  const source = fs.readFileSync(path.join(__dirname, "..", "extension", "background.js"), "utf8");
   vm.runInContext(source, context, { filename: "background.js" });
   context.emitDownloadChange = async (delta) => {
     await Promise.all(downloadChangedListeners.map((listener) => listener(delta)));
