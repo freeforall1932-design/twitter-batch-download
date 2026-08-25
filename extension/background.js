@@ -937,14 +937,16 @@ function mergeQueueItems(state, candidates, orderedFrontIds = null) {
 
 async function addQueueItems(items, options = {}) {
   const state = await getQueueState();
-  const addedCount = mergeQueueItems(state, items, options.orderedFrontIds || null);
+  const source = options.source || null;
+  const normalizedItems = (items || []).map((item) => source && !item.source ? { ...item, source } : item);
+  const addedCount = mergeQueueItems(state, normalizedItems, options.orderedFrontIds || null);
   await saveQueueState();
   return { state: publicQueueState(), addedCount };
 }
 
 async function handleQueueMessage(msg) {
   if (msg.action === "queueAdd") {
-    return (await addQueueItems(msg.items)).state;
+    return (await addQueueItems(msg.items, { source: msg.source || null })).state;
   }
   const state = await getQueueState();
   if (msg.action === "queueGet") return publicQueueState();
@@ -954,8 +956,14 @@ async function handleQueueMessage(msg) {
     const item = state.items.find((candidate) => candidate.id === msg.id);
     if (item) item.selected = Boolean(msg.selected);
   } else if (msg.action === "queueSelectVisible") {
-    state.items.filter((item) => msg.filter === "all" || item.type === msg.filter)
-      .forEach((item) => { item.selected = Boolean(msg.selected); });
+    state.items.filter((item) => {
+      const sourceOk = !msg.source || (item.source || "remote") === msg.source;
+      return sourceOk && (msg.filter === "all" || item.type === msg.filter);
+    }).forEach((item) => { item.selected = Boolean(msg.selected); });
+  } else if (msg.action === "queueClearAll") {
+    state.items = msg.source
+      ? state.items.filter((item) => (item.source || "remote") !== msg.source)
+      : [];
   } else if (msg.action === "queueClearFinished") {
     state.items = state.items.filter((item) => !["completed", "failed"].includes(item.status));
   } else if (msg.action === "queueRetryFailed") {
@@ -965,7 +973,8 @@ async function handleQueueMessage(msg) {
     state.stopped = false; state.running = true;
   } else if (msg.action === "queueStart") {
     state.items.forEach((item) => {
-      const allowed = msg.mode === "all" || item.selected;
+      const sourceOk = !msg.source || (item.source || "remote") === msg.source;
+      const allowed = sourceOk && (msg.mode === "all" || item.selected);
       if (allowed && ["discovered", "failed"].includes(item.status)) item.status = "queued";
     });
     state.stopped = false;
@@ -1516,9 +1525,11 @@ async function runProfileDiscovery(options, runId) {
       const instructions = extractTimelineInstructions(page) || page;
       const tweets = [];
       collectTweets(instructions, tweets);
-      const parsedItems = tweets.flatMap((tweet) => mediaFromTweet(tweet, username, Boolean(options.includeRetweets)));
+      const parsedItems = tweets
+        .flatMap((tweet) => mediaFromTweet(tweet, username, Boolean(options.includeRetweets)))
+        .map((item) => ({ ...item, source: "remote" }));
       const items = takeDiscoveryItems(parsedItems, seenMediaIds, limit - state.found);
-      await addQueueItems(items, { orderedFrontIds: Array.from(seenMediaIds) });
+      await addQueueItems(items, { orderedFrontIds: Array.from(seenMediaIds), source: "remote" });
       if (!isCurrentDiscoveryRun(state, runId)) return;
       state.found += items.length;
       state.pages++;
@@ -1585,6 +1596,35 @@ async function handleDiscoveryMessage(msg) {
   return null;
 }
 
+function inferHandleFromUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl || "");
+    const first = url.pathname.split("/").filter(Boolean)[0] || "";
+    return /^[A-Za-z0-9_]{1,15}$/.test(first) ? first : "unknown";
+  } catch (_) {
+    return "unknown";
+  }
+}
+
+async function handleLocalTimelineCapture(message) {
+  const capture = message.capture || {};
+  const operationName = String(capture.operationName || "");
+  if (!["UserMedia", "UserPhotoTimeline", "UserVideoTimeline", "UserTweets", "UserTweetsAndReplies", "TweetResultByRestId", "TweetDetail"].includes(operationName)) {
+    return { ok: true, addedCount: 0 };
+  }
+  const json = capture.json;
+  if (!json || typeof json !== "object") return { ok: true, addedCount: 0 };
+  const tweets = [];
+  collectTweets(json, tweets);
+  const targetHandle = inferHandleFromUrl(message.pageUrl || "");
+  const items = tweets
+    .flatMap((tweet) => mediaFromTweet(tweet, targetHandle, true))
+    .map((item) => ({ ...item, source: "scroll" }));
+  if (!items.length) return { ok: true, addedCount: 0 };
+  const result = await addQueueItems(items, { source: "scroll" });
+  return { ok: true, addedCount: result.addedCount };
+}
+
 // ==========================================================================
 // MESSAGE HANDLER
 // ==========================================================================
@@ -1597,6 +1637,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     rememberNetworkCapture(msg.capture || {});
     sendResponse({ ok: true });
     return false;
+  }
+
+  if (msg.action === "localTimelineCapture") {
+    handleLocalTimelineCapture(msg)
+      .then((result) => sendResponse(result))
+      .catch((error) => {
+        console.warn("[X-DL BG] Local timeline capture parse failed", error);
+        sendResponse({ ok: false, error: error.message || "Local capture failed" });
+      });
+    return true;
   }
 
   // Side-panel discovery controls

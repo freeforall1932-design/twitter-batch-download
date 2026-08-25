@@ -1,10 +1,10 @@
 # Development Worklist
 
-_Last audited: 2026-08-25 (repo restructure — `extension/` load-unpacked root + release packaging; post Rank S/A pass + deprecation cleanup)_
+_Last audited: 2026-08-25 (Side Panel scroll-capture-first UX after live testing feedback)_
 
 ## Product target
 
-Signed-in Chrome user enters an X profile / `@username`, discovers media up to a local cap (default **99,999**), reviews newest-first in the Side Panel, selects items, and downloads with **1–2** active Chrome downloads. Cap is an upper bound only.
+Signed-in Chrome user opens the Side Panel, uses **Scroll capture** as the default workflow while manually scrolling X, reviews listed media, selects items, and downloads with **1–2** active Chrome downloads. The secondary **Remote fetch** tab can still discover a pasted X profile / `@username` up to a local cap (default **99,999**), but it is treated as an advanced fallback because live testing showed extension-initiated profile crawling can hit rate limits sooner than normal user scrolling. Cap is an upper bound only.
 
 No manual API key / password / cookie paste. Self-hosted against the signed-in X session only — **no** third-party account, subscription, or paid/free tier.
 
@@ -13,19 +13,28 @@ No manual API key / password / cookie paste. Self-hosted against the signed-in X
 | Area | Status | Notes |
 |---|---|---|
 | Manifest V3 / no build | Done | Plain JS under this folder. |
-| Side Panel batch queue | Done | Selection, filter, concurrency 1–2, stop, retry, clear finished. |
+| Side Panel two-tab queue | Implemented, needs live-X | Default **Scroll capture** tab watches active X pages while the user scrolls; **Remote fetch** keeps paste-link discovery as secondary. Selection/download actions are tab-scoped. |
 | Persistent queue + restart reconcile | Done | `batchDownloadQueueV1`; starting/downloading recovery via `chrome.downloads.search`. |
 | Profile discovery | Implemented, needs live-X | Capture-first op IDs + bundle scrape fallback; timeline_v2/legacy; empty-page stop. |
-| Live GraphQL/header capture | Implemented, needs live-X | MAIN `injected.js` → content → `networkCapture`. No cookie values in bag. |
+| Live GraphQL/header/response capture | Implemented, needs live-X | MAIN `injected.js` → content → background. Headers warm operation metadata; GraphQL responses can list media from normal page scrolling. No cookie values in bag. |
 | Discovery error codes + RL countdown | Implemented, needs live-X | Side Panel countdown via `retryUntil`. |
 | Direct filenames + invalid-name ladder | Done | ZIP intentionally removed. |
 | Per-tweet action bar | Done, needs selector verify | `content.js` into `article[data-testid=tweet] [role=group]`. |
-| Popup DOM auto-scroll bulk | Done (legacy) | Separate from Side Panel discovery; only sees loaded DOM tweets. |
+| Popup DOM auto-scroll bulk | Legacy fallback | Popup still exists, but Side Panel Scroll capture is now the primary scroll/review/download surface. |
 | ZIP export | **Removed** | Deprecated path deleted (`lib/zip-writer.js`, handlers). Do not ship multi-GB archives. |
 | Third-party tier/license | Absent | Do not add. |
 | Bookmarks / likes full scan | Not implemented | |
 | Include replies / quoted | Not implemented | Must be explicit switches when added. |
-| Live signed-in verification | **Not run in CI/sandbox** | Blocks P0 complete. |
+| Live signed-in verification | **Partially run by user; new UX needs another pass** | Previous remote flow worked but was subpar vs Rank S UX/rate-limit behavior. New Scroll capture flow needs validation. |
+
+
+## Current product opinion / direction
+
+- Keep **Scroll capture** as the default Side Panel tab. It should feel like the Rank S sidebar pattern: user scrolls X normally, media appears in the side list, user reviews/selects/downloads.
+- Keep **Remote fetch** as a secondary/advanced tab. It is useful, but should not be the first impression because background crawling can trip X rate limits more easily than human scrolling.
+- The popup is no longer the ideal primary UX. Keep it as a fallback until Side Panel scroll capture proves stable, then simplify it to mostly “Open Side Panel.”
+- Do not unify the two tab histories yet. The user explicitly preferred separate scroll-captured and remote-fetched lists/queues.
+- Highest-value next improvements are live-test diagnostics, clearer active-tab status, and more robust capture/listing from real X timeline responses.
 
 ## Code-review checklist (next agent / human)
 
@@ -70,17 +79,23 @@ New this session (2026-08-25): restructure so the extension can be **Load unpack
 
 ## P0 — remaining (live-X)
 
-1. Run re-review checklist on a signed-in profile (limit ~20).
-2. Replace synthetic fixtures with sanitized live first/cursor captures when available.
-3. Confirm capture bridge warms after opening `/media` once.
-4. Optional: Side Panel signed-in status pill.
+1. Reload the unpacked extension, hard-refresh X, open Side Panel, and verify **Scroll capture** is the default tab.
+2. On an X profile `/media` page, manually scroll and confirm media appears without pressing Remote discover.
+3. Verify visible DOM photos list reliably and GraphQL-response-captured videos/photos appear as X loads timeline pages.
+4. Confirm duplicates are avoided across DOM and response capture.
+5. Test tab-scoped behavior: Scroll capture list, Remote fetch list, Select all, Download all in tab, and Clear history.
+6. Test optional Side Panel auto-scroll: start, stop, limit, speed, media filter.
+7. Run Remote fetch as secondary with a small limit and verify clearer rate-limit messaging/stopping.
+8. Replace or augment synthetic fixtures with sanitized live first/cursor captures when available.
+9. Optional but recommended next: Side Panel diagnostics/status pill and sanitized copy-debug-report.
 
 ## P1 — inclusion and review UX
 
-1. Explicit Include replies / Include quoted media.
-2. Stronger repost badge (original vs reposter when exposed).
-3. Photo/video/GIF counts; thumbnail polish.
-4. Filename templates + video quality preference.
+1. Diagnostics panel: active X tab URL, watching status, last captured operation names, capture warm/cold, queue counts, and sanitized copy-debug-report.
+2. Improve manual-scroll media support across more live X response shapes, especially video timeline variants.
+3. Clearer badges/counts: scroll vs remote, photo/video/GIF counts, repost/original when exposed.
+4. Explicit Include replies / Include quoted media.
+5. Filename templates + video quality preference.
 
 ## P2 — other sources
 
@@ -98,7 +113,7 @@ New this session (2026-08-25): restructure so the extension can be **Load unpack
 
 ## Bucket list — do not start before P0 live pass
 
-- Retire or migrate popup DOM bulk into Side Panel.
+- Retire or simplify popup DOM bulk into an “Open Side Panel” launcher after Scroll capture passes live testing.
 - Action-bar “Add to queue”.
 - Gallery modes, preview modal, sort choices.
 - Concurrency > 2 only after rate-limit testing.

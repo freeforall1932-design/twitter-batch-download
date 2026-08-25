@@ -280,3 +280,27 @@ The repo root mixed the shippable extension (in `x-video-downloader-master/`, a 
 
 ### Validation
 - Syntax check + full Node test suite after cleanup.
+
+## 2026-08-25 — Side Panel scroll-capture first UX
+
+### Motivation
+Live testing showed the remote paste-link profile crawler works but is subpar as the primary UX because background fetching can trigger X rate limits more readily than user-driven scrolling. The popup bulk flow also made scroll capture and the Side Panel queue feel like separate products.
+
+### Changed
+- Side Panel now opens to a two-tab layout:
+  - **Scroll capture** (default): watches the active X tab while the user scrolls and lists captured media for review/download.
+  - **Remote fetch**: keeps the existing paste-link GraphQL discovery as an advanced fallback.
+- Added optional Side Panel auto-scroll controls for the default Scroll capture tab while keeping manual scrolling as the main path.
+- Added an **× clear target** button to the Remote fetch input.
+- Added **Clear history** for the current Side Panel tab instead of only clearing completed/failed items.
+- Queue actions now operate against the active tab source, so scroll-captured and remote-fetched items are reviewed separately in the Side Panel.
+- MAIN-world network capture now also observes GraphQL responses from X's own page requests and forwards media timeline content to the extension so user scrolling can populate the queue without initiating a separate profile crawl.
+- Content script now sends visible DOM photo items to the queue while Scroll capture is watching, covering already-rendered photos in addition to response-captured timeline media.
+
+### Validation
+- `node --check extension/background.js extension/content.js extension/popup.js extension/sidepanel.js extension/injected.js`
+- `node --test tests/background.test.js` — all 27 tests pass.
+
+### Notes
+- Video listing from manual scrolling is strongest when X timeline GraphQL responses are captured; already-rendered photos are additionally detected from the DOM.
+- The old popup remains available for now, but the Side Panel is now the primary scroll-capture/review/download surface.

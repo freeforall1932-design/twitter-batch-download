@@ -24,6 +24,13 @@
         pageUrl: payload.capturedUrl || window.location.href
       }).catch(() => {});
     }
+    if (payload.type === "xdlGraphqlResponse" && payload.data) {
+      chrome.runtime.sendMessage({
+        action: "localTimelineCapture",
+        capture: payload.data,
+        pageUrl: payload.capturedUrl || window.location.href
+      }).catch(() => {});
+    }
   });
 
   // --- State ---
@@ -35,6 +42,14 @@
   let statusText = "Ready";
   let statusState = "";
   const processedTweets = new Set();
+  const localListedMedia = new Set();
+  let localWatch = false;
+  let localScrollRunning = false;
+  let localFound = 0;
+  let localStatusText = "Watching is off";
+  let localMediaFilter = "all";
+  let localMaxMedia = 99999;
+  let localScrollSpeed = "medium";
   let envReady = false;
 
   const SCROLL_CONFIG = {
@@ -316,6 +331,90 @@
     return "jpg";
   }
 
+  function normalizeDomPhotoUrl(rawUrl) {
+    if (!rawUrl) return "";
+    try {
+      const url = new URL(rawUrl, window.location.origin);
+      if (!url.hostname.includes("pbs.twimg.com")) return "";
+      url.searchParams.set("name", "orig");
+      return url.toString();
+    } catch (_) {
+      return rawUrl.includes("name=") ? rawUrl : `${rawUrl}${rawUrl.includes("?") ? "&" : "?"}name=orig`;
+    }
+  }
+
+  function makeDomQueueItems(article) {
+    const info = getTweetInfo(article);
+    if (!info.hasMedia || !info.tweetId) return [];
+    if (localMediaFilter === "video" && !info.hasVideo) return [];
+    if (localMediaFilter === "photo" && !info.hasPhoto) return [];
+
+    const safeName = sanitizeFilename(info.tweetText || "media");
+    const handle = info.handle || "unknown";
+    const date = article.querySelector("time")?.getAttribute("datetime") || "Visible on page";
+    const imgs = Array.from(article.querySelectorAll('[data-testid="tweetPhoto"] img[src*="pbs.twimg.com/media"], img[src*="pbs.twimg.com/media"]'));
+    const seenUrls = new Set();
+    return imgs.map((img, index) => {
+      const url = normalizeDomPhotoUrl(img.currentSrc || img.src || "");
+      if (!url || seenUrls.has(url)) return null;
+      seenUrls.add(url);
+      const mediaId = (url.match(/media\/([^?]+)/)?.[1] || `${info.tweetId}-${index}`).replace(/[^a-zA-Z0-9_-]/g, "");
+      const ext = getPhotoExtension(url);
+      const id = `scroll-${info.tweetId}-${mediaId}-${index}`;
+      if (localListedMedia.has(id)) return null;
+      localListedMedia.add(id);
+      return {
+        id,
+        url,
+        type: "photo",
+        thumbnail: img.currentSrc || img.src || url,
+        author: `@${handle}`,
+        date,
+        tweetId: info.tweetId,
+        mediaId,
+        isRepost: false,
+        source: "scroll",
+        filename: `x-media/${handle}_${safeName}_${info.tweetId}_${index + 1}.${ext}`
+      };
+    }).filter(Boolean);
+  }
+
+  function scanLocalVisibleMedia() {
+    if (!localWatch && !localScrollRunning) return;
+    const articles = Array.from(document.querySelectorAll('article[data-testid="tweet"]'));
+    const items = [];
+    for (const article of articles) {
+      if (localFound + items.length >= localMaxMedia) break;
+      items.push(...makeDomQueueItems(article));
+    }
+    const capped = items.slice(0, Math.max(0, localMaxMedia - localFound));
+    if (!capped.length) return;
+    localFound += capped.length;
+    localStatusText = `Listed ${localFound} visible media item${localFound === 1 ? "" : "s"}.`;
+    chrome.runtime.sendMessage({ action: "queueAdd", items: capped, source: "scroll" }).catch(() => {});
+  }
+
+  async function localAutoScrollLoop() {
+    const config = SCROLL_CONFIG[localScrollSpeed] || SCROLL_CONFIG.medium;
+    localWatch = true;
+    localScrollRunning = true;
+    localStatusText = "Auto-scroll listing started";
+    let noGrowth = 0;
+    let lastHeight = document.body?.scrollHeight || 0;
+    while (localScrollRunning && localFound < localMaxMedia) {
+      scanLocalVisibleMedia();
+      window.scrollBy({ top: config.distance, behavior: localScrollSpeed === "fast" ? "instant" : "smooth" });
+      await sleep(config.interval);
+      const nextHeight = document.body?.scrollHeight || 0;
+      noGrowth = nextHeight <= lastHeight ? noGrowth + 1 : 0;
+      lastHeight = nextHeight;
+      localStatusText = `Auto-scrolling — ${localFound}/${localMaxMedia} listed`;
+      if (noGrowth > 12) break;
+    }
+    localScrollRunning = false;
+    localStatusText = localFound >= localMaxMedia ? `Reached ${localMaxMedia} listed items.` : `Auto-scroll stopped — ${localFound} listed.`;
+  }
+
   function resetBtn(btn) {
     btn.classList.remove("xdl-error", "xdl-done");
     btn.innerHTML = `${DOWNLOAD_SVG} Download`;
@@ -370,10 +469,12 @@
     }
     const observer = new MutationObserver(() => {
       injectDownloadButtons();
+      scanLocalVisibleMedia();
     });
     observer.observe(document.body, { childList: true, subtree: true });
     injectDownloadButtons();
-    setInterval(injectDownloadButtons, 2000);
+    scanLocalVisibleMedia();
+    setInterval(() => { injectDownloadButtons(); scanLocalVisibleMedia(); }, 2000);
   }
   startDomWatchers();
 
@@ -603,6 +704,42 @@
       statusText = `Stopped at ${downloaded} items.`;
       statusState = "stopped";
       sendResponse({ ok: true });
+      return;
+    }
+
+    if (msg.action === "localCaptureWatch") {
+      localWatch = msg.enabled !== false;
+      localMediaFilter = msg.mediaFilter || localMediaFilter || "all";
+      localMaxMedia = msg.maxMedia || localMaxMedia || 99999;
+      localStatusText = localWatch ? "Watching visible X media while you scroll." : "Watching is off";
+      if (localWatch) setTimeout(scanLocalVisibleMedia, 100);
+      sendResponse({ ok: true, text: localStatusText, running: localScrollRunning, found: localFound });
+      return;
+    }
+
+    if (msg.action === "localCaptureStart") {
+      if (localScrollRunning) {
+        sendResponse({ ok: false, reason: "Auto-scroll is already running" });
+        return;
+      }
+      localMaxMedia = msg.maxMedia || 99999;
+      localScrollSpeed = msg.scrollSpeed || "medium";
+      localMediaFilter = msg.mediaFilter || "all";
+      localStatusText = "Starting auto-scroll listing...";
+      sendResponse({ ok: true, text: localStatusText, running: true, found: localFound });
+      localAutoScrollLoop();
+      return;
+    }
+
+    if (msg.action === "localCaptureStop") {
+      localScrollRunning = false;
+      localStatusText = `Stopped — ${localFound} listed.`;
+      sendResponse({ ok: true, text: localStatusText, running: false, found: localFound });
+      return;
+    }
+
+    if (msg.action === "localCaptureStatus") {
+      sendResponse({ text: localStatusText, running: localScrollRunning, found: localFound, watching: localWatch });
       return;
     }
 
