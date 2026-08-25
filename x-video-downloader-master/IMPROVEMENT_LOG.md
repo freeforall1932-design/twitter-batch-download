@@ -239,3 +239,24 @@ Chronological implementation record for X Media Downloader.
 ### Validation
 - All **27** local Node tests pass.
 - No live X session required for unit tests; live signed-in validation still required for P0 complete.
+
+## 2026-08-25 — Deprecation cleanup after big rewrite
+
+### Removed (no longer fits product)
+- Entire ZIP path: `lib/zip-writer.js`, `importScripts` of zip-writer, `zipBuffers`, runtime handlers `downloadZip` and `fetchAsArrayBuffer`.
+- Legacy unused runtime handlers: `getVideoUrl`, `downloadVideo` (nothing in-tree called them).
+- Dead bulk flags in `content.js`: `useZip`, `bulkId`.
+- Accidental single-tweet fallback to `TweetDetail` operation name (incompatible variables/response vs `TweetResultByRestId`).
+
+### Fixed / clarified
+- `getTweetMedia` stays on `TweetResultByRestId` only; may still use a **live-captured query id** for that operation.
+- Header comment and architecture docs no longer claim ZIP packaging is active.
+- Handoff/worklist now include an explicit “code-review checklist” for missing logic and accidental shipment.
+
+### Still intentional (not deleted)
+- Popup DOM auto-scroll bulk mode — legacy but still product-supported until a Side Panel migration.
+- Public Bearer fallback + bundle scrape — fallbacks when live capture is cold.
+- Rank S capture bridge — local reimplementation, not third-party.
+
+### Validation
+- Syntax check + full Node test suite after cleanup.

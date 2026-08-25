@@ -1,10 +1,7 @@
 // ==========================================================================
 // background.js — Service Worker for X Media Downloader
-// Handles: auth, GraphQL API, media extraction, downloads, ZIP packaging
+// Handles: auth, GraphQL API, media extraction, queue, direct downloads
 // ==========================================================================
-
-// Import the minimal ZIP writer
-importScripts("lib/zip-writer.js");
 
 // --- Auth cache ---
 let bearerToken = null;
@@ -138,9 +135,6 @@ function classifyDiscoveryError(raw, context = {}) {
     message: message || "Discovery needs attention."
   };
 }
-
-// --- Download queue for ZIP batching ---
-const zipBuffers = new Map(); // bulkId → [{data, filename}]
 
 // ==========================================================================
 // AUTH — Extract Bearer token from X's JS bundle + read CSRF cookie
@@ -506,10 +500,12 @@ async function getTweetMedia(tweetId) {
   };
 
   // Prefer a live-captured TweetResultByRestId query id when the page has
-  // already issued one (Rank S intercept pattern).
-  const tweetCapture = getCapturedOperation("TweetResultByRestId") || getCapturedOperation("TweetDetail");
+  // already issued one (Rank S intercept pattern). Do not fall back to
+  // TweetDetail here: its variables/response shape differ and would break
+  // the single-tweet parser below.
+  const tweetCapture = getCapturedOperation("TweetResultByRestId");
   const queryId = tweetCapture?.queryId || GRAPHQL_QUERY_ID;
-  const operationName = tweetCapture ? (getCapturedOperation("TweetResultByRestId") ? "TweetResultByRestId" : "TweetDetail") : GRAPHQL_ENDPOINT;
+  const operationName = GRAPHQL_ENDPOINT;
   const mergedFeatures = tweetCapture ? { ...features, ...parseCapturedJson(tweetCapture.features, {}) } : features;
   const mergedToggles = tweetCapture ? { ...fieldToggles, ...parseCapturedJson(tweetCapture.fieldToggles, {}) } : fieldToggles;
 
@@ -561,8 +557,8 @@ async function getTweetMedia(tweetId) {
     return { error: errMsg };
   }
 
-  // Parse the result
-  const result = json?.data?.tweetResult?.result;
+  // Parse the result (TweetResultByRestId shape; never TweetDetail)
+  const result = json?.data?.tweetResult?.result || json?.data?.tweet_result?.result;
   if (!result) {
     return { error: "No tweet result in response" };
   }
@@ -1638,93 +1634,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  // Legacy: get video URL only (for backward compat with old content.js)
-  if (msg.action === "getVideoUrl") {
-    (async () => {
-      await refreshAuth(tabId);
-      const result = await getTweetMedia(msg.tweetId);
-      if (result.videos && result.videos.length > 0) {
-        sendResponse({ url: result.videos[0].url });
-      } else {
-        sendResponse({ url: null, error: result.error || "No video found" });
-      }
-    })();
-    return true;
-  }
-
   // Download a single file
   if (msg.action === "downloadFile") {
     downloadFile(msg.url, msg.filename).then(sendResponse);
-    return true;
-  }
-
-  // Legacy: downloadVideo alias
-  if (msg.action === "downloadVideo") {
-    downloadFile(msg.url, msg.filename).then(sendResponse);
-    return true;
-  }
-
-  // Fetch file as ArrayBuffer (for ZIP assembly)
-  if (msg.action === "fetchAsArrayBuffer") {
-    (async () => {
-      try {
-        const resp = await fetch(msg.url);
-        if (!resp.ok) {
-          sendResponse({ error: `HTTP ${resp.status}` });
-          return;
-        }
-        const buffer = await resp.arrayBuffer();
-        // Convert to regular Array for message passing (ArrayBuffers don't serialize well)
-        const arr = Array.from(new Uint8Array(buffer));
-        sendResponse({ data: arr, ok: true });
-      } catch (e) {
-        sendResponse({ error: e.message });
-      }
-    })();
-    return true;
-  }
-
-  // Create a ZIP from multiple URLs and download it
-  if (msg.action === "downloadZip") {
-    (async () => {
-      try {
-        const { files, zipFilename } = msg;
-        // files: [{ url, name }]
-        const zip = new ZipWriter();
-        let fetched = 0;
-
-        for (const file of files) {
-          try {
-            const resp = await fetch(file.url);
-            if (resp.ok) {
-              const buffer = await resp.arrayBuffer();
-              zip.addFile(file.name, buffer);
-            }
-          } catch (e) {
-            console.warn("[X-DL BG] Failed to fetch for ZIP:", file.name, e.message);
-          }
-          fetched++;
-        }
-
-        const zipData = zip.generate();
-        const blob = new Blob([zipData], { type: "application/zip" });
-        const zipUrl = URL.createObjectURL(blob);
-
-        chrome.downloads.download(
-          { url: zipUrl, filename: zipFilename || "x-media/archive.zip", conflictAction: "uniquify" },
-          (downloadId) => {
-            URL.revokeObjectURL(zipUrl);
-            if (chrome.runtime.lastError) {
-              sendResponse({ success: false, error: chrome.runtime.lastError.message });
-            } else {
-              sendResponse({ success: true, downloadId, files: fetched });
-            }
-          }
-        );
-      } catch (e) {
-        sendResponse({ success: false, error: e.message });
-      }
-    })();
     return true;
   }
 });

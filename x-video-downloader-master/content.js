@@ -31,13 +31,11 @@
   let maxMedia = 100;
   let scrollSpeed = "medium";
   let mediaFilter = "all"; // "all" | "video" | "photo"
-  let useZip = false;
   let running = false;
   let statusText = "Ready";
   let statusState = "";
   const processedTweets = new Set();
   let envReady = false;
-  let bulkId = 0; // unique ID for each bulk session
 
   const SCROLL_CONFIG = {
     slow: { distance: 400, interval: 3500 },
@@ -405,7 +403,6 @@
   async function mainLoop() {
     console.log("[X-DL] Initializing auth environment...");
     statusText = "Initializing...";
-    bulkId++;
 
     const envOk = await initEnv();
     if (!envOk) {
@@ -588,7 +585,6 @@
       maxMedia = msg.maxMedia || msg.maxVideos || 100;
       scrollSpeed = msg.scrollSpeed || "medium";
       mediaFilter = msg.mediaFilter || "all";
-      useZip = msg.useZip || false;
       downloaded = 0;
       running = true;
       window.__xdl_active = true;
