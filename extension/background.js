@@ -1500,7 +1500,7 @@ function quotedTweetFrom(tweet) {
 // Maps ONE tweet object's own extended_entities media to queue-item candidates.
 // Used for a post's own media, the reposted target's media, and the quoted
 // post's media — the flags only differ (isRepost / isQuote).
-function mediaItemsFromTweetObject(source, { isRepost = false, isQuote = false, fallbackAuthor = "", fallbackDate = "" } = {}) {
+function mediaItemsFromTweetObject(source, { isRepost = false, isQuote = false, fallbackAuthor = "", fallbackDate = "", fallbackTweetId = "" } = {}) {
   const sourceLegacy = source.legacy || {};
   const author =
     source.core?.user_results?.result?.legacy?.screen_name ||
@@ -1520,7 +1520,10 @@ function mediaItemsFromTweetObject(source, { isRepost = false, isQuote = false, 
     if (!url) return null;
     const extension = type === "photo" ? ((url.match(/[?&]format=([^&]+)/)?.[1] || url.split("?")[0].split(".").pop() || "jpg").replace(/[^a-z0-9]/gi, "") || "jpg") : "mp4";
     const mediaId = item.id_str || item.id || index;
-    const tweetId = source.rest_id || "";
+    // A repost target virtually always carries rest_id; keep the outer post's
+    // id as the historical fallback. Quoted media never falls back — a quoted
+    // row with a wrong id would break attribution and skip-history.
+    const tweetId = source.rest_id || (isQuote ? "" : fallbackTweetId);
     return {
       id: `${tweetId}-${mediaId}`,
       // Same CDN key the content script derives, so a photo listed from the
@@ -1549,7 +1552,7 @@ function mediaFromTweet(tweet, targetHandle, options = {}) {
   // data used to fall back to the outer (retweeting) post's author and date.
   const outerAuthor = tweet.core?.user_results?.result?.legacy?.screen_name || targetHandle;
   const outerDate = legacy.created_at || "";
-  const items = mediaItemsFromTweetObject(source, { isRepost, fallbackAuthor: outerAuthor, fallbackDate: outerDate });
+  const items = mediaItemsFromTweetObject(source, { isRepost, fallbackAuthor: outerAuthor, fallbackDate: outerDate, fallbackTweetId: tweet.rest_id });
   if (includeQuoted) {
     // A quote reaction ("GIF/video reacting to a mentioned post") carries the
     // quoted post's media in the card; list it as its own row, attributed to

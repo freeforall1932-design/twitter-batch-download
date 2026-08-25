@@ -91,6 +91,18 @@ So it was never impossible — it was switched off.
   pre-change tree; the two guard tests pass on both trees by design.
 - `node --check` clean on all five extension scripts. No new runtime actions,
   so the message-contract test needed no changes.
+- **Post-commit review pass (same day):** re-audited every hunk for missing
+  logic after an interrupted session. Confirmed complete: `injected.js`
+  media-marker pre-filter is a regex over the *serialized* JSON, so
+  quote-nested media still forwards; `publicQueueState()` passes whole items,
+  so `isQuote` reaches the badge; popup.js untouched and compatible. Found and
+  fixed: the refactor had dropped the outer-post `rest_id` fallback for a
+  repost target without its own id (restored via `fallbackTweetId`; quoted
+  media never falls back — mis-attribution would corrupt skip-history).
+  README feature list now documents Include quoted. Known untested seam: the
+  discovery loop's `includeQuoted` pass-through is not exercised end-to-end
+  (the unit harness cannot yet satisfy its cookie/auth preconditions); the
+  identical default expression is covered via the scroll-capture test.
 
 ### Still not verified
 
