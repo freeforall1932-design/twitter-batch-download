@@ -2,6 +2,105 @@
 
 Chronological implementation record for X Media Downloader.
 
+## 2026-08-25 — Session handoff rewritten as a review-driven document
+
+### Motivation
+The handoff described state but not *process*. A new session had no explicit
+instruction to review the improvement log and worklist first, and no rule about
+writing findings back, so context was rediscovered each time.
+
+### Changed
+- `docs/SESSION_HANDOFF.md` rewritten with a numbered structure and a new
+  **"Start here"** section: a table explaining what each of the three docs
+  answers, plus the six-step review loop (read log → read worklist → read
+  handoff → apply user input → work + test → write back to all three).
+- Added a **"User input carried into the next session"** slot so live-test
+  feedback and open product questions survive the session boundary. Current
+  open questions recorded: did v3.2 fix homepage/route capture, is "Fast" fast
+  enough, should the two tab lists be unified, are per-batch subfolders wanted.
+- Added **"Design decisions that are deliberate — do not simplify these away"**:
+  six items (no response allowlist, unconditional capture start, SPA route
+  watcher + replay, rate-bounded video resolve, single download action, popup
+  has no loop), each tied to the live failure it fixes.
+- Expanded the removed/deprecated list with the v3.2 removals
+  (`localCapture*`, popup bulk commands, `Watch current tab`, auto-scroll limit,
+  `Download all in tab`) and documented the MAIN ↔ isolated world message pairs.
+- Corrected stale content: branch, v3.1-era architecture notes, the
+  "popup auto-scroll remains supported" line, and the duplicated
+  commands/testing sections.
+- `docs/WORKLIST.md`: added a **Session workflow** section mirroring the loop and
+  pointing at the do-not-simplify list; marked the manifest-version P0 item done.
+
+### Unchanged
+- No extension code touched. Docs only; 43 tests still pass.
+
+## 2026-08-25 — Live-testing fixes: always-on capture, SPA routes, one download action
+
+Driven entirely by signed-in live-X testing feedback against v3.1.
+
+### Root causes found
+
+1. **Capture required an explicit "watch" command.** `content.js` only listed
+   media after the Side Panel sent `localCaptureWatch` to whichever tab was
+   active. Any other tab, and any view reached without the panel re-issuing the
+   command, captured nothing.
+2. **Response parsing was gated by an operation-name allowlist.** Both
+   `injected.js` (`TRACKED_OPS`) and `background.js` dropped every GraphQL
+   payload whose operation was not on a fixed list. Home timeline operations
+   were never on it, which is why the homepage never captured at all.
+3. **Nothing reacted to SPA route changes.** X changes `/user` → `/user/media`
+   and opens posts via `history.pushState`, with no document load. The old code
+   only re-armed on a real page load, so a route change in the same tab left
+   capture pointing at the previous view — exactly the reported "only works
+   after a reload, a new tab, or several minutes" behaviour.
+4. **Two engines fought over the page.** The popup ran its own scroll+download
+   loop that downloaded each item before scrolling further, while the Side Panel
+   ran a separate listing loop.
+
+### Changed
+
+- **Capture is always on.** `content.js` starts listing at `document_start` in
+  every X tab, with no watch command. `Watch current tab` is gone.
+- **No operation allowlist for responses.** `injected.js` forwards any GraphQL
+  response containing media markers; `handleLocalTimelineCapture` parses any
+  payload. The allowlist survives only for *request metadata* used by Remote
+  fetch. Home timeline, profile, `/media`, and post detail all capture now.
+- **SPA route watcher.** `injected.js` patches `pushState`/`replaceState`/
+  `popstate` (Rank S pattern) and emits `xdlUrlChanged`; `content.js` re-scans
+  and requests a replay on every route change, with a 2.5s reconciliation sweep
+  as a backstop.
+- **Replay buffer.** `injected.js` keeps the last 40 media-bearing GraphQL
+  payloads and replays them on request, so an extension reload, a late listener,
+  or an SPA view served from X's cache without a new request still lists media.
+- **Video posts resolve per-post.** DOM-visible video posts that never produced
+  a GraphQL payload are resolved through `TweetResultByRestId`, rate-bounded to
+  one per 700ms. This is why a profile's posts now list, not just `/media`.
+- **One download action.** `Download all in tab` was removed as redundant with
+  `Select all` + `Download selected`.
+- **Auto-scroll rewritten.** Content-driven pacing (waits for the timeline to
+  grow rather than sleeping a fixed interval), no item limit, and it never waits
+  on downloads. A floating in-page badge shows progress with a Stop button.
+- **Popup is a launcher.** Its competing scroll/download loop is deleted.
+- **Rank A action-bar insight adopted:** every media post now gets both
+  `Download` and `Add to queue`, plus toasts. Reimplemented locally.
+- **Rank S "Ignore saved" adopted:** completed downloads are remembered by id
+  (`downloadedMediaIdsV1`, ids only) and skipped on re-listing. Toggleable via
+  `Skip already downloaded`.
+- **Cross-source dedupe.** Every item carries a `mediaKey` derived from the CDN
+  path, so the same photo found in the DOM and in a GraphQL payload collapses
+  into one row.
+- **Per-row remove**, post deep-link, and a live active-tab status pill showing
+  route, posts on screen, and pending video resolves.
+
+### Validation
+
+- **43** Node tests pass (was 27). New `tests/content.test.js` runs the real
+  `content.js` in a DOM shim and reproduces each reported failure: homepage
+  capture, in-tab route change, duplicate suppression, filter behaviour, and
+  auto-scroll start/stop.
+- `node --check` clean on all five extension scripts.
+- Side Panel ids/messages cross-checked: no unhandled message, no missing id.
+
 ## 2026-08-25 — Repo restructure: load-unpacked layout + release packaging
 
 ### Motivation

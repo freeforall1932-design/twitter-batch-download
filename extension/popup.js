@@ -1,106 +1,42 @@
 // ==========================================================================
-// popup.js — Bulk controls: max items, media filter, scroll speed, start/stop
+// popup.js — Side Panel launcher.
+//
+// The popup no longer runs a second scroll/download loop. Scroll capture in
+// the Side Panel is the single surface: two competing engines meant the popup
+// could scroll a page while the panel was mid-capture, and the popup loop
+// blocked scrolling on each download.
 // ==========================================================================
 
-const startBtn = document.getElementById("startBtn");
 const openPanelBtn = document.getElementById("openPanelBtn");
-const stopBtn = document.getElementById("stopBtn");
 const statusEl = document.getElementById("status");
-const warningEl = document.getElementById("warning");
-const maxMediaInput = document.getElementById("maxMedia");
-const mediaFilterSelect = document.getElementById("mediaFilter");
-const scrollSpeedSelect = document.getElementById("scrollSpeed");
 
-// Load saved settings
-chrome.storage.local.get(["maxMedia", "scrollSpeed", "mediaFilter"], (data) => {
-  if (data.maxMedia) maxMediaInput.value = data.maxMedia;
-  if (data.scrollSpeed) scrollSpeedSelect.value = data.scrollSpeed;
-  if (data.mediaFilter) mediaFilterSelect.value = data.mediaFilter;
-});
+function setStatus(text, kind = "") {
+  statusEl.textContent = text;
+  statusEl.className = `status ${kind}`;
+}
 
-// Poll status from content script
-function pollStatus() {
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    if (!tabs[0]) return;
-    chrome.tabs.sendMessage(tabs[0].id, { action: "getStatus" }, (resp) => {
-      if (chrome.runtime.lastError || !resp) return;
-      statusEl.textContent = resp.text;
-      statusEl.className = "status " + resp.state;
+function refreshStatus() {
+  chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+    const url = tab?.url || "";
+    if (!url.includes("x.com") && !url.includes("twitter.com")) {
+      setStatus("Open an X/Twitter tab, then open the queue.", "warn");
+      return;
+    }
+    chrome.tabs.sendMessage(tab.id, { action: "scrollStatus" }, (response) => {
+      if (chrome.runtime.lastError || !response) {
+        setStatus("Refresh this X tab so capture can start.", "warn");
+        return;
+      }
+      setStatus(response.text || "Capturing this tab.", "ok");
     });
   });
 }
 
-setInterval(pollStatus, 1000);
-pollStatus();
-
 openPanelBtn.addEventListener("click", () => {
-  chrome.windows.getCurrent((window) => chrome.sidePanel.open({ windowId: window.id }));
-});
-
-// Start button
-startBtn.addEventListener("click", () => {
-  const maxMedia = parseInt(maxMediaInput.value) || 99999;
-  const scrollSpeed = scrollSpeedSelect.value;
-  const mediaFilter = mediaFilterSelect.value;
-
-  chrome.storage.local.set({ maxMedia, scrollSpeed, mediaFilter });
-
-  // Show warning for fast speed
-  warningEl.style.display = "none";
-  if (scrollSpeed === "fast") {
-    warningEl.textContent = "Fast speed may trigger rate limits. Use slow/medium for reliability.";
-    warningEl.style.display = "block";
-  }
-
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    if (!tabs[0]) return;
-    const url = tabs[0].url || "";
-    if (!url.includes("x.com") && !url.includes("twitter.com")) {
-      statusEl.textContent = "Not on X/Twitter! Navigate there first.";
-      statusEl.className = "status stopped";
-      return;
-    }
-
-    const payload = {
-      action: "start",
-      maxMedia,
-      scrollSpeed,
-      mediaFilter
-    };
-
-    chrome.tabs.sendMessage(tabs[0].id, payload, (resp) => {
-      if (chrome.runtime.lastError) {
-        statusEl.textContent = "Reloading page to inject script...";
-        chrome.scripting.executeScript({
-          target: { tabId: tabs[0].id },
-          files: ["content.js"]
-        }, () => {
-          setTimeout(() => {
-            chrome.tabs.sendMessage(tabs[0].id, payload);
-          }, 500);
-        });
-        return;
-      }
-      if (resp && !resp.ok) {
-        statusEl.textContent = resp.reason || "Could not start";
-        statusEl.className = "status stopped";
-        return;
-      }
-      pollStatus();
-    });
+  chrome.windows.getCurrent((currentWindow) => {
+    chrome.sidePanel.open({ windowId: currentWindow.id }).then(() => window.close()).catch(() => window.close());
   });
-
-  statusEl.textContent = "Starting...";
-  statusEl.className = "status running";
 });
 
-// Stop button
-stopBtn.addEventListener("click", () => {
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    if (!tabs[0]) return;
-    chrome.tabs.sendMessage(tabs[0].id, { action: "stop" });
-  });
-  statusEl.textContent = "Stopped";
-  statusEl.className = "status stopped";
-  warningEl.style.display = "none";
-});
+refreshStatus();
+setInterval(refreshStatus, 1500);

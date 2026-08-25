@@ -21,22 +21,14 @@
     </nav>
 
     <section id="scrollPanel" class="source-card tab-panel" aria-label="Scroll capture source">
-      <div class="panel-heading">
-        <div>
-          <label>Default: list media while you scroll X</label>
-          <p class="hint inline">Open an X profile/media page, keep this panel open, then scroll normally. X page responses and visible photos are added here without a separate profile crawl.</p>
+      <div id="tabStatus" class="tab-status">
+        <span id="tabStatusDot" class="dot"></span>
+        <div class="tab-status-text">
+          <strong id="tabStatusTitle">Checking active tab…</strong>
+          <span id="tabStatusDetail">Open an X tab to start listing media.</span>
         </div>
       </div>
-      <div class="source-options stacked-options">
-        <label>Auto-scroll limit <input id="localLimit" class="limit-input" type="number" min="1" max="99999" value="99999"></label>
-        <label>Speed
-          <select id="localScrollSpeed">
-            <option value="slow">Slow</option>
-            <option value="medium" selected>Medium</option>
-            <option value="fast">Fast</option>
-          </select>
-        </label>
-      </div>
+
       <div class="source-options">
         <label>Capture
           <select id="localCaptureFilter">
@@ -45,13 +37,20 @@
             <option value="video">Videos only</option>
           </select>
         </label>
-        <button id="watchCurrentBtn" class="button secondary compact">Watch current tab</button>
+        <label>Speed
+          <select id="localScrollSpeed">
+            <option value="slow">Slow</option>
+            <option value="medium">Medium</option>
+            <option value="fast" selected>Fast</option>
+          </select>
+        </label>
       </div>
+
       <div class="action-row">
         <button id="startLocalScrollBtn" class="button primary">Start auto-scroll</button>
-        <button id="stopLocalScrollBtn" class="button secondary" disabled>Stop auto-scroll</button>
+        <button id="stopLocalScrollBtn" class="button secondary" disabled>Stop</button>
       </div>
-      <p id="localHint" class="hint">Watching starts automatically on the active X tab when this tab is open.</p>
+      <p id="localHint" class="hint">Media lists automatically as you scroll. Auto-scroll just scrolls for you — it never waits on downloads.</p>
     </section>
 
     <section id="remotePanel" class="source-card tab-panel hidden" aria-label="Remote discovery source">
@@ -79,14 +78,18 @@
     </section>
 
     <section class="toolbar" aria-label="Selection controls">
-      <label class="check-label"><input id="selectAll" type="checkbox"> Select all in tab</label>
+      <label class="check-label"><input id="selectAll" type="checkbox"> Select all</label>
       <select id="mediaFilter" aria-label="Filter queue">
         <option value="all">All media</option>
         <option value="video">Videos</option>
         <option value="photo">Photos</option>
       </select>
+    </section>
+
+    <section class="toolbar secondary-toolbar" aria-label="Queue maintenance">
+      <label class="check-label" title="Media you have already downloaded is not listed again."><input id="skipDownloaded" type="checkbox" checked> Skip already downloaded</label>
       <button id="retryFailedBtn" class="text-button">Retry failed</button>
-      <button id="clearHistoryBtn" class="text-button danger">Clear history</button>
+      <button id="clearHistoryBtn" class="text-button danger">Clear list</button>
     </section>
 
     <section id="queue" class="queue" aria-live="polite">
@@ -106,12 +109,11 @@
         <button data-concurrency="2" class="selected">2</button>
       </div>
     </div>
-    <p id="downloadNotice" class="download-notice">The active tab list downloads independently from the other tab view.</p>
     <div class="action-row">
-      <button id="downloadSelectedBtn" class="button secondary" disabled>Download selected</button>
-      <button id="downloadAllBtn" class="button primary" disabled>Download all in tab</button>
+      <button id="downloadSelectedBtn" class="button primary" disabled>Download selected</button>
+      <button id="stopBtn" class="button secondary" disabled>Stop</button>
     </div>
-    <button id="stopBtn" class="text-button stop-button" disabled>Stop after active downloads</button>
+    <p id="downloadNotice" class="download-notice">Tick items, or use Select all, then download. Downloads keep running while you scroll.</p>
   </footer>
   <script src="sidepanel.js"></script>
 </body>

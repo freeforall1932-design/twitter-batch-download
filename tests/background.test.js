@@ -757,3 +757,161 @@ test("buildFallbackFilenames produces a short safe ladder", () => {
   assert.ok(ladder.every((name) => !/[<>:"|?*]/.test(name)));
   assert.ok(ladder.some((name) => name.startsWith("x-media/")));
 });
+
+test("queueAdd collapses the same CDN media discovered from DOM and GraphQL", async () => {
+  const background = loadBackground();
+  // The DOM scanner keys a photo by CDN leaf; the GraphQL parser keys the same
+  // photo by X's media id. Both must land as one row.
+  const first = await background.handleQueueMessage({
+    action: "queueAdd",
+    source: "scroll",
+    items: [{ id: "555-AbCdEf", mediaKey: "AbCdEf", url: "https://pbs.example.com/media/AbCdEf.jpg?name=orig", type: "photo" }]
+  });
+  assert.equal(first.addedCount, 1);
+
+  const second = await background.handleQueueMessage({
+    action: "queueAdd",
+    source: "scroll",
+    items: [{ id: "555-1730000000", mediaKey: "AbCdEf", url: "https://pbs.example.com/media/AbCdEf.jpg?name=orig", type: "photo" }]
+  });
+  assert.equal(second.addedCount, 0);
+  assert.equal(second.items.length, 1);
+});
+
+test("queueAdd skips media that already downloaded successfully", async () => {
+  const background = loadBackground({ stored: { downloadedMediaIdsV1: ["777-old"] } });
+  const state = await background.handleQueueMessage({
+    action: "queueAdd",
+    source: "scroll",
+    skipDownloaded: true,
+    items: [
+      { id: "777-old", mediaKey: "old", url: "https://pbs.example.com/media/old.jpg", type: "photo" },
+      { id: "777-new", mediaKey: "new", url: "https://pbs.example.com/media/new.jpg", type: "photo" }
+    ]
+  });
+  assert.equal(state.addedCount, 1);
+  assert.deepEqual(Array.from(state.items, (item) => item.id), ["777-new"]);
+
+  const notSkipped = await background.handleQueueMessage({
+    action: "queueAdd",
+    source: "scroll",
+    skipDownloaded: false,
+    items: [{ id: "777-old", mediaKey: "old", url: "https://pbs.example.com/media/old.jpg", type: "photo" }]
+  });
+  assert.equal(notSkipped.addedCount, 1);
+});
+
+test("a completed download is remembered so it is not re-listed later", async () => {
+  const background = loadBackground();
+  await background.handleQueueMessage({
+    action: "queueAdd",
+    source: "scroll",
+    items: [{ id: "888-a", mediaKey: "a", url: "https://pbs.example.com/media/a.jpg", type: "photo" }]
+  });
+  await background.handleQueueMessage({ action: "queueStart", mode: "all", source: "scroll" });
+  await background.processQueue();
+  await background.emitDownloadChange({ id: 1, state: { current: "complete" } });
+
+  await background.handleQueueMessage({ action: "queueClearAll", source: "scroll" });
+  const readded = await background.handleQueueMessage({
+    action: "queueAdd",
+    source: "scroll",
+    skipDownloaded: true,
+    items: [{ id: "888-a", mediaKey: "a", url: "https://pbs.example.com/media/a.jpg", type: "photo" }]
+  });
+  assert.equal(readded.addedCount, 0, "an already-downloaded file must not come back after clearing the list");
+
+  await background.handleQueueMessage({ action: "queueClearDownloadedHistory" });
+  const afterReset = await background.handleQueueMessage({
+    action: "queueAdd",
+    source: "scroll",
+    skipDownloaded: true,
+    items: [{ id: "888-a", mediaKey: "a", url: "https://pbs.example.com/media/a.jpg", type: "photo" }]
+  });
+  assert.equal(afterReset.addedCount, 1);
+});
+
+test("queueRemove drops a single row without touching the rest", async () => {
+  const background = loadBackground();
+  await background.handleQueueMessage({
+    action: "queueAdd",
+    source: "scroll",
+    items: [
+      { id: "a", url: "https://example.test/a", type: "photo" },
+      { id: "b", url: "https://example.test/b", type: "photo" }
+    ]
+  });
+  const state = await background.handleQueueMessage({ action: "queueRemove", id: "a" });
+  assert.deepEqual(Array.from(state.items, (item) => item.id), ["b"]);
+});
+
+test("local timeline capture accepts any GraphQL payload containing media", async () => {
+  const background = loadBackground();
+  const tweet = {
+    __typename: "Tweet",
+    rest_id: "4242",
+    core: { user_results: { result: { legacy: { screen_name: "loonarae" } } } },
+    legacy: {
+      created_at: "Sat Aug 23 12:00:00 +0000 2026",
+      full_text: "home timeline post",
+      extended_entities: {
+        media: [{ id_str: "m1", type: "photo", media_url_https: "https://pbs.example.com/media/home1.jpg" }]
+      }
+    }
+  };
+  // Deliberately an operation name that is NOT on any allowlist: a home
+  // timeline op is exactly the case the old allowlist silently dropped.
+  const result = await background.handleLocalTimelineCapture({
+    capture: { operationName: "HomeLatestTimeline", queryId: "abc123", json: { data: { home: { home_timeline_urt: { instructions: [{ entries: [{ content: { itemContent: { tweet_results: { result: tweet } } } }] }] } } } } },
+    pageUrl: "https://x.com/home"
+  });
+  assert.equal(result.addedCount, 1);
+  assert.deepEqual(Array.from(result.tweetIds), ["4242"]);
+
+  const state = await background.handleQueueMessage({ action: "queueGet" });
+  assert.equal(state.items[0].source, "scroll");
+  assert.equal(state.items[0].author, "@loonarae");
+});
+
+test("local timeline capture honours the photo/video capture filter", async () => {
+  const background = loadBackground();
+  const tweet = {
+    __typename: "Tweet",
+    rest_id: "5151",
+    core: { user_results: { result: { legacy: { screen_name: "loonarae" } } } },
+    legacy: {
+      full_text: "mixed post",
+      extended_entities: {
+        media: [
+          { id_str: "p1", type: "photo", media_url_https: "https://pbs.example.com/media/p1.jpg" },
+          { id_str: "v1", type: "video", video_info: { variants: [{ content_type: "video/mp4", bitrate: 832000, url: "https://video.example.com/v1.mp4" }] } }
+        ]
+      }
+    }
+  };
+  const result = await background.handleLocalTimelineCapture({
+    capture: { operationName: "UserMedia", json: { data: { user: { result: { timeline_v2: { timeline: { instructions: [{ entries: [{ content: { itemContent: { tweet_results: { result: tweet } } } }] }] } } } } } } },
+    pageUrl: "https://x.com/real_loonarae/media",
+    mediaFilter: "video"
+  });
+  assert.equal(result.addedCount, 1);
+  const state = await background.handleQueueMessage({ action: "queueGet" });
+  assert.deepEqual(Array.from(state.items, (item) => item.type), ["video"]);
+});
+
+test("mediaFromTweet stamps a CDN media key for cross-source dedupe", () => {
+  const background = loadBackground();
+  const tweet = {
+    rest_id: "9090",
+    core: { user_results: { result: { legacy: { screen_name: "alice" } } } },
+    legacy: {
+      full_text: "hi",
+      extended_entities: {
+        media: [{ id_str: "m9", type: "photo", media_url_https: "https://pbs.example.com/media/KeYaBc123.jpg" }]
+      }
+    }
+  };
+  const [item] = background.mediaFromTweet(tweet, "alice", false);
+  assert.equal(item.mediaKey, "KeYaBc123");
+  assert.equal(background.mediaKeyFromUrl("https://pbs.example.com/media/KeYaBc123.jpg?format=jpg&name=orig"), "KeYaBc123");
+});

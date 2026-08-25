@@ -687,11 +687,46 @@ async function downloadFile(url, filename) {
 // PERSISTENT DOWNLOAD QUEUE — schedules only after prior downloads finish
 // ==========================================================================
 const QUEUE_STORAGE_KEY = "batchDownloadQueueV1";
-const QUEUE_DEFAULT = { items: [], concurrency: 2, running: false, stopped: false };
+const QUEUE_DEFAULT = { items: [], concurrency: 2, running: false, stopped: false, skipDownloaded: true };
 const MAX_DOWNLOAD_ATTEMPTS = 3;
 let queueState = null;
 let queueSaving = Promise.resolve();
 let queueProcessing = Promise.resolve();
+
+// --- Completed-download history (Rank S "Ignore saved") -------------------
+// Remembers queue item ids that finished successfully so the same media is not
+// re-listed after the user clears the visible history. Ids only — no URLs,
+// no tokens, no post content.
+const DOWNLOADED_STORAGE_KEY = "downloadedMediaIdsV1";
+const DOWNLOADED_HISTORY_MAX = 20000;
+let downloadedIds = null;
+let downloadedSaving = Promise.resolve();
+
+async function getDownloadedIds() {
+  if (downloadedIds) return downloadedIds;
+  const stored = await chrome.storage.local.get(DOWNLOADED_STORAGE_KEY);
+  const list = Array.isArray(stored?.[DOWNLOADED_STORAGE_KEY]) ? stored[DOWNLOADED_STORAGE_KEY] : [];
+  downloadedIds = new Set(list.filter((id) => typeof id === "string" && id));
+  return downloadedIds;
+}
+
+async function saveDownloadedIds() {
+  if (!downloadedIds) return;
+  // Keep the newest ids when the history grows past the cap.
+  const list = Array.from(downloadedIds);
+  const trimmed = list.length > DOWNLOADED_HISTORY_MAX ? list.slice(list.length - DOWNLOADED_HISTORY_MAX) : list;
+  if (trimmed.length !== list.length) downloadedIds = new Set(trimmed);
+  downloadedSaving = downloadedSaving.then(() => chrome.storage.local.set({ [DOWNLOADED_STORAGE_KEY]: trimmed }));
+  await downloadedSaving;
+}
+
+async function rememberDownloadedId(id) {
+  if (!id) return;
+  const history = await getDownloadedIds();
+  if (history.has(id)) return;
+  history.add(id);
+  await saveDownloadedIds();
+}
 
 function searchDownloads(query) {
   // chrome.downloads.search() supports a promise in current MV3 builds and a
@@ -886,6 +921,7 @@ chrome.downloads.onChanged.addListener(async (delta) => {
     item.status = "completed";
     item.error = null;
     item.bytesReceived = item.totalBytes || item.bytesReceived;
+    await rememberDownloadedId(item.id);
   } else if ((item.attempts || 0) < MAX_DOWNLOAD_ATTEMPTS && !state.stopped) {
     // Keep the queue at its configured 1–2 active items; retry occupies a new
     // slot only after Chrome has confirmed the old attempt has ended.
@@ -900,12 +936,21 @@ chrome.downloads.onChanged.addListener(async (delta) => {
   processQueue();
 });
 
-function mergeQueueItems(state, candidates, orderedFrontIds = null) {
+function mergeQueueItems(state, candidates, orderedFrontIds = null, options = {}) {
   const knownIds = new Set(state.items.map((item) => item.id));
+  // A photo can reach the queue twice with different ids: once from the
+  // rendered DOM and once from the GraphQL payload for the same post. Collapse
+  // on the CDN media key so the user never sees the same file listed twice.
+  const knownKeys = new Set(state.items.map((item) => item.mediaKey).filter(Boolean));
+  const alreadyDownloaded = options.alreadyDownloaded || null;
   const additions = [];
   for (const candidate of candidates || []) {
     if (!candidate?.id || !candidate.url || knownIds.has(candidate.id)) continue;
+    const mediaKey = candidate.mediaKey || null;
+    if (mediaKey && knownKeys.has(mediaKey)) continue;
+    if (alreadyDownloaded && (alreadyDownloaded.has(candidate.id) || (mediaKey && alreadyDownloaded.has(mediaKey)))) continue;
     knownIds.add(candidate.id);
+    if (mediaKey) knownKeys.add(mediaKey);
     additions.push({ ...candidate, selected: false, status: "discovered", downloadId: null, attempts: 0, bytesReceived: 0, totalBytes: 0 });
   }
 
@@ -939,14 +984,24 @@ async function addQueueItems(items, options = {}) {
   const state = await getQueueState();
   const source = options.source || null;
   const normalizedItems = (items || []).map((item) => source && !item.source ? { ...item, source } : item);
-  const addedCount = mergeQueueItems(state, normalizedItems, options.orderedFrontIds || null);
+  const skipDownloaded = options.skipDownloaded !== undefined
+    ? Boolean(options.skipDownloaded)
+    : state.skipDownloaded !== false;
+  const alreadyDownloaded = skipDownloaded ? await getDownloadedIds() : null;
+  const addedCount = mergeQueueItems(state, normalizedItems, options.orderedFrontIds || null, { alreadyDownloaded });
   await saveQueueState();
   return { state: publicQueueState(), addedCount };
 }
 
 async function handleQueueMessage(msg) {
   if (msg.action === "queueAdd") {
-    return (await addQueueItems(msg.items, { source: msg.source || null })).state;
+    // Content scripts need the accepted count so their local dedupe sets and
+    // "listed" counter stay in step with the queue.
+    const result = await addQueueItems(msg.items, {
+      source: msg.source || null,
+      skipDownloaded: msg.skipDownloaded
+    });
+    return { ...result.state, addedCount: result.addedCount };
   }
   const state = await getQueueState();
   if (msg.action === "queueGet") return publicQueueState();
@@ -960,6 +1015,14 @@ async function handleQueueMessage(msg) {
       const sourceOk = !msg.source || (item.source || "remote") === msg.source;
       return sourceOk && (msg.filter === "all" || item.type === msg.filter);
     }).forEach((item) => { item.selected = Boolean(msg.selected); });
+  } else if (msg.action === "queueSetSkipDownloaded") {
+    state.skipDownloaded = msg.skipDownloaded !== false;
+  } else if (msg.action === "queueRemove") {
+    const ids = new Set(Array.isArray(msg.ids) ? msg.ids : [msg.id].filter(Boolean));
+    state.items = state.items.filter((item) => !ids.has(item.id));
+  } else if (msg.action === "queueClearDownloadedHistory") {
+    downloadedIds = new Set();
+    await saveDownloadedIds();
   } else if (msg.action === "queueClearAll") {
     state.items = msg.source
       ? state.items.filter((item) => (item.source || "remote") !== msg.source)
@@ -1372,6 +1435,19 @@ function sanitizeFilePart(value, fallback) {
   return cleaned.slice(0, 64) || fallback;
 }
 
+// Stable CDN identity for a media file, independent of query params, size
+// suffixes, and which surface (DOM vs GraphQL) discovered it.
+function mediaKeyFromUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    const leaf = url.pathname.split("/").filter(Boolean).pop() || "";
+    return leaf.replace(/\.[a-z0-9]{1,5}$/i, "") || "";
+  } catch (_) {
+    const leaf = String(rawUrl || "").split("?")[0].split("/").pop() || "";
+    return leaf.replace(/\.[a-z0-9]{1,5}$/i, "");
+  }
+}
+
 function makeMediaFilename({ username, text, tweetId, mediaId, index, extension }) {
   // Name downloads by the username and text from the post instead of bundling
   // them into one large ZIP archive (which can balloon to several GB).
@@ -1413,6 +1489,10 @@ function mediaFromTweet(tweet, targetHandle, includeRetweets) {
     const tweetId = source.rest_id || tweet.rest_id || "";
     return {
       id: `${tweetId}-${mediaId}`,
+      // Same CDN key the content script derives, so a photo listed from the
+      // rendered DOM and the same photo parsed from GraphQL collapse into one
+      // queue row instead of appearing twice.
+      mediaKey: mediaKeyFromUrl(url),
       url, type, thumbnail: item.media_url_https || item.media_url || "", author: `@${author}`,
       date: timestamp, tweetId, mediaId: String(mediaId), isRepost,
       filename: makeMediaFilename({ username: author, text, tweetId, mediaId, index, extension })
@@ -1607,22 +1687,36 @@ function inferHandleFromUrl(rawUrl) {
 }
 
 async function handleLocalTimelineCapture(message) {
+  // No operation-name allowlist. X renames and adds timeline operations
+  // frequently (Home, profile, /media, post detail, bookmarks all differ), and
+  // gating on a fixed list is what made Home-timeline and same-tab route
+  // changes capture nothing. Any GraphQL payload that parses into media counts.
   const capture = message.capture || {};
-  const operationName = String(capture.operationName || "");
-  if (!["UserMedia", "UserPhotoTimeline", "UserVideoTimeline", "UserTweets", "UserTweetsAndReplies", "TweetResultByRestId", "TweetDetail"].includes(operationName)) {
-    return { ok: true, addedCount: 0 };
-  }
   const json = capture.json;
-  if (!json || typeof json !== "object") return { ok: true, addedCount: 0 };
+  if (!json || typeof json !== "object") return { ok: true, addedCount: 0, tweetIds: [] };
   const tweets = [];
   collectTweets(json, tweets);
+  if (!tweets.length) return { ok: true, addedCount: 0, tweetIds: [] };
+
   const targetHandle = inferHandleFromUrl(message.pageUrl || "");
-  const items = tweets
-    .flatMap((tweet) => mediaFromTweet(tweet, targetHandle, true))
-    .map((item) => ({ ...item, source: "scroll" }));
-  if (!items.length) return { ok: true, addedCount: 0 };
-  const result = await addQueueItems(items, { source: "scroll" });
-  return { ok: true, addedCount: result.addedCount };
+  const mediaFilter = message.mediaFilter === "photo" || message.mediaFilter === "video"
+    ? message.mediaFilter
+    : "all";
+  const tweetIds = [];
+  const items = [];
+  for (const tweet of tweets) {
+    const parsed = mediaFromTweet(tweet, targetHandle, true)
+      .filter((item) => mediaFilter === "all" || item.type === mediaFilter);
+    if (!parsed.length) continue;
+    if (tweet.rest_id) tweetIds.push(String(tweet.rest_id));
+    items.push(...parsed.map((item) => ({ ...item, source: "scroll" })));
+  }
+  if (!items.length) return { ok: true, addedCount: 0, tweetIds };
+  const result = await addQueueItems(items, {
+    source: "scroll",
+    skipDownloaded: message.skipDownloaded !== false
+  });
+  return { ok: true, addedCount: result.addedCount, tweetIds };
 }
 
 // ==========================================================================
