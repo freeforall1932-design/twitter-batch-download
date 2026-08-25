@@ -10,6 +10,7 @@ main { padding:14px 14px 156px; } .hidden { display:none !important; }
 .hint.error { color: #ff9ca4; }
 .hint.retry { color: #f0c674; }
 .type-badge.repost { margin-left: 4px; background: #3a2f1d; color: #f0c674; }
+.type-badge.quote { margin-left: 4px; background: #2d2a3d; color: #c3b1f1; }
 .item-status.downloading { color: #79c8ff; }
 .item-status.starting { color: #79c8ff; }
 .item-status.queued { color: #c7d3dc; }

@@ -318,6 +318,27 @@ test("GraphQL responses are forwarded with the current capture filter", () => {
   assert.equal(captures[0].pageUrl, "https://x.com/home");
 });
 
+test("quoted-media inclusion defaults on and follows the Include quoted switch", () => {
+  const env = loadContentScript();
+  env.emitWindowMessage({
+    source: "XDL_INJECTED",
+    type: "xdlGraphqlResponse",
+    data: { operationName: "HomeTimeline", json: { data: {} } },
+    capturedUrl: "https://x.com/home"
+  });
+  // Default: quote-card media is listed without the user touching anything.
+  assert.equal(env.timelineCaptures()[0].includeQuoted, true);
+
+  env.emitRuntimeMessage({ action: "scrollSettings", mediaFilter: "all", includeQuoted: false });
+  env.emitWindowMessage({
+    source: "XDL_INJECTED",
+    type: "xdlGraphqlResponse",
+    data: { operationName: "HomeTimeline", json: { data: {} } },
+    capturedUrl: "https://x.com/home"
+  });
+  assert.equal(env.timelineCaptures()[1].includeQuoted, false);
+});
+
 test("the same photo is never listed twice across rescans", () => {
   const env = loadContentScript();
   env.body.appendChild(makeTweetArticle({ tweetId: "300", handle: "real_loonarae", text: "dup", photos: ["DDD444"] }));

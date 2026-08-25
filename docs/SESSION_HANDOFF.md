@@ -1,6 +1,6 @@
 # Session Handoff — X Media Downloader
 
-**Prepared:** 2026-08-25 · **Extension version:** 3.3 · **Status:** v3.3 = v3.2 + `document_start` null-root crash fix, two unreachable queue commands wired, contract test. Awaiting live-X round 3.
+**Prepared:** 2026-08-26 · **Extension version:** 3.4 · **Status:** v3.4 = v3.3 + quoted-post ("mentioned post" card) media capture with per-tab **Include quoted** switches. Round-3 live test of v3.3 passed the core flows (capture, dedupe, queue, UI); quote card was the one gap — awaiting a live spot-check of the quote case.
 
 ---
 
@@ -28,18 +28,29 @@ a set and each answers a different question:
 
 ### User input carried into the next session
 
-_Latest input (2026-08-25): a live `TypeError: Cannot read properties of null
-(reading 'appendChild')` at `content.js:105` on `https://x.com/real_loonarae/media`.
-Traced and closed — see the IMPROVEMENT_LOG entry of the same name. Two things to
-carry forward: (a) the trace came from a **pre-v3.2** file, so if the user reports
-it again, first confirm which folder Chrome has loaded; (b) the DOM shim in
-`tests/content.test.js` used to guarantee `head` + `documentElement`, which hid
-the null branch — new `document_start` DOM code must be tested with overrides._
+_Latest input (2026-08-26, live round-3 result):_ all functions work, no
+double entries, UI/UX already decent for deployment — but media inside a
+**quoted ("mentioned") post card** (the small box with thumbnail + text shown
+on a GIF/video reaction post) was never fetched. The user asked whether it is
+impossible and pointed at the scrapyard + community GitHub. **Resolved in
+v3.4** — it was never impossible: the quoted post's full payload sits under
+`legacy.quoted_status_result` in the same GraphQL response (Rank S and Rank B
+both parse it); this repo deliberately skipped it pending an explicit option.
+Quoted media now lists by default with correct attribution, an `isQuote` flag,
+and per-tab **Include quoted** switches. Still to live-check: item 12 of the
+P0 round-3 checklist in `docs/WORKLIST.md`.
+
+_(2026-08-25, kept for reference):_ the pre-v3.2 `appendChild` crash trace and
+its two carry-forward notes — confirm which folder Chrome has loaded before
+trusting an old trace, and test new `document_start` DOM code with shim
+overrides, not the shim's defaults.
 
 Open questions to ask the user if they are available:
 
-- Did homepage / in-tab route-change capture actually work in v3.2?
-- Is auto-scroll "Fast" fast enough now, or should the pacing be more aggressive?
+- ~~Did homepage / in-tab route-change capture actually work in v3.2?~~ —
+  **answered by live round 3 (2026-08-26): all functions work, no double entries.**
+- ~~Is auto-scroll "Fast" fast enough now?~~ — no complaint raised in round 3;
+  revisit only if the user asks for more aggressive pacing.
 - Should the two tab lists (Scroll capture / Remote fetch) finally be unified?
   They were kept separate on explicit past request — do not merge without a new decision.
 - Are per-batch subfolders (e.g. `x-media/{username}/`) wanted? Rank A does this.
@@ -50,11 +61,17 @@ Open questions to ask the user if they are available:
 
 - Repository: `freeforall1932-design/twitter-batch-download`
 - Extension directory: `extension/` (the **Load unpacked** target)
-- Working branch for the last Arena session: `arena/01a03748-twitter-batch-download`
+- Working branch for the last Arena session: `arena/01a03ae9-twitter-batch-download`
 - Recent history:
-  - **(this branch)** — `document_start` null-root crash fix; `queueClearFinished` +
-    `queueClearDownloadedHistory` wired to toolbar buttons; message-contract and
-    style-injection regression tests (**v3.3**)
+  - **(v3.4, this branch → PR #9)** — Quoted-post ("mentioned post" card) media
+    capture: quote parsing in `mediaFromTweet`/`getTweetMedia` with
+    quoted-post attribution, `isQuote` flag + `quote` badge, per-tab
+    **Include quoted** switches (default on), 7 new tests; plus the
+    post-interrupt review pass (repost `rest_id` fallback restored,
+    README updated, seams documented) — commits `08e68d0` + `b943a84`
+  - `abb3062` — Merge PR #8 (**v3.3**: `document_start` null-root crash fix;
+    `queueClearFinished` + `queueClearDownloadedHistory` wired to toolbar
+    buttons; message-contract and style-injection regression tests)
   - `6370ba8` — Live-testing fixes: always-on capture, SPA routes, single download action (**v3.2**)
   - `4cded49` — Merge PR #6 (repo restructure + release packaging)
   - `4cc3782` — Rank S live capture bridge + Rank A download fallbacks
@@ -103,8 +120,10 @@ A user should be able to:
    - Local community cap only — not a third-party paid/free tier.
    - It can hit X rate limits sooner than human scrolling, so it is never the
      first impression.
-8. Optionally include reposted media for Remote fetch. Replies / quoted media
-   remain future explicit options.
+8. Optionally include reposted media for Remote fetch. Quoted-post ("mentioned
+   post" card) media is included **by default** in both tabs via the
+   **Include quoted** switch (v3.4), listed with the quoted post's own
+   attribution and a `quote` badge. Replies remain a future explicit option.
 9. Use per-post action-bar buttons — **Download** (immediate) and
    **Add to queue** (batch) — as a convenience surface.
 
@@ -129,15 +148,15 @@ Cookie headers.
 
 ---
 
-## 4. Current architecture (v3.3)
+## 4. Current architecture (v3.4)
 
 | File | Role |
 |---|---|
 | `manifest.json` | MV3, sidePanel, cookies/downloads/storage/scripting. Content scripts: `injected.js` (MAIN, document_start) + `content.js` (isolated, document_start). Hosts: x.com / twitter.com / twimg CDN only. |
-| `background.js` | Auth, GraphQL, source-tagged queue, remote discovery, downloads, capture bag, timeline response ingestion, downloaded-id history. **No ZIP.** |
+| `background.js` | Auth, GraphQL, source-tagged queue, remote discovery, downloads, capture bag, timeline response ingestion, downloaded-id history. Quoted-post media resolved from `quoted_status_result` (one level, soft-unwrap) with owning-post attribution. **No ZIP.** |
 | `injected.js` | MAIN-world XHR/fetch observer. Forwards **any** media-bearing GraphQL response (no operation allowlist), keeps a 40-entry replay buffer, and watches SPA route changes via `pushState`/`replaceState`/`popstate`. The allowlist survives only for Remote-fetch *request metadata*. |
-| `content.js` | **Always-on** scroll capture (no watch command), SPA route re-arm, DOM photo listing, rate-bounded per-post video resolve, content-driven auto-scroll with in-page badge, action-bar `Download` + `Add to queue`, toasts. |
-| `sidepanel.html/js/css` | Two-tab Side Panel: Scroll capture + Remote fetch. One download action, live active-tab status pill, per-row remove, skip-already-downloaded toggle, plus `Clear finished` / `Reset downloaded history` maintenance buttons (wired in the round-3 review; the handlers existed but nothing sent them). |
+| `content.js` | **Always-on** scroll capture (no watch command), SPA route re-arm, DOM photo listing, rate-bounded per-post video resolve (quote-card media resolved through the outer post id), content-driven auto-scroll with in-page badge, action-bar `Download` + `Add to queue`, toasts. |
+| `sidepanel.html/js/css` | Two-tab Side Panel: Scroll capture + Remote fetch. One download action, live active-tab status pill, per-row remove, skip-already-downloaded toggle, **Include quoted** switches in both tabs (default on) with a `quote` row badge, plus `Clear finished` / `Reset downloaded history` maintenance buttons (wired in the round-3 review; the handlers existed but nothing sent them). |
 | `popup.html/js` | Side Panel launcher + capture status line. No scroll/download loop. |
 | `tests/` | `background.test.js` (Node VM unit tests + sanitized fixtures) and `content.test.js` (real `content.js` in a DOM + `chrome` shim). |
 
@@ -166,6 +185,15 @@ re-breaks a bug the user already reported:
    `DOMContentLoaded` retry. A bare `document.head.appendChild(...)` here aborted
    the whole IIFE, so a styling edge case silently disabled all capture on that
    tab. Do not collapse it back to a one-liner.
+8. **Quoted-post media: one level, soft-unwrap, owning-post attribution.** The
+   quote card's media is parsed from `quoted_status_result` in the *same*
+   payload (Rank S pattern) — never re-requested per quote, never recursed
+   into a quote-of-quote, and a deleted/protected card skips quietly instead
+   of failing the page. Items carry the *quoted* post's id/author/text so
+   filenames and skip-history match the media's real owner. DOM-scan photos
+   inside a quote card still attribute to the outer article (no stable
+   selector); the mediaKey dedupe collapses the two, so do not "fix" that by
+   guessing quote-card selectors.
 
 ### Removed / deprecated — do not reintroduce without a product decision
 
@@ -192,14 +220,16 @@ contract test in `tests/background.test.js`. Add a command → add a sender, or 
 suite fails. The single exception is `scrollRescan`, a read-only hook with no
 button yet._
 
-**Discovery:** `discoveryGet`, `discoveryStart` `{ target, limit, includeRetweets }`,
+**Discovery:** `discoveryGet`, `discoveryStart` `{ target, limit, includeRetweets, includeQuoted }`,
 `discoveryStop`. State also exposes `errorCode`, `retryAfterMs`, `retryUntil`.
 
 **Capture / media:** `networkCapture`, `localTimelineCapture` (returns
-`{ addedCount, tweetIds }`), `initEnv`, `getTweetMedia`, `downloadFile`
+`{ addedCount, tweetIds }`; carries `mediaFilter`, `skipDownloaded`,
+`includeQuoted`), `initEnv`, `getTweetMedia` (each returned media entry carries
+its owning post's `username` / `tweetId` / `text` / `isQuote`), `downloadFile`
 
-**Side Panel → content script:** `scrollSettings`, `scrollStart`, `scrollStop`,
-`scrollStatus`, `scrollRescan`
+**Side Panel → content script:** `scrollSettings` (carries `includeQuoted`),
+`scrollStart`, `scrollStop`, `scrollStatus`, `scrollRescan`
 
 **MAIN ↔ isolated world (`window.postMessage`):**
 `XDL_INJECTED` → `xdlInjectedReady`, `xdlNetworkCapture`, `xdlGraphqlResponse`,
@@ -214,7 +244,8 @@ button yet._
   thumbnail, author, date, tweetId, mediaId,
   source: "scroll" | "remote",
   mediaKey,           // CDN-derived identity; collapses DOM vs GraphQL duplicates
-  isRepost, filename, // x-media/{user}_{text}_{tweetId}_{index}.{ext}
+  isRepost, isQuote,  // isQuote = media owned by the post inside a quote card
+  filename,           // x-media/{user}_{text}_{tweetId}_{index}.{ext}
   selected, status,   // discovered|queued|starting|downloading|completed|failed
   attempts, bytesReceived, totalBytes, downloadId?, error?
 }
@@ -225,25 +256,28 @@ button yet._
 `batchDownloadQueueV1` (queue), `profileDiscoveryV1` (discovery),
 `downloadedMediaIdsV1` (completed item ids only, capped at 20k), plus UI prefs
 `sidePanelActiveTab`, `scrollMediaFilter`, `scrollSpeed`, `skipDownloaded`,
-`batchTarget`, `batchLimit`, `includeRetweets`.
+`scrollIncludeQuoted`, `batchTarget`, `batchLimit`, `includeRetweets`,
+`includeQuoted`.
 
 ---
 
 ## 5. What still needs live-X validation
 
-Offline tests cover logic, not X's live response shapes or rate limits. The full
-round-3 checklist lives in `docs/WORKLIST.md` → **"P0 — remaining (live-X, round 3)"**.
-Headline items:
+**Round 3 passed (2026-08-26, against v3.3).** The user reported: all
+functions work, no double entries, UI/UX already decent for deployment. That
+covers checklist items 1–11 of `docs/WORKLIST.md` → "P0 — remaining (live-X,
+round 3)". Offline tests still cover only logic, not X's live shapes, so two
+browser items remain open:
 
-- Homepage capture and in-tab route changes with no reload (the v3.1 failures).
-- A profile's **posts** listing media, not only `/media`.
-- Video posts filling in via the rate-bounded per-post resolve.
-- Auto-scroll start/stop, badge, and whether "Fast" is fast enough.
-- Skip-already-downloaded surviving a list clear.
-- `UserByScreenName` + `UserMedia` shapes for Remote fetch; 429 countdown;
-  protected / NSFW / expired-session messaging.
+- **Quote-card media (v3.4, checklist item 12)** — shipped *after* the
+  round-3 test, so it has never run in a browser: a GIF/video reaction to a
+  quoted post must list the card's media too, with the quoted author and a
+  `quote` badge; **Include quoted** off must suppress it; the same quoted
+  photo quoted by two different posts must stay a single row.
+- **First release zip** — `scripts/package-release.sh` output must be
+  confirmed to load from the unzipped folder.
 
-Do **not** declare P0 complete without a signed-in Chrome check.
+Do **not** declare P0 complete without the signed-in quote-case check.
 
 ### Required live data if something fails
 
@@ -296,7 +330,7 @@ one-line quality notes that inform ranking, not detailed specs.
 # from repo root
 node --check extension/background.js extension/content.js extension/popup.js \
              extension/sidepanel.js extension/injected.js
-node --test tests/*.test.js            # 48 tests
+node --test tests/*.test.js            # 55 tests
 scripts/package-release.sh             # → releases/x-media-downloader-v<version>.zip
 ```
 
@@ -310,14 +344,21 @@ capture bug should land there first as a failing test.
 
 ## 9. Next session priorities
 
-1. **Run the live checklist** in `docs/WORKLIST.md` → "P0 — remaining (live-X,
-   round 3)". It is written directly against the v3.1 failures v3.2 fixed.
-2. If capture still misses a view, get a sanitized GraphQL response from that
-   exact view and add it to `tests/fixtures/` as a regression test.
-3. If video posts fill in too slowly, tune the 700ms gap in `content.js`
-   (`drainPendingVideoTweets`) against real rate limits before raising it.
-4. Cut the first release zip once round 3 passes; the manifest is already at **3.3**.
-5. P1 afterwards: Side Panel diagnostics + sanitized copy-debug-report, explicit
-   Include replies / quoted media switches, filename templates, per-batch
-   subfolders.
-6. Before finishing: update all three docs (log entry, worklist statuses, this file).
+1. **Live spot-check the v3.4 quote case** — WORKLIST round-3 item 12. Reload
+   `extension/` unpacked (manifest 3.4), scroll past a GIF/video reaction to a
+   quoted post, and confirm the card's media lists with the `quote` badge
+   under the quoted post's author; test the **Include quoted** switch in both
+   tabs. If a specific card still does not list, get a sanitized GraphQL
+   response from that exact view (§5 below) and add it to `tests/fixtures/`.
+2. **Cut the first release zip** (`scripts/package-release.sh` →
+   `releases/x-media-downloader-v3.4.zip`) and confirm it loads from the
+   unzipped folder. Optionally start `CHANGELOG.md`. With that plus item 1,
+   P0 is complete.
+3. P1 afterwards: Side Panel diagnostics + sanitized copy-debug-report,
+   explicit Include replies switch (quoted shipped in v3.4), filename
+   templates + video quality preference, per-batch subfolders if requested.
+4. Settled decisions that stay settled: separate scroll/remote lists (do not
+   merge without a new user decision), one download action, no ZIP,
+   no reply capture until it has its own switch.
+5. Before finishing: update all three docs (log entry, worklist statuses,
+   this file).

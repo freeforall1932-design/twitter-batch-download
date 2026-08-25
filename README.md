@@ -19,6 +19,7 @@ Self-hosted against your signed-in X session. No third-party accounts, API keys,
 - **Skip already downloaded** — Finished files are remembered and not re-listed, even after you clear the list.
 - **Videos + photos** — Highest-bitrate MP4 (including animated GIFs as MP4); original-resolution photos (`name=orig`).
 - **Include reposts** — Optional during profile discovery.
+- **Include quoted** — Media inside a quoted post's card (the "mentioned post" box with thumbnail and text) lists too, attributed to the quoted post's author, with a `quote` badge. On by default; switchable per tab.
 - **Rate-limit handling** — Throttle + exponential backoff; Side Panel shows a retry countdown on 429/503.
 - **Direct file naming** — `Downloads/x-media/{username}_{post text}_{tweetId}_{index}.{ext}` (no multi-GB ZIP archives).
 - **Live session capture** — MAIN-world observer learns current GraphQL operation IDs and safe request headers from the open X tab.
@@ -54,7 +55,7 @@ Under any media post: **Download** saves it now, **Add to queue** sends it to th
 
 ### Remote fetch (advanced fallback)
 
-Switch to the **Remote fetch** tab, enter `@username` or a profile URL, set a limit, optionally include reposts, then **Remote discover**. This crawls X directly, so it can hit rate limits sooner than normal scrolling — prefer Scroll capture when you can.
+Switch to the **Remote fetch** tab, enter `@username` or a profile URL, set a limit, optionally include reposts and quoted-post media, then **Remote discover**. This crawls X directly, so it can hit rate limits sooner than normal scrolling — prefer Scroll capture when you can.
 
 ## How it works
 

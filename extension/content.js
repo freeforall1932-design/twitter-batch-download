@@ -23,6 +23,7 @@
 
   let mediaFilter = "all"; // "all" | "video" | "photo"
   let skipDownloaded = true;
+  let includeQuoted = true; // list media from quoted ("mentioned") posts too
   let autoScrollRunning = false;
   let autoScrollStopRequested = false;
   let listedCount = 0;
@@ -69,7 +70,8 @@
         capture: payload.data,
         pageUrl: payload.capturedUrl || window.location.href,
         mediaFilter,
-        skipDownloaded
+        skipDownloaded,
+        includeQuoted
       }, (response) => {
         if (response?.addedCount) {
           listedCount += response.addedCount;
@@ -502,11 +504,16 @@
         if (!media || media.error) continue;
 
         const handle = media.username || "unknown";
-        const safeName = sanitizeFilename(media.tweetText || "media");
         const items = [];
         (media.videos || []).forEach((video, index) => {
           const mediaKey = mediaKeyFromUrl(video.url);
-          const id = `${tweetId}-${video.mediaId || mediaKey || index}`;
+          // Quoted-card media is attributed to the quoted post (its own author,
+          // text, and tweet id) so ids, filenames, and skip-history match the
+          // post that actually owns the media.
+          const ownerHandle = video.username || handle;
+          const ownerText = video.text || media.tweetText || "media";
+          const ownerTweetId = video.tweetId || tweetId;
+          const id = `${ownerTweetId}-${video.mediaId || mediaKey || index}`;
           if (listedMediaIds.has(id) || (mediaKey && listedMediaKeys.has(mediaKey))) return;
           listedMediaIds.add(id);
           if (mediaKey) listedMediaKeys.add(mediaKey);
@@ -516,19 +523,23 @@
             url: video.url,
             type: "video",
             thumbnail: "",
-            author: `@${handle}`,
+            author: `@${ownerHandle}`,
             date: "",
-            tweetId,
+            tweetId: ownerTweetId,
             mediaId: String(video.mediaId || mediaKey || index),
             isRepost: false,
+            isQuote: Boolean(video.isQuote),
             source: "scroll",
-            filename: `x-media/${handle}_${safeName}_${tweetId}_${index + 1}.mp4`
+            filename: `x-media/${ownerHandle}_${sanitizeFilename(ownerText)}_${ownerTweetId}_${index + 1}.mp4`
           });
         });
         if (mediaFilter !== "video") {
           (media.photos || []).forEach((photo, index) => {
             const mediaKey = mediaKeyFromUrl(photo.url);
-            const id = `${tweetId}-${photo.mediaId || mediaKey || index}`;
+            const ownerHandle = photo.username || handle;
+            const ownerText = photo.text || media.tweetText || "media";
+            const ownerTweetId = photo.tweetId || tweetId;
+            const id = `${ownerTweetId}-${photo.mediaId || mediaKey || index}`;
             if (listedMediaIds.has(id) || (mediaKey && listedMediaKeys.has(mediaKey))) return;
             listedMediaIds.add(id);
             if (mediaKey) listedMediaKeys.add(mediaKey);
@@ -538,13 +549,14 @@
               url: photo.url,
               type: "photo",
               thumbnail: photo.url,
-              author: `@${handle}`,
+              author: `@${ownerHandle}`,
               date: "",
-              tweetId,
+              tweetId: ownerTweetId,
               mediaId: String(photo.mediaId || mediaKey || index),
               isRepost: false,
+              isQuote: Boolean(photo.isQuote),
               source: "scroll",
-              filename: `x-media/${handle}_${safeName}_${tweetId}_${index + 1}.${getPhotoExtension(photo.url)}`
+              filename: `x-media/${ownerHandle}_${sanitizeFilename(ownerText)}_${ownerTweetId}_${index + 1}.${getPhotoExtension(photo.url)}`
             });
           });
         }
@@ -695,36 +707,46 @@
     const items = [];
     (media.videos || []).forEach((video, index) => {
       const mediaKey = mediaKeyFromUrl(video.url);
+      // Quoted ("mentioned") post media carries its own attribution so the
+      // download is named after the post that owns the media.
+      const ownerHandle = video.username || handle;
+      const ownerText = video.text ? sanitizeFilename(video.text) : safeName;
+      const ownerTweetId = video.tweetId || info.tweetId;
       items.push({
-        id: `${info.tweetId}-${video.mediaId || mediaKey || index}`,
+        id: `${ownerTweetId}-${video.mediaId || mediaKey || index}`,
         mediaKey,
         url: video.url,
         type: "video",
         thumbnail: "",
-        author: `@${handle}`,
+        author: `@${ownerHandle}`,
         date: "",
-        tweetId: info.tweetId,
+        tweetId: ownerTweetId,
         mediaId: String(video.mediaId || mediaKey || index),
         isRepost: false,
+        isQuote: Boolean(video.isQuote),
         source: "scroll",
-        filename: `x-media/${handle}_${safeName}_${info.tweetId}_${index + 1}.mp4`
+        filename: `x-media/${ownerHandle}_${ownerText}_${ownerTweetId}_${index + 1}.mp4`
       });
     });
     (media.photos || []).forEach((photo, index) => {
       const mediaKey = mediaKeyFromUrl(photo.url);
+      const ownerHandle = photo.username || handle;
+      const ownerText = photo.text ? sanitizeFilename(photo.text) : safeName;
+      const ownerTweetId = photo.tweetId || info.tweetId;
       items.push({
-        id: `${info.tweetId}-${photo.mediaId || mediaKey || index}`,
+        id: `${ownerTweetId}-${photo.mediaId || mediaKey || index}`,
         mediaKey,
         url: photo.url,
         type: "photo",
         thumbnail: photo.url,
-        author: `@${handle}`,
+        author: `@${ownerHandle}`,
         date: "",
-        tweetId: info.tweetId,
+        tweetId: ownerTweetId,
         mediaId: String(photo.mediaId || mediaKey || index),
         isRepost: false,
+        isQuote: Boolean(photo.isQuote),
         source: "scroll",
-        filename: `x-media/${handle}_${safeName}_${info.tweetId}_${index + 1}.${getPhotoExtension(photo.url)}`
+        filename: `x-media/${ownerHandle}_${ownerText}_${ownerTweetId}_${index + 1}.${getPhotoExtension(photo.url)}`
       });
     });
     return { items, media, handle, safeName };
@@ -876,10 +898,11 @@
     }, 2500);
   }
 
-  chrome.storage?.local?.get(["scrollMediaFilter", "scrollSpeed", "skipDownloaded"], (saved) => {
+  chrome.storage?.local?.get(["scrollMediaFilter", "scrollSpeed", "skipDownloaded", "scrollIncludeQuoted"], (saved) => {
     if (saved?.scrollMediaFilter) mediaFilter = saved.scrollMediaFilter;
     if (saved?.scrollSpeed) scrollSpeed = saved.scrollSpeed;
     if (typeof saved?.skipDownloaded === "boolean") skipDownloaded = saved.skipDownloaded;
+    if (typeof saved?.scrollIncludeQuoted === "boolean") includeQuoted = saved.scrollIncludeQuoted;
   });
 
   startDomWatchers();
@@ -894,6 +917,7 @@
       if (msg.mediaFilter) mediaFilter = msg.mediaFilter;
       if (msg.scrollSpeed) scrollSpeed = msg.scrollSpeed;
       if (typeof msg.skipDownloaded === "boolean") skipDownloaded = msg.skipDownloaded;
+      if (typeof msg.includeQuoted === "boolean") includeQuoted = msg.includeQuoted;
       scheduleScan(0);
       sendResponse(statusPayload());
       return;
@@ -907,6 +931,7 @@
       if (msg.mediaFilter) mediaFilter = msg.mediaFilter;
       if (msg.scrollSpeed) scrollSpeed = msg.scrollSpeed;
       if (typeof msg.skipDownloaded === "boolean") skipDownloaded = msg.skipDownloaded;
+      if (typeof msg.includeQuoted === "boolean") includeQuoted = msg.includeQuoted;
       autoScrollLoop();
       sendResponse({ ...statusPayload(), ok: true, running: true });
       return;
@@ -945,7 +970,8 @@
       postsOnScreen: scanStats.posts,
       pendingVideos: pendingVideoTweets.size,
       mediaFilter,
-      scrollSpeed
+      scrollSpeed,
+      includeQuoted
     };
   }
 
