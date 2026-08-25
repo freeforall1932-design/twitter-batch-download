@@ -38,6 +38,22 @@ No manual API key / password / cookie paste. Self-hosted against the signed-in X
 - Do not unify the two tab histories yet. The user explicitly preferred separate scroll-captured and remote-fetched lists/queues.
 - Highest-value next improvements are live-test diagnostics, clearer active-tab status, and more robust capture/listing from real X timeline responses.
 
+## Session workflow (how these docs are maintained)
+
+The three docs in `docs/` are a maintained set. Each session:
+
+1. Read `IMPROVEMENT_LOG.md` (newest entries) → why the code looks the way it does.
+2. Read this worklist (audit table + current P0) → what to do next.
+3. Read `SESSION_HANDOFF.md` (architecture + guardrails) → what not to re-break.
+4. Apply the user's input for the session; it **overrides** the written plan on conflict.
+5. Do the work; run `node --test tests/*.test.js`.
+6. Write back to all three: new log entry, updated audit statuses here, and any
+   architecture/message-contract changes in the handoff.
+
+`SESSION_HANDOFF.md` §4 lists **design decisions that must not be simplified
+away** — each fixes a reproduced live failure. Check it before refactoring
+capture, routing, or the download actions.
+
 ## Code-review checklist (next agent / human)
 
 Use this before claiming “ready” or merging large changes:
@@ -77,7 +93,7 @@ New this session (2026-08-25): restructure so the extension can be **Load unpack
 - [x] Added `scripts/package-release.sh` → `releases/x-media-downloader-v<version>.zip` (manifest at zip root, optional date tag, Windows fallback documented); `releases/*.zip` gitignored.
 - [ ] **Try it out:** load `extension/` unpacked in a signed-in Chrome, then run the live-X checklist below end-to-end.
 - [ ] Cut the first release zip (`scripts/package-release.sh`) and confirm it loads from the unzipped folder.
-- [ ] Bump `extension/manifest.json` version when shipping the next user-visible change; optionally start a `CHANGELOG.md` per release.
+- [x] Bump `extension/manifest.json` version when shipping the next user-visible change — now at **3.2**; optionally start a `CHANGELOG.md` per release.
 
 ## P0 — remaining (live-X, round 3)
 

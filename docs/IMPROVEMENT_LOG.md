@@ -2,6 +2,38 @@
 
 Chronological implementation record for X Media Downloader.
 
+## 2026-08-25 — Session handoff rewritten as a review-driven document
+
+### Motivation
+The handoff described state but not *process*. A new session had no explicit
+instruction to review the improvement log and worklist first, and no rule about
+writing findings back, so context was rediscovered each time.
+
+### Changed
+- `docs/SESSION_HANDOFF.md` rewritten with a numbered structure and a new
+  **"Start here"** section: a table explaining what each of the three docs
+  answers, plus the six-step review loop (read log → read worklist → read
+  handoff → apply user input → work + test → write back to all three).
+- Added a **"User input carried into the next session"** slot so live-test
+  feedback and open product questions survive the session boundary. Current
+  open questions recorded: did v3.2 fix homepage/route capture, is "Fast" fast
+  enough, should the two tab lists be unified, are per-batch subfolders wanted.
+- Added **"Design decisions that are deliberate — do not simplify these away"**:
+  six items (no response allowlist, unconditional capture start, SPA route
+  watcher + replay, rate-bounded video resolve, single download action, popup
+  has no loop), each tied to the live failure it fixes.
+- Expanded the removed/deprecated list with the v3.2 removals
+  (`localCapture*`, popup bulk commands, `Watch current tab`, auto-scroll limit,
+  `Download all in tab`) and documented the MAIN ↔ isolated world message pairs.
+- Corrected stale content: branch, v3.1-era architecture notes, the
+  "popup auto-scroll remains supported" line, and the duplicated
+  commands/testing sections.
+- `docs/WORKLIST.md`: added a **Session workflow** section mirroring the loop and
+  pointing at the do-not-simplify list; marked the manifest-version P0 item done.
+
+### Unchanged
+- No extension code touched. Docs only; 43 tests still pass.
+
 ## 2026-08-25 — Live-testing fixes: always-on capture, SPA routes, one download action
 
 Driven entirely by signed-in live-X testing feedback against v3.1.

@@ -56,6 +56,23 @@ The project is already past the large-architecture stage. The most valuable next
 8. Test stop scan, stop downloads, Side Panel reload, and extension reload.
 9. Test protected, unavailable, logged-out, and rate-limited states if possible.
 
-## Additional note
+## Status of these recommendations (updated 2026-08-25, v3.2)
 
-The previous handoff document referenced branch `arena/01a03699-twitter-batch-download`, while this Arena session is on `arena/01a036a9-twitter-batch-download`. This should be corrected during documentation cleanup.
+- **(1) Diagnostics / status** — partially done. The Side Panel now shows a live
+  active-tab pill (route, posts on screen, pending video resolves, refresh
+  warnings). The signed-in/cookie/capture-warm breakdown is still open.
+- **(2) Sanitized copy-debug-report** — still open. Highest-value P1 item.
+- **(3) Capture warm-up determinism** — largely superseded: capture is now
+  always on with a replay buffer, so "cold capture" is far less likely. The
+  multiple-X-tabs ambiguity for Remote fetch remains open.
+- **(4) Stop interrupting rate-limit waits** — still open.
+- **(5) Live fixture workflow** — still open; `tests/content.test.js` now gives
+  live-failure regressions a home.
+- **(6) Captured variables for `UserByScreenName`** — still open.
+- **(7) Queue grouping / scan identity** — partially addressed via per-row
+  remove and source-scoped lists.
+- **(8) Action-bar validation separate from Side Panel P0** — still the right
+  call; the action bar gained `Add to queue` in v3.2.
+
+The stale-branch note previously recorded here is resolved: this session's
+branch is `arena/01a03712-twitter-batch-download` and the handoff is correct.

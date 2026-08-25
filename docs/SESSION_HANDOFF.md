@@ -1,96 +1,190 @@
 # Session Handoff — X Media Downloader
 
-**Prepared:** 2026-08-25 (updated after live-testing round 2 — extension v3.2)
+**Prepared:** 2026-08-25 · **Extension version:** 3.2 · **Status:** v3.2 fixes landed, awaiting live-X round 3
 
-## Project and branch
+---
+
+## 0. Start here — how to pick up this project
+
+Read these three documents in order before touching code. They are maintained as
+a set and each answers a different question:
+
+| Document | Question it answers | How to use it |
+|---|---|---|
+| `docs/IMPROVEMENT_LOG.md` | **What changed and why?** Chronological, newest first. | Read the top 1–2 entries. Each records motivation, root cause, what changed, and validation. This is the fastest way to understand *why the code looks the way it does* — several designs are deliberate reactions to live-test failures and must not be "simplified" back. |
+| `docs/WORKLIST.md` | **What is done, what is next?** Implementation audit table, priorities P0→P3, code-review checklist. | Check the audit table for area status, then the P0 section for the immediate task. Update the table when you change an area's status. |
+| `docs/SESSION_HANDOFF.md` (this file) | **How does it fit together, and what are the rules?** Architecture, message contract, guardrails. | Reference while working. Update the architecture/message tables when you change them. |
+
+**The review loop for each session:**
+
+1. Read the newest `IMPROVEMENT_LOG.md` entries → understand recent intent.
+2. Read `WORKLIST.md` P0 + audit table → find the next task.
+3. Read this file's architecture + guardrails → avoid re-breaking settled decisions.
+4. Take the user's input for this session (below) as the highest priority — it
+   overrides the written plan when they conflict.
+5. Do the work. Run `node --test tests/*.test.js`.
+6. **Write back to all three docs before finishing**: a new `IMPROVEMENT_LOG.md`
+   entry, updated `WORKLIST.md` statuses, and any architecture/message changes here.
+
+### User input carried into the next session
+
+_Latest live-test feedback (round 2) is fully addressed in v3.2 — see the
+IMPROVEMENT_LOG entry for 2026-08-25 "Live-testing fixes". No unaddressed user
+requests are outstanding._
+
+Open questions to ask the user if they are available:
+
+- Did homepage / in-tab route-change capture actually work in v3.2?
+- Is auto-scroll "Fast" fast enough now, or should the pacing be more aggressive?
+- Should the two tab lists (Scroll capture / Remote fetch) finally be unified?
+  They were kept separate on explicit past request — do not merge without a new decision.
+- Are per-batch subfolders (e.g. `x-media/{username}/`) wanted? Rank A does this.
+
+---
+
+## 1. Project and branch
 
 - Repository: `freeforall1932-design/twitter-batch-download`
-- Extension directory: `extension/` (load-unpacked root)
-- Previous Arena session branch `arena/01a0367e-twitter-batch-download` — **merged into `main`** (commit `66fab6e`).
-- Working branch for this Arena session: `arena/01a03712-twitter-batch-download`
-- Recent commits:
-  - cleanup / PR batch (prior handoff): remove deprecated ZIP path, legacy message handlers, dead bulk flags
+- Extension directory: `extension/` (the **Load unpacked** target)
+- Working branch for the last Arena session: `arena/01a03712-twitter-batch-download`
+- Recent history:
+  - `6370ba8` — Live-testing fixes: always-on capture, SPA routes, single download action (**v3.2**)
+  - `4cded49` — Merge PR #6 (repo restructure + release packaging)
   - `4cc3782` — Rank S live capture bridge + Rank A download fallbacks
   - `93940d8` — Discovery error classification, rate-limit countdown, fixtures
-  - `14d2c4d` — Baseline upload
 
-The extension has **no build step**, package manager, TypeScript, or server. Reload it in `chrome://extensions` after changes and load **`extension/`** as the unpacked extension.
+No build step, package manager, TypeScript, or server. After changes, reload the
+extension at `chrome://extensions` and load **`extension/`** unpacked.
 
-### Repository layout (2026-08-25 restructure)
+### Repository layout
 
 ```
 extension/                 # ← Load unpacked target (manifest.json at root)
-tests/                     # node --test tests/background.test.js
+tests/                     # background.test.js (unit) + content.test.js (DOM sim)
 scripts/package-release.sh # zip extension/ → releases/x-media-downloader-v<version>.zip
 releases/                  # generated zips (gitignored)
-docs/                      # WORKLIST.md, SESSION_HANDOFF.md, IMPROVEMENT_LOG.md
-reference/scrapyard/       # abandoned extensions, reference only: rank-s-plucker-xbd / rank-a-video-downloader / rank-b-x-exporter
+docs/                      # WORKLIST.md, SESSION_HANDOFF.md, IMPROVEMENT_LOG.md,
+                           # PROJECT_IMPROVEMENT_OPINION.md
+reference/scrapyard/       # abandoned extensions, reference only:
+                           # rank-s-plucker-xbd / rank-a-video-downloader / rank-b-x-exporter
 ```
 
-Old names → new names: `x-video-downloader-master/` → `extension/`; docs moved out of the extension root; `abandoned chrome extension scrapyard for use/` → `reference/scrapyard/` (ranks flattened).
+---
 
-## Product direction
+## 2. Product direction
 
-The main product is a **Chrome Side Panel media queue** with a Rank-S-style scroll-capture workflow first, not only one-button-per-tweet downloading and not primarily a background crawler.
+The product is a **Chrome Side Panel media queue** built around a Rank-S-style
+scroll-capture workflow — not one-button-per-tweet downloading, and not
+primarily a background crawler.
 
 A user should be able to:
 
 1. Open the Side Panel and land on **Scroll capture** by default.
-2. Open / refresh an X profile or `/media` page and manually scroll normally.
-3. See media listed from X's own timeline GraphQL responses and visible DOM photos, without first running a separate profile crawl.
-4. Optionally use Side Panel **Start auto-scroll** when they want the extension to scroll for them.
-5. Review tab-scoped lists, tick individual items or Select all in tab, and download selected/all with **1 or 2** concurrent Chrome downloads.
-6. Use **Remote fetch** as the secondary/advanced tab: paste `@username`, a profile URL, or `/media` URL and discover with an upper cap, default **99,999**.
-   - Cap is an upper bound, not a target (e.g. 690 media → complete at 690).
+2. Open **any** X view — home timeline, profile, `/media`, or a single post —
+   and scroll normally. Capture is always on; no button is pressed first.
+3. Navigate **within the same tab** (profile → `/media` → post) and keep
+   capturing, with no reload.
+4. See media listed from X's own GraphQL responses and from visible DOM photos.
+5. Optionally press **Start auto-scroll** to have the extension scroll for them.
+   It never blocks on downloads and has no item cap.
+6. Review the list, tick items or **Select all**, and press **Download selected**
+   with **1 or 2** concurrent Chrome downloads. This is the *only* download
+   action — a separate "Download all" was removed as redundant and confusing.
+7. Use **Remote fetch** as the secondary/advanced tab: paste `@username` or a
+   profile/`/media` URL and discover up to a local cap, default **99,999**.
+   - The cap is an upper bound, not a target (690 media → completes at 690).
    - Local community cap only — not a third-party paid/free tier.
-   - Remote fetch can hit X rate limits sooner than user-driven scrolling, so it should not be the first impression.
-7. Optionally include reposted media for Remote fetch. Replies / quoted media are future explicit options.
+   - It can hit X rate limits sooner than human scrolling, so it is never the
+     first impression.
+8. Optionally include reposted media for Remote fetch. Replies / quoted media
+   remain future explicit options.
+9. Use per-post action-bar buttons — **Download** (immediate) and
+   **Add to queue** (batch) — as a convenience surface.
 
-Per-tweet action-bar buttons and the old popup auto-scroll remain supported but are secondary / fallback surfaces.
+The popup is only a Side Panel launcher plus a capture status line.
 
-## Security and authentication policy
+---
 
-Do **not** ask the user to paste passwords, API keys, `auth_token`, `ct0`, or Cookie headers.
+## 3. Security and authentication policy
+
+Do **not** ask the user to paste passwords, API keys, `auth_token`, `ct0`, or
+Cookie headers.
 
 - Self-hosted against the **signed-in X session only**.
 - No third-party account, subscription, activation, license, or tier service.
-- `background.js` reads `ct0` / `auth_token` cookies and Bearer token (page capture or public fallback).
-- Live network capture may remember non-cookie request headers (`authorization`, `x-csrf-token`, `x-client-transaction-id`, …). **Cookie header values are never stored in the capture bag.**
-- Do not display, export, log, or persist separate token values in the UI.
+- `background.js` reads `ct0` / `auth_token` cookies and a Bearer token (page
+  capture or public fallback).
+- Live network capture may remember non-cookie request headers (`authorization`,
+  `x-csrf-token`, `x-client-transaction-id`, …). **Cookie header values are
+  never stored in the capture bag.**
+- Never display, export, log, or persist token values in the UI.
+- `downloadedMediaIdsV1` stores **queue item ids only** — no URLs, no post text.
 
-## Current architecture (post scroll-capture UX pass)
+---
+
+## 4. Current architecture (v3.2)
 
 | File | Role |
 |---|---|
 | `manifest.json` | MV3, sidePanel, cookies/downloads/storage/scripting. Content scripts: `injected.js` (MAIN, document_start) + `content.js` (isolated, document_start). Hosts: x.com / twitter.com / twimg CDN only. |
-| `background.js` | Auth, GraphQL, source-tagged queue, remote discovery, downloads, capture bag, local timeline response ingestion. **No ZIP.** |
-| `injected.js` | MAIN-world XHR/fetch observer. Forwards **any** media-bearing GraphQL response (no operation allowlist), keeps a 40-entry replay buffer, and watches SPA route changes via `pushState`/`replaceState`/`popstate`. Allowlist retained only for Remote-fetch request metadata. |
+| `background.js` | Auth, GraphQL, source-tagged queue, remote discovery, downloads, capture bag, timeline response ingestion, downloaded-id history. **No ZIP.** |
+| `injected.js` | MAIN-world XHR/fetch observer. Forwards **any** media-bearing GraphQL response (no operation allowlist), keeps a 40-entry replay buffer, and watches SPA route changes via `pushState`/`replaceState`/`popstate`. The allowlist survives only for Remote-fetch *request metadata*. |
 | `content.js` | **Always-on** scroll capture (no watch command), SPA route re-arm, DOM photo listing, rate-bounded per-post video resolve, content-driven auto-scroll with in-page badge, action-bar `Download` + `Add to queue`, toasts. |
 | `sidepanel.html/js/css` | Two-tab Side Panel: Scroll capture + Remote fetch. One download action, live active-tab status pill, per-row remove, skip-already-downloaded toggle. |
-| `popup.html/js` | Open Side Panel launcher + capture status line. No scroll/download loop. |
-| `tests/` | Node VM unit tests + sanitized fixtures. |
+| `popup.html/js` | Side Panel launcher + capture status line. No scroll/download loop. |
+| `tests/` | `background.test.js` (Node VM unit tests + sanitized fixtures) and `content.test.js` (real `content.js` in a DOM + `chrome` shim). |
 
-### Removed / deprecated (do not reintroduce without product decision)
+### Design decisions that are deliberate — do not "simplify" these away
 
-- `lib/zip-writer.js` and all ZIP assembly (`downloadZip`, `fetchAsArrayBuffer`, `zipBuffers`, `importScripts` of zip-writer).
-- Legacy runtime messages: `getVideoUrl`, `downloadVideo`, `downloadZip`, `fetchAsArrayBuffer`.
-- Unused `webRequest` permission.
-- Dead `useZip` / `bulkId` state in `content.js`.
-- Accidental `TweetDetail` fallback for single-tweet media (wrong variables/shape).
+These each fix a specific reproduced live failure. Reverting any of them
+re-breaks a bug the user already reported:
 
-### Runtime messages (current)
+1. **No operation-name allowlist on GraphQL *responses*.** An allowlist in
+   `injected.js` + `background.js` is exactly what made the home timeline never
+   capture. Keep the allowlist for request metadata only.
+2. **Capture starts unconditionally at `document_start`.** It must not wait for
+   a Side Panel command; that made every non-targeted tab capture nothing.
+3. **SPA route watcher + replay buffer.** X serves in-tab views from cache with
+   no new request. Without the replay these views list nothing until a reload.
+4. **Per-post video resolve is rate-bounded (~700ms).** Raising it without live
+   rate-limit testing risks 429s.
+5. **One download action.** `Select all` + `Download selected` replaced the
+   redundant `Download all in tab`.
+6. **The popup has no scroll/download loop.** Two engines fought over the page
+   and the popup blocked scrolling on each download.
 
-**Queue:** `queueGet`, `queueAdd`, `queueSelect`, `queueSelectVisible`, `queueSetConcurrency`, `queueStart`, `queueStop`, `queueRetryFailed`, `queueClearFinished`, `queueClearAll`
+### Removed / deprecated — do not reintroduce without a product decision
 
-**Discovery:** `discoveryGet`, `discoveryStart` `{ target, limit, includeRetweets }`, `discoveryStop`  
-State also exposes `errorCode`, `retryAfterMs`, `retryUntil`.
+- `lib/zip-writer.js` and all ZIP assembly (`downloadZip`, `fetchAsArrayBuffer`,
+  `zipBuffers`, `importScripts` of zip-writer).
+- Legacy runtime messages: `getVideoUrl`, `downloadVideo`, `downloadZip`,
+  `fetchAsArrayBuffer`.
+- Popup bulk commands `start` / `stop` / `getStatus`, and the whole
+  `localCapture*` command family (`localCaptureWatch/Start/Stop/Status`).
+- The Side Panel `Watch current tab` button and the auto-scroll item limit.
+- The `Download all in tab` button.
+- Unused `webRequest` permission; dead `useZip` / `bulkId` state.
+- `TweetDetail` fallback for single-tweet media (wrong variables/shape).
 
-**Queue (new):** `queueRemove`, `queueSetSkipDownloaded`, `queueClearDownloadedHistory`. `queueAdd` now returns `addedCount`.
+### Runtime message contract
 
-**Other:** `networkCapture`, `localTimelineCapture` (returns `{ addedCount, tweetIds }`), `initEnv`, `getTweetMedia`, `downloadFile`.
+**Queue:** `queueGet`, `queueAdd` (returns `addedCount`), `queueSelect`,
+`queueSelectVisible`, `queueSetConcurrency`, `queueStart`, `queueStop`,
+`queueRetryFailed`, `queueClearFinished`, `queueClearAll`, `queueRemove`,
+`queueSetSkipDownloaded`, `queueClearDownloadedHistory`
 
-**Side Panel → content:** `scrollSettings` / `scrollStart` / `scrollStop` / `scrollStatus` / `scrollRescan`.
-The old `localCapture*` and popup `start`/`stop`/`getStatus` commands are **removed**.
+**Discovery:** `discoveryGet`, `discoveryStart` `{ target, limit, includeRetweets }`,
+`discoveryStop`. State also exposes `errorCode`, `retryAfterMs`, `retryUntil`.
+
+**Capture / media:** `networkCapture`, `localTimelineCapture` (returns
+`{ addedCount, tweetIds }`), `initEnv`, `getTweetMedia`, `downloadFile`
+
+**Side Panel → content script:** `scrollSettings`, `scrollStart`, `scrollStop`,
+`scrollStatus`, `scrollRescan`
+
+**MAIN ↔ isolated world (`window.postMessage`):**
+`XDL_INJECTED` → `xdlInjectedReady`, `xdlNetworkCapture`, `xdlGraphqlResponse`,
+`xdlUrlChanged`, `xdlReplayDone`; `XDL_CONTENT` → `xdlRequestReplay`
 
 ### Queue item shape
 
@@ -102,51 +196,70 @@ The old `localCapture*` and popup `start`/`stop`/`getStatus` commands are **remo
   source: "scroll" | "remote",
   mediaKey,           // CDN-derived identity; collapses DOM vs GraphQL duplicates
   isRepost, filename, // x-media/{user}_{text}_{tweetId}_{index}.{ext}
-  selected, status, // discovered|queued|starting|downloading|completed|failed
+  selected, status,   // discovered|queued|starting|downloading|completed|failed
   attempts, bytesReceived, totalBytes, downloadId?, error?
 }
 ```
 
-## Storage keys
+### Storage keys
 
 `batchDownloadQueueV1` (queue), `profileDiscoveryV1` (discovery),
-`downloadedMediaIdsV1` (completed item ids only — no URLs, no content, capped
-at 20k), plus UI prefs `sidePanelActiveTab`, `scrollMediaFilter`, `scrollSpeed`,
-`skipDownloaded`, `batchTarget`, `batchLimit`, `includeRetweets`.
+`downloadedMediaIdsV1` (completed item ids only, capped at 20k), plus UI prefs
+`sidePanelActiveTab`, `scrollMediaFilter`, `scrollSpeed`, `skipDownloaded`,
+`batchTarget`, `batchLimit`, `includeRetweets`.
 
-## What needs live-X validation (not complete offline)
+---
 
-- New Scroll capture default tab on real X pages: active-tab watch, manual-scroll listing, optional auto-scroll, tab-scoped clear/download.
-- Live capture bridge on real X tabs (op IDs, features, transaction id, response parsing).
-- Manual-scroll listing of both already-rendered DOM photos and GraphQL-response videos/photos.
-- `UserByScreenName` + `UserMedia` (or photo/video timeline aliases) response shapes for Remote fetch.
-- Repost on/off, multi-photo, highest-bitrate MP4, original photos.
-- Rate-limit countdown against real 429s and Remote fetch stop behavior.
-- Protected / NSFW / expired session messaging.
-- Action-bar selectors and single-tweet GraphQL.
+## 5. What still needs live-X validation
+
+Offline tests cover logic, not X's live response shapes or rate limits. The full
+round-3 checklist lives in `docs/WORKLIST.md` → **"P0 — remaining (live-X, round 3)"**.
+Headline items:
+
+- Homepage capture and in-tab route changes with no reload (the v3.1 failures).
+- A profile's **posts** listing media, not only `/media`.
+- Video posts filling in via the rate-bounded per-post resolve.
+- Auto-scroll start/stop, badge, and whether "Fast" is fast enough.
+- Skip-already-downloaded surviving a list clear.
+- `UserByScreenName` + `UserMedia` shapes for Remote fetch; 429 countdown;
+  protected / NSFW / expired-session messaging.
 
 Do **not** declare P0 complete without a signed-in Chrome check.
 
-## Required live data if something fails
+### Required live data if something fails
 
-Ask for a **sanitized** Network capture only (no credentials):
+Ask for a **sanitized** network capture only (no credentials):
 
-1. For Scroll capture: sanitized X GraphQL response shape from a normal manually scrolled `/media` page, especially entries containing videos/photos.
-2. For Remote fetch: first `…/media` GraphQL request URL + variables/features + JSON body sample.
+1. Scroll capture: a GraphQL response from the exact failing view.
+   *The parser is allowlist-free, so a miss now means the payload shape, not the
+   operation name.*
+2. Remote fetch: first `…/media` GraphQL request URL + variables/features + JSON body.
 3. Cursor page request/response.
 4. Optional: 429, protected, deleted, NSFW errors.
-5. Redact: cookies, auth headers, private content.
+5. Redact cookies, auth headers, and private content.
 
-## Scrapyard policy (Rank S > A > B)
+---
 
-- Use abandoned extensions as **conceptual / pattern** references only.
-- Reimplement locally against this queue/parser/scheduler.
-- Never import third-party login, license, activation, tier, or external API hosts (`apixbd.plucker.io`, ExtPay, etc.).
-- Rank S (Plucker): live GraphQL/header intercept patterns — **already partially adopted**.
-- Rank A: filename fallbacks / action-bar UX — **partially adopted**.
-- Rank B: low priority; licensing code ignored.
+## 6. Scrapyard policy (Rank S > A > B)
 
-## Guardrails
+- Use the abandoned extensions in `reference/scrapyard/` as **conceptual /
+  pattern** references only. Reimplement locally against this queue, parser, and
+  scheduler.
+- Never import third-party login, license, activation, tier, or external API
+  hosts (`apixbd.plucker.io`, ExtPay, etc.).
+- **Rank S (Plucker XBD):** live GraphQL/header intercept, SPA URL watcher,
+  replay-on-reconnect, "Ignore saved" — **adopted**.
+- **Rank A (video downloader):** action-bar `Download` + `Add to queue`, toasts,
+  filename fallback ladder — **adopted**. Per-batch subfolders still available
+  as an idea.
+- **Rank B (X Exporter):** low priority; licensing code ignored.
+
+Each rank folder keeps its original `comment and context.txt`. These are
+one-line quality notes that inform ranking, not detailed specs.
+
+---
+
+## 7. Guardrails
 
 - No npm / TypeScript / webpack / build step.
 - No `<all_urls>` or non-X host permissions.
@@ -154,33 +267,38 @@ Ask for a **sanitized** Network capture only (no credentials):
 - No manual auth-token input.
 - No dead `statuses/show.json` v1.1 endpoint.
 - No ZIP reintroduction for large batch queues (direct files only).
-- No claim of current X support without live check.
+- No claim of current X support without a live check.
 
-## Useful commands
+---
+
+## 8. Commands
 
 ```bash
 # from repo root
-node --check extension/background.js extension/content.js extension/popup.js extension/sidepanel.js extension/injected.js
-node --test tests/background.test.js
-scripts/package-release.sh            # → releases/x-media-downloader-v<version>.zip
-```
-
-## Next session priorities
-
-1. **Re-run the live checklist in `docs/WORKLIST.md` → "P0 — remaining (live-X, round 3)".** It is written directly against the v3.1 failures this pass fixed.
-2. If homepage or route-change capture still misses anything, capture a sanitized GraphQL response from that exact view — the parser is now allowlist-free, so a miss means the payload shape, not the operation name.
-3. If video posts fill in too slowly on video-heavy profiles, tune the 700ms per-post resolve gap in `content.js` (`drainPendingVideoTweets`) against real rate limits before raising it.
-4. Cut the first release zip (`scripts/package-release.sh`) once round 3 passes; manifest is already bumped to **3.2**.
-5. P1 after that: diagnostics/copy-debug-report, Include replies / quoted media switches, filename templates, per-batch subfolders.
-
-## Testing
-
-```bash
-node --check extension/background.js extension/content.js extension/popup.js extension/sidepanel.js extension/injected.js
-node --test tests/*.test.js          # 43 tests
+node --check extension/background.js extension/content.js extension/popup.js \
+             extension/sidepanel.js extension/injected.js
+node --test tests/*.test.js            # 43 tests
+scripts/package-release.sh             # → releases/x-media-downloader-v<version>.zip
 ```
 
 `tests/content.test.js` runs the real `content.js` inside a DOM + `chrome` shim
 and encodes each reported live failure as a regression test (homepage capture,
 in-tab route change, duplicate suppression, capture filter, auto-scroll
-lifecycle). Extend it rather than testing capture by hand.
+lifecycle). **Extend it rather than testing capture by hand** — every future
+capture bug should land there first as a failing test.
+
+---
+
+## 9. Next session priorities
+
+1. **Run the live checklist** in `docs/WORKLIST.md` → "P0 — remaining (live-X,
+   round 3)". It is written directly against the v3.1 failures v3.2 fixed.
+2. If capture still misses a view, get a sanitized GraphQL response from that
+   exact view and add it to `tests/fixtures/` as a regression test.
+3. If video posts fill in too slowly, tune the 700ms gap in `content.js`
+   (`drainPendingVideoTweets`) against real rate limits before raising it.
+4. Cut the first release zip once round 3 passes; the manifest is already at **3.2**.
+5. P1 afterwards: Side Panel diagnostics + sanitized copy-debug-report, explicit
+   Include replies / quoted media switches, filename templates, per-batch
+   subfolders.
+6. Before finishing: update all three docs (log entry, worklist statuses, this file).
