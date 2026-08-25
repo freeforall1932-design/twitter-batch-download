@@ -1,0 +1,72 @@
+{
+"update_url": "https://clients2.google.com/service/update2/crx",
+
+  "manifest_version": 3,
+  "name": "__MSG_name__",
+  "description": "__MSG_description__",
+  "version": "5.8",
+  "icons": {
+    "128": "icon/128.png"
+  },
+  "default_locale": "en",
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "downloads"
+  ],
+  "host_permissions": [
+    "*://*.twitter.com/*",
+    "*://*.x.com/*"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "injected.js"
+      ],
+      "matches": [
+        "*://*.twitter.com/*",
+        "*://*.x.com/*"
+      ]
+    },
+    {
+      "resources": [
+        "content-scripts/main.css"
+      ],
+      "use_dynamic_url": true,
+      "matches": [
+        "*://*.twitter.com/*",
+        "*://*.x.com/*"
+      ]
+    }
+  ],
+  "externally_connectable": {
+    "matches": [
+      "https://xbd.plucker.io/*",
+      "*://*.twitter.com/*",
+      "*://*.x.com/*"
+    ]
+  },
+  "action": {},
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_ui": {
+    "page": "options.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.twitter.com/*",
+        "*://*.x.com/*"
+      ],
+      "run_at": "document_start",
+      "css": [
+        "content-scripts/twitter.css"
+      ],
+      "js": [
+        "content-scripts/main.js",
+        "content-scripts/twitter.js"
+      ]
+    }
+  ]
+}
