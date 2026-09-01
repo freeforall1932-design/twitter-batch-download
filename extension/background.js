@@ -1,7 +1,19 @@
 // ==========================================================================
 // background.js — Service Worker for X Media Downloader
-// Handles: auth, GraphQL API, media extraction, queue, direct downloads
+// Handles: auth, GraphQL API, media extraction, queue, direct downloads,
+// and (v3.5) per-post ZIP/CBZ/PDF assembly relayed to an offscreen document.
 // ==========================================================================
+
+// Shared output engine: naming/template/sanitize (lib/naming.js), STORE-only
+// ZIP writer (lib/zipWriter.js), dependency-free PDF 1.4 writer
+// (lib/pdfBuilder.js). The same files load in the offscreen document and in
+// Node tests. Guarded so a packaging mistake degrades to raw downloads
+// instead of killing the whole worker at parse time.
+try {
+  importScripts("lib/naming.js", "lib/zipWriter.js", "lib/pdfBuilder.js");
+} catch (error) {
+  console.error("[X-DL BG] Failed to load lib/ scripts:", error);
+}
 
 // --- Auth cache ---
 let bearerToken = null;
@@ -375,6 +387,83 @@ function buildFallbackFilenames(filename) {
 }
 
 // ==========================================================================
+// OUTPUT SETTINGS — master folder, name template, output format (v3.5)
+// ==========================================================================
+// Stored in chrome.storage.sync and written ONLY by the Side Panel settings
+// card. Every downloading context receives them through this plain settings
+// bag; the offscreen document gets them relayed inside the job message and
+// never touches chrome.storage itself (offscreen documents expose only
+// chrome.runtime — a storage call there crashes the whole download).
+
+const OUTPUT_SETTINGS_DEFAULTS = {
+  rawMasterFolder: "XMedia", // "" (empty) = master folder OFF → old flat layout
+  nameTemplate: "{user} - {text} - {id}",
+  outputFormat: "raw"
+};
+
+async function getOutputSettings() {
+  const sync = chrome.storage?.sync;
+  if (!sync?.get) return { ...OUTPUT_SETTINGS_DEFAULTS };
+  try {
+    const stored = await new Promise((resolve) => {
+      const done = (values) => resolve(values || {});
+      // Chrome supports both promise and callback styles across versions.
+      const maybe = sync.get(OUTPUT_SETTINGS_DEFAULTS, done);
+      if (maybe && typeof maybe.then === "function") maybe.then(done, () => done({}));
+    });
+    return { ...OUTPUT_SETTINGS_DEFAULTS, ...stored };
+  } catch (_) {
+    return { ...OUTPUT_SETTINGS_DEFAULTS };
+  }
+}
+
+// Template fields for one queue item's owning post.
+function namingFieldsForItem(item) {
+  return {
+    user: String(item?.author || "").replace(/^@/, "") || "unknown",
+    name: item?.displayName || "",
+    text: item?.text || "",
+    id: item?.tweetId || "",
+    date: item?.date || ""
+  };
+}
+
+function extensionForItem(item) {
+  const fromFilename = String(item?.filename || "").match(/\.([a-z0-9]{1,5})$/i)?.[1];
+  if (fromFilename) return fromFilename.toLowerCase();
+  const url = String(item?.url || "");
+  const fromFormat = url.match(/[?&]format=([a-z0-9]+)/i)?.[1];
+  if (fromFormat) return fromFormat.toLowerCase();
+  const fromPath = url.split("?")[0].match(/\.([a-z0-9]{1,5})$/i)?.[1];
+  if (fromPath) return fromPath.toLowerCase();
+  return item?.type === "video" ? "mp4" : "jpg";
+}
+
+// Raw (loose file) download path for a queue item:
+//   master folder ON  → <Master>/<templated post name>/001.jpg…
+//   master folder OFF → the item's legacy flat x-media/… filename, unchanged,
+//                       so emptying the box restores the old layout exactly.
+// Items persisted by older versions carry no text/mediaIndex metadata; they
+// keep their stored filename under the master folder rather than guessing.
+function rawPathForItem(item, settings) {
+  const naming = globalThis.XDLNaming;
+  if (!naming) return item.filename;
+  const master = naming.normalizeRawMasterFolder(settings?.rawMasterFolder);
+  if (master === "") return item.filename;
+  if (item.mediaIndex === undefined || item.mediaIndex === null) {
+    const legacyLeaf = String(item.filename || "media.bin").split("/").pop();
+    return naming.sanitizeArtifactFilename(`${master}/${legacyLeaf}`, `XMedia/${legacyLeaf}`);
+  }
+  return naming.buildRawMediaPath(
+    { rawMasterFolder: master, nameTemplate: settings?.nameTemplate },
+    namingFieldsForItem(item),
+    item.mediaIndex,
+    extensionForItem(item),
+    item.filename
+  ) || item.filename;
+}
+
+// ==========================================================================
 // RATE LIMITING — Exponential backoff with jitter
 // ==========================================================================
 
@@ -598,10 +687,16 @@ async function getTweetMedia(tweetId) {
     const ownerLegacy = owner.legacy || {};
     const ownerUser = owner.core?.user_results?.result?.legacy || {};
     const ownerUsername = ownerUser.screen_name || username;
+    const ownerDisplayName = ownerUser.name || "";
     const ownerText = ownerLegacy.full_text || ownerLegacy.text || tweetText;
     const ownerTweetId = owner.rest_id || tweetId;
+    const ownerDate = ownerLegacy.created_at || "";
     const mediaItems = ownerLegacy.extended_entities?.media || ownerLegacy.entities?.media || [];
+    // Position within the OWNING post's media list — drives the 001…004
+    // numbering inside the master folder and archive entry order.
+    let mediaIndex = -1;
     for (const m of mediaItems) {
+      mediaIndex += 1;
       if (m.type === "video" || m.type === "animated_gif") {
         const variants = m.video_info?.variants || [];
         let bestUrl = null;
@@ -622,8 +717,11 @@ async function getTweetMedia(tweetId) {
             mediaId: m.id_str || m.id,
             type: m.type,
             username: ownerUsername,
+            displayName: ownerDisplayName,
             tweetId: ownerTweetId,
             text: ownerText,
+            date: ownerDate,
+            mediaIndex,
             isQuote
           });
         }
@@ -635,8 +733,11 @@ async function getTweetMedia(tweetId) {
             mediaId: m.id_str || m.id,
             type: "photo",
             username: ownerUsername,
+            displayName: ownerDisplayName,
             tweetId: ownerTweetId,
             text: ownerText,
+            date: ownerDate,
+            mediaIndex,
             isQuote
           });
         }
@@ -709,7 +810,7 @@ async function downloadFile(url, filename) {
 // PERSISTENT DOWNLOAD QUEUE — schedules only after prior downloads finish
 // ==========================================================================
 const QUEUE_STORAGE_KEY = "batchDownloadQueueV1";
-const QUEUE_DEFAULT = { items: [], concurrency: 2, running: false, stopped: false, skipDownloaded: true };
+const QUEUE_DEFAULT = { items: [], concurrency: 2, running: false, stopped: false, skipDownloaded: true, outputFormat: "raw" };
 const MAX_DOWNLOAD_ATTEMPTS = 3;
 let queueState = null;
 let queueSaving = Promise.resolve();
@@ -872,14 +973,22 @@ function publicQueueState() {
 async function runQueuePass() {
   const state = await getQueueState();
   if (!state.running || state.stopped) return;
+  const settings = await getOutputSettings();
+  const format = globalThis.XDLNaming
+    ? globalThis.XDLNaming.normalizeOutputFormat(state.outputFormat)
+    : "raw";
   const active = state.items.filter((item) => ["starting", "downloading"].includes(item.status)).length;
   const slots = Math.max(0, state.concurrency - active);
-  const nextItems = state.items.filter((item) => item.status === "queued").slice(0, slots);
+  // With an archive format active, queued photos belong to the per-post
+  // archive pass (runArchivePass) — only videos flow through here as raw
+  // files (MP4s never embed into a ZIP/CBZ/PDF page archive).
+  const rawEligible = (item) => item.status === "queued" && (format === "raw" || item.type !== "photo");
+  const nextItems = state.items.filter(rawEligible).slice(0, slots);
   for (const item of nextItems) {
     item.status = "starting";
     item.attempts = (item.attempts || 0) + 1;
     await saveQueueState();
-    const result = await downloadFile(item.url, item.filename);
+    const result = await downloadFile(item.url, rawPathForItem(item, settings));
     if (result.success) {
       item.status = "downloading";
       item.downloadId = result.downloadId;
@@ -899,12 +1008,206 @@ async function runQueuePass() {
   }
 }
 
+// ==========================================================================
+// ARCHIVE PASS — one ZIP/CBZ/PDF per post (v3.5)
+// ==========================================================================
+// When the effective output format is zip/cbz/pdf, the queued PHOTOS of each
+// post (up to 4 on X) become one archive named after the templated post base
+// name. Assembly happens in the offscreen document (object URL + <a download>
+// anchor — some Chromium builds ignore chrome.downloads' filename for blob:
+// URLs); when the offscreen API is unavailable the worker falls back to a
+// base64 data: URL, which is acceptable only because a post carries at most
+// four images. Videos always stay raw. This is a PER-POST archive of ≤4
+// images — the old multi-GB whole-batch ZIP stays removed.
+
+const OFFSCREEN_DOCUMENT_PATH = "offscreen.html";
+
+async function ensureOffscreenDocument() {
+  const offscreen = chrome.offscreen;
+  if (!offscreen?.createDocument) return false;
+  try {
+    if (offscreen.hasDocument && await offscreen.hasDocument()) return true;
+    await offscreen.createDocument({
+      url: OFFSCREEN_DOCUMENT_PATH,
+      reasons: ["BLOBS"],
+      justification: "Assemble per-post ZIP/CBZ/PDF archives and save them via an object URL."
+    });
+    return true;
+  } catch (error) {
+    // "Only a single offscreen document may be created" = it already exists.
+    if (String(error?.message || error).toLowerCase().includes("single offscreen")) return true;
+    console.warn("[X-DL BG] Offscreen document unavailable:", error);
+    return false;
+  }
+}
+
+function sendArchiveJobToOffscreen(job) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => { if (!settled) { settled = true; resolve(value); } };
+    // A wedged offscreen document must fail the post, not hang the queue.
+    const timer = setTimeout(() => finish({ ok: false, error: "Archive assembly timed out" }), 120000);
+    try {
+      chrome.runtime.sendMessage({ action: "offscreenBuildArchive", job }, (response) => {
+        clearTimeout(timer);
+        if (chrome.runtime.lastError) finish({ ok: false, error: chrome.runtime.lastError.message });
+        else finish(response || { ok: false, error: "No response from offscreen document" });
+      });
+    } catch (error) {
+      clearTimeout(timer);
+      finish({ ok: false, error: String(error?.message || error) });
+    }
+  });
+}
+
+async function fetchImageBytesInWorker(url) {
+  const response = await fetch(url, { credentials: "omit" });
+  if (!response.ok) throw new Error(`Image fetch failed (${response.status})`);
+  const buffer = await response.arrayBuffer();
+  if (!buffer || buffer.byteLength < 32) throw new Error("Image response too small");
+  return { bytes: new Uint8Array(buffer), contentType: response.headers?.get?.("content-type") || null };
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunkSize, bytes.length)));
+  }
+  return btoa(binary);
+}
+
+async function preparePdfImageInWorker(bytes, contentType) {
+  const info = globalThis.XDLPdf.jpegInfo(bytes);
+  if (info !== null && info.components === 3 && info.width > 0 && info.height > 0) {
+    return { bytes, width: info.width, height: info.height };
+  }
+  const createImageBitmapFn = globalThis.createImageBitmap;
+  const OffscreenCanvasCtor = globalThis.OffscreenCanvas;
+  if (typeof createImageBitmapFn !== "function" || typeof OffscreenCanvasCtor !== "function") {
+    throw new Error("PDF export cannot encode a non-JPEG page in this context.");
+  }
+  const bitmap = await createImageBitmapFn(new Blob([bytes], { type: contentType || "image/jpeg" }));
+  try {
+    const canvas = new OffscreenCanvasCtor(bitmap.width, bitmap.height);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("PDF export cannot encode a page (no 2d canvas).");
+    // JPEG has no alpha channel: flatten transparency onto white.
+    ctx.fillStyle = "#FFFFFF";
+    ctx.fillRect(0, 0, bitmap.width, bitmap.height);
+    ctx.drawImage(bitmap, 0, 0);
+    const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.92 });
+    return { bytes: new Uint8Array(await blob.arrayBuffer()), width: bitmap.width, height: bitmap.height };
+  } finally {
+    if (typeof bitmap.close === "function") bitmap.close();
+  }
+}
+
+// Service-worker fallback: assemble the archive here and hand a data: URL to
+// chrome.downloads (data: URLs respect the filename argument; blob: URLs do
+// not on some builds). Never used for large payloads — a post is ≤4 images.
+async function buildArchiveInWorker(job) {
+  const format = globalThis.XDLNaming.normalizeOutputFormat(job.format);
+  const fetched = [];
+  for (const image of job.images) {
+    fetched.push({ name: image.name, ...(await fetchImageBytesInWorker(image.url)) });
+  }
+  let bytes, mime;
+  if (format === "pdf") {
+    const pages = [];
+    for (const page of fetched) pages.push(await preparePdfImageInWorker(page.bytes, page.contentType));
+    bytes = globalThis.XDLPdf.buildPdfDocument(pages);
+    mime = "application/pdf";
+  } else {
+    bytes = globalThis.XDLZip.buildZip(fetched.map((entry) => ({ name: entry.name, data: entry.bytes })));
+    mime = format === "cbz" ? "application/vnd.comicbook+zip" : "application/zip";
+  }
+  const result = await downloadFile(`data:${mime};base64,${bytesToBase64(bytes)}`, job.filename);
+  if (!result.success) throw new Error(result.error || "Unable to start archive download");
+  return { ok: true };
+}
+
+// Queued photos grouped per owning post, in post order (mediaIndex).
+function archiveGroups(state) {
+  const groups = new Map();
+  for (const item of state.items) {
+    if (item.status !== "queued" || item.type !== "photo") continue;
+    const key = item.tweetId || item.id;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
+  for (const group of groups.values()) {
+    group.sort((a, b) => (Number(a.mediaIndex) || 0) - (Number(b.mediaIndex) || 0));
+  }
+  return groups;
+}
+
+async function runArchivePass() {
+  const state = await getQueueState();
+  if (!state.running || state.stopped) return;
+  const naming = globalThis.XDLNaming;
+  if (!naming) return;
+  const format = naming.normalizeOutputFormat(state.outputFormat);
+  if (format === "raw") return;
+  const settings = await getOutputSettings();
+
+  for (const [, group] of archiveGroups(state)) {
+    if (state.stopped) break;
+    const lead = group[0];
+    const fields = namingFieldsForItem(lead);
+    const filename = naming.buildArchiveFilename({ nameTemplate: settings.nameTemplate }, fields, format);
+    const job = {
+      format,
+      filename,
+      images: group.map((item, position) => ({
+        url: item.url,
+        name: `${naming.pageNumber(item.mediaIndex ?? position)}.${extensionForItem(item)}`
+      }))
+    };
+    group.forEach((item) => {
+      item.status = "starting";
+      item.attempts = (item.attempts || 0) + 1;
+    });
+    await saveQueueState();
+
+    let result;
+    if (await ensureOffscreenDocument()) {
+      result = await sendArchiveJobToOffscreen(job);
+    } else {
+      result = await buildArchiveInWorker(job).catch((error) => ({ ok: false, error: String(error?.message || error) }));
+    }
+
+    if (result?.ok) {
+      for (const item of group) {
+        item.status = "completed";
+        item.error = null;
+        item.downloadId = null;
+        await rememberDownloadedId(item.id);
+      }
+    } else {
+      group.forEach((item) => {
+        item.status = "failed";
+        item.error = result?.error || "Archive assembly failed";
+        item.downloadId = null;
+      });
+    }
+    await saveQueueState();
+  }
+
+  if (!state.items.some((item) => ["queued", "starting", "downloading"].includes(item.status))) {
+    state.running = false;
+    await saveQueueState();
+  }
+}
+
 function processQueue() {
   // Runtime messages, retry timers, and multiple terminal download events can
   // request scheduling at the same time. Chain passes so slot calculations and
-  // starting-state reservations cannot overlap.
+  // starting-state reservations cannot overlap. The archive pass runs after
+  // the raw pass on the same chain, so a group is never assembled twice.
   queueProcessing = queueProcessing
     .then(() => runQueuePass())
+    .then(() => runArchivePass())
     .catch((error) => console.error("[X-DL BG] Queue processing error", error));
   return queueProcessing;
 }
@@ -1057,6 +1360,16 @@ async function handleQueueMessage(msg) {
     });
     state.stopped = false; state.running = true;
   } else if (msg.action === "queueStart") {
+    // Per-job "Save as" from the Side Panel dock. An explicit format applies
+    // to THIS run only (it is never written back to the stored default);
+    // omitted → the stored default from the settings card. Whitelisted so a
+    // corrupt value degrades to raw, never to a surprise archive.
+    const requested = msg.format !== undefined
+      ? msg.format
+      : (await getOutputSettings()).outputFormat;
+    state.outputFormat = globalThis.XDLNaming
+      ? globalThis.XDLNaming.normalizeOutputFormat(requested)
+      : "raw";
     state.items.forEach((item) => {
       const sourceOk = !msg.source || (item.source || "remote") === msg.source;
       const allowed = sourceOk && (msg.mode === "all" || item.selected);
@@ -1532,6 +1845,13 @@ function mediaItemsFromTweetObject(source, { isRepost = false, isQuote = false, 
       mediaKey: mediaKeyFromUrl(url),
       url, type, thumbnail: item.media_url_https || item.media_url || "", author: `@${author}`,
       date: timestamp, tweetId, mediaId: String(mediaId), isRepost, isQuote,
+      // Naming metadata (v3.5): the download-time path builder renders the
+      // user's name template and per-post 001…004 numbering from these.
+      // `filename` stays the legacy flat path — it is used verbatim when the
+      // master folder is switched off.
+      text: String(text || "").slice(0, 280),
+      displayName: source.core?.user_results?.result?.legacy?.name || "",
+      mediaIndex: index,
       filename: makeMediaFilename({ username: author, text, tweetId, mediaId, index, extension })
     };
   }).filter(Boolean);
@@ -1851,9 +2171,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  // Download a single file
+  // Download a single file. When the content script sends the owning item's
+  // metadata, the path honors the master-folder + name-template settings;
+  // a bare filename (older callers) keeps the legacy flat path.
   if (msg.action === "downloadFile") {
-    downloadFile(msg.url, msg.filename).then(sendResponse);
+    (async () => {
+      const filename = msg.item
+        ? rawPathForItem({ ...msg.item, filename: msg.item.filename || msg.filename }, await getOutputSettings())
+        : msg.filename;
+      return downloadFile(msg.url, filename);
+    })().then(sendResponse);
     return true;
   }
 });

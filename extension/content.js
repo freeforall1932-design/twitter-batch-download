@@ -402,8 +402,10 @@
     return sendMessage("getTweetMedia", { tweetId });
   }
 
-  function downloadFile(url, filename) {
-    return sendMessage("downloadFile", { url, filename });
+  function downloadFile(url, filename, item) {
+    // The owning item's metadata lets the background honor the master-folder
+    // and name-template settings; url/filename stay as the legacy fallback.
+    return sendMessage("downloadFile", { url, filename, item });
   }
 
   // ==========================================================================
@@ -450,6 +452,12 @@
         mediaId: mediaKey,
         isRepost: false,
         source: "scroll",
+        // Naming metadata (v3.5): raw post text + per-post media position for
+        // the download-time template/master-folder path builder. The DOM
+        // carries no display name; the {name} token just renders empty here.
+        text: info.tweetText || "",
+        displayName: "",
+        mediaIndex: index,
         filename: `x-media/${handle}_${safeName}_${info.tweetId}_${index + 1}.${getPhotoExtension(url)}`
       });
     });
@@ -524,12 +532,15 @@
             type: "video",
             thumbnail: "",
             author: `@${ownerHandle}`,
-            date: "",
+            date: video.date || "",
             tweetId: ownerTweetId,
             mediaId: String(video.mediaId || mediaKey || index),
             isRepost: false,
             isQuote: Boolean(video.isQuote),
             source: "scroll",
+            text: ownerText,
+            displayName: video.displayName || "",
+            mediaIndex: video.mediaIndex ?? index,
             filename: `x-media/${ownerHandle}_${sanitizeFilename(ownerText)}_${ownerTweetId}_${index + 1}.mp4`
           });
         });
@@ -550,12 +561,15 @@
               type: "photo",
               thumbnail: photo.url,
               author: `@${ownerHandle}`,
-              date: "",
+              date: photo.date || "",
               tweetId: ownerTweetId,
               mediaId: String(photo.mediaId || mediaKey || index),
               isRepost: false,
               isQuote: Boolean(photo.isQuote),
               source: "scroll",
+              text: ownerText,
+              displayName: photo.displayName || "",
+              mediaIndex: photo.mediaIndex ?? index,
               filename: `x-media/${ownerHandle}_${sanitizeFilename(ownerText)}_${ownerTweetId}_${index + 1}.${getPhotoExtension(photo.url)}`
             });
           });
@@ -719,12 +733,15 @@
         type: "video",
         thumbnail: "",
         author: `@${ownerHandle}`,
-        date: "",
+        date: video.date || "",
         tweetId: ownerTweetId,
         mediaId: String(video.mediaId || mediaKey || index),
         isRepost: false,
         isQuote: Boolean(video.isQuote),
         source: "scroll",
+        text: video.text || info.tweetText || media.tweetText || "",
+        displayName: video.displayName || "",
+        mediaIndex: video.mediaIndex ?? index,
         filename: `x-media/${ownerHandle}_${ownerText}_${ownerTweetId}_${index + 1}.mp4`
       });
     });
@@ -740,12 +757,15 @@
         type: "photo",
         thumbnail: photo.url,
         author: `@${ownerHandle}`,
-        date: "",
+        date: photo.date || "",
         tweetId: ownerTweetId,
         mediaId: String(photo.mediaId || mediaKey || index),
         isRepost: false,
         isQuote: Boolean(photo.isQuote),
         source: "scroll",
+        text: photo.text || info.tweetText || media.tweetText || "",
+        displayName: photo.displayName || "",
+        mediaIndex: photo.mediaIndex ?? index,
         filename: `x-media/${ownerHandle}_${ownerText}_${ownerTweetId}_${index + 1}.${getPhotoExtension(photo.url)}`
       });
     });
@@ -779,7 +799,7 @@
     for (let i = 0; i < collected.items.length; i++) {
       const item = collected.items[i];
       btn.innerHTML = `${DOWNLOAD_SVG} ${i + 1}/${collected.items.length}…`;
-      const result = await downloadFile(item.url, item.filename);
+      const result = await downloadFile(item.url, item.filename, item);
       if (result?.success) success++;
     }
 

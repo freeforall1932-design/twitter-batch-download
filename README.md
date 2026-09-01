@@ -21,7 +21,9 @@ Self-hosted against your signed-in X session. No third-party accounts, API keys,
 - **Include reposts** — Optional during profile discovery.
 - **Include quoted** — Media inside a quoted post's card (the "mentioned post" box with thumbnail and text) lists too, attributed to the quoted post's author, with a `quote` badge. On by default; switchable per tab.
 - **Rate-limit handling** — Throttle + exponential backoff; Side Panel shows a retry countdown on 429/503.
-- **Direct file naming** — `Downloads/x-media/{username}_{post text}_{tweetId}_{index}.{ext}` (no multi-GB ZIP archives).
+- **Master folder + per-post folders (v3.5)** — Raw downloads save as `Downloads/XMedia/<post name>/001.jpg…` (folders auto-created). The master folder is configurable in the Side Panel's **Output settings**; empty it to restore the old flat `Downloads/x-media/{username}_{post text}_{tweetId}_{index}.{ext}` layout exactly. Slashes nest deeper (`XMedia/raw`).
+- **One file per photo post (v3.5)** — Optional **ZIP / CBZ / PDF** output: a post's photos (up to 4) bundle into a single `<post name>.zip|cbz|pdf` with pages `001…004` in post order. PDF pages embed original JPEGs losslessly (PNG/WebP re-encoded via canvas). Videos always stay separate MP4 files. This is a per-post archive of at most four images — the old multi-GB whole-batch ZIP stays removed.
+- **Naming scheme checkboxes (v3.5)** — The post name is built from tokens (`{user}`, `{name}`, `{text}`, `{id}`, `{date}`; default `{user} - {text} - {id}`) picked with checkboxes and a live example preview; hand-typed custom templates keep working through a manual input. Degenerate names fall back to the post id; Windows-reserved names are prefixed.
 - **Live session capture** — MAIN-world observer learns current GraphQL operation IDs and safe request headers from the open X tab.
 - **No third-party services** — Calls go to X only, using your browser session.
 
@@ -57,13 +59,22 @@ Under any media post: **Download** saves it now, **Add to queue** sends it to th
 
 Switch to the **Remote fetch** tab, enter `@username` or a profile URL, set a limit, optionally include reposts and quoted-post media, then **Remote discover**. This crawls X directly, so it can hit rate limits sooner than normal scrolling — prefer Scroll capture when you can.
 
+### Output settings (v3.5)
+
+Open **Output settings** (between the toolbar and the list):
+
+- **Master folder for saved files** — default `XMedia`; raw files save as `Downloads/XMedia/<post name>/001.jpg…`. Leave it **empty** to switch the folder off (old flat `x-media/` layout). Requires Chrome's *"Ask where to save each file"* to be off for folders to auto-create.
+- **Default format for photo posts** — separate files (raw) or one ZIP/CBZ/PDF per post. The dock's **Save photo posts as** picker overrides it for a single download without changing the stored default.
+- **Post name is built from** — tick the tokens; the example preview updates live. Untick everything and names fall back to the post id. A hand-typed custom template shows a manual input instead.
+
 ## How it works
 
 1. **Auth** — Reads `ct0` / `auth_token` cookies and a public Bearer token (from page JS, live capture, or known public fallback).
 2. **Live capture** — `injected.js` (MAIN world) observes GraphQL requests for operation IDs, features, and headers such as `x-client-transaction-id` (never stores Cookie header values in the capture bag).
 3. **Discovery** — Resolves user via `UserByScreenName`, pages `UserMedia` (or captured media-timeline aliases), parses timeline instructions, enqueues media.
 4. **Single tweet** — `TweetResultByRestId` for action-bar / DOM bulk.
-5. **Downloads** — `chrome.downloads` with concurrency 1–2, retries, and a safer filename ladder if Chrome rejects a path.
+5. **Downloads** — `chrome.downloads` with concurrency 1–2, retries, and a safer filename ladder if Chrome rejects a path. Paths honor the **Output settings** (master folder + name template); relative subpaths only, never absolute, never `..`.
+6. **Archives (v3.5)** — With ZIP/CBZ/PDF selected, a post's photos are fetched and assembled in an **offscreen document** (`offscreen.html`), then saved by clicking an in-document `<a download>` anchor — some Chromium builds ignore the `filename` argument for `blob:` URLs and would otherwise save a UUID. Archives land at the download-directory root as `<post name>.<ext>` (the anchor mechanism cannot carry folders). If the offscreen API is unavailable, the worker falls back to a small base64 `data:` URL (safe: at most 4 images per post). Offscreen documents only expose `chrome.runtime`, so settings are relayed into the job message — never read from storage there.
 
 ## Permissions
 
@@ -74,6 +85,7 @@ Switch to the **Remote fetch** tab, enter `@username` or a profile URL, set a li
 | `storage` | Queue, discovery state, settings |
 | `activeTab` + `scripting` | Buttons, bundle metadata, messaging |
 | `sidePanel` | Batch queue UI |
+| `offscreen` | Assemble per-post ZIP/CBZ/PDF blobs (MV3 workers cannot create object URLs) |
 
 **Host permissions:** `x.com`, `twitter.com`, `video.twimg.com`, `pbs.twimg.com`, `api.x.com`.
 
@@ -85,10 +97,12 @@ No data is sent to third-party extension backends.
 .
 ├── extension/                 # ← Load unpacked: select THIS folder in chrome://extensions
 │   ├── manifest.json          #   MV3, name/version live here
-│   ├── background.js          #   Auth, GraphQL, queue, discovery, downloads
+│   ├── background.js          #   Auth, GraphQL, queue, discovery, downloads, archive pass
 │   ├── injected.js            #   MAIN-world GraphQL/header capture
 │   ├── content.js             #   Capture forwarder, action bar, DOM bulk
-│   ├── sidepanel.html/js/css  #   Batch queue UI
+│   ├── sidepanel.html/js/css  #   Batch queue UI + Output settings card
+│   ├── offscreen.html/js      #   ZIP/CBZ/PDF assembly (object URL + anchor save)
+│   ├── lib/                   #   naming.js, zipWriter.js, pdfBuilder.js (shared with tests)
 │   ├── popup.html/js          #   Side Panel launcher + capture status
 │   └── icon48.png / icon128.png
 ├── tests/                     # Node unit tests + sanitized fixtures
@@ -112,10 +126,17 @@ never loaded by the browser.
 ## Development
 
 ```bash
-node --check extension/background.js extension/content.js extension/popup.js extension/sidepanel.js extension/injected.js
-node --test tests/*.test.js   # 43 tests
-node --test tests/background.test.js
+node --check extension/background.js extension/content.js extension/popup.js extension/sidepanel.js extension/injected.js extension/offscreen.js extension/lib/naming.js extension/lib/zipWriter.js extension/lib/pdfBuilder.js
+node --test tests/*.test.js   # 88 tests (offline: fixtures + window-less VM pipelines)
+node --test tests/downloader.test.js
 ```
+
+CI runs the same offline suites once `docs/ci/extension-tests.yml` is installed
+as `.github/workflows/extension-tests.yml` (manual web-UI step — see
+`docs/ci/README.md`; the Arena GitHub App cannot push workflow files).
+GitHub-hosted runners cannot drive real-browser MV3 tests, so signed-in
+verification against live X remains a local manual step
+(see `docs/SESSION_HANDOFF.md` §5).
 
 After changing anything in `extension/`: reload the extension on `chrome://extensions`, then
 hard-refresh your X tab.

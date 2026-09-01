@@ -209,7 +209,7 @@ $("resetDownloadedBtn").addEventListener("click", async () => {
   state = await send({ action: "queueClearDownloadedHistory" });
   render();
 });
-$("downloadSelectedBtn").addEventListener("click", async () => { state = await send({ action: "queueStart", mode: "selected", source: sourceForActiveTab() }); render(); });
+$("downloadSelectedBtn").addEventListener("click", async () => { state = await send({ action: "queueStart", mode: "selected", source: sourceForActiveTab(), format: $("jobFormat").value }); render(); });
 $("stopBtn").addEventListener("click", async () => { state = await send({ action: "queueStop" }); render(); });
 
 document.querySelectorAll(".tab").forEach((button) => button.addEventListener("click", async () => {
@@ -285,3 +285,139 @@ chrome.storage.local.get(["batchTarget", "batchLimit", "includeRetweets", "inclu
 });
 localStatusTimer = setInterval(pollLocalStatus, 1500);
 refresh();
+
+// ==========================================================================
+// OUTPUT SETTINGS (v3.5) — master folder, per-post format, name template.
+// This card is the extension's "options page": it is the ONLY writer of the
+// chrome.storage.sync output settings. Downloading contexts receive the
+// values through a settings bag read in background.js.
+// ==========================================================================
+
+const TEMPLATE_LABELS = {
+  user: "@handle",
+  name: "Display name",
+  text: "Post text (first ~40 chars)",
+  id: "Post ID",
+  date: "Post date (YYYY-MM-DD)"
+};
+
+const PREVIEW_FIELDS = {
+  user: "nasa",
+  name: "NASA",
+  text: "Sunrise over the Pacific, seen from the ISS",
+  id: "1834567890123456789",
+  date: "2026-09-01T09:15:00.000Z"
+};
+
+const outputSettingsState = { rawMasterFolder: XDLNaming.DEFAULT_RAW_MASTER_FOLDER, nameTemplate: XDLNaming.DEFAULT_NAME_TEMPLATE, outputFormat: "raw" };
+
+function renderNamePreview() {
+  const master = XDLNaming.normalizeRawMasterFolder(outputSettingsState.rawMasterFolder);
+  const template = outputSettingsState.nameTemplate;
+  const format = XDLNaming.normalizeOutputFormat(outputSettingsState.outputFormat);
+  const base = XDLNaming.makePostBaseName(template, PREVIEW_FIELDS);
+  let example;
+  if (format === "raw") {
+    example = master !== ""
+      ? `Downloads/${master}/${base}/001.jpg`
+      : `Downloads/x-media/nasa_Sunrise over the Pacific…_${PREVIEW_FIELDS.id}_1.jpg (old flat layout)`;
+  } else {
+    example = `Downloads/${XDLNaming.buildArchiveFilename({ nameTemplate: template }, PREVIEW_FIELDS, format)}`;
+  }
+  $("namePreview").textContent = `Example file name: ${example}`;
+}
+
+function saveNameTemplate(template) {
+  outputSettingsState.nameTemplate = template;
+  chrome.storage.sync.set({ nameTemplate: template });
+  renderNamePreview();
+}
+
+function initNameTemplate(storedTemplate) {
+  const checksBox = $("nameTemplateChecks");
+  const advancedBox = $("nameTemplateAdvanced");
+  const advancedInput = $("nameTemplateInput");
+
+  if (!XDLNaming.isTokenOnlyTemplate(storedTemplate)) {
+    // A hand-written template the checkboxes cannot represent: show the
+    // manual input instead so nothing the user typed is lost.
+    checksBox.style.display = "none";
+    advancedBox.style.display = "";
+    advancedInput.value = storedTemplate;
+    advancedInput.addEventListener("change", () => {
+      const value = advancedInput.value.trim();
+      saveNameTemplate(value);
+      if (XDLNaming.isTokenOnlyTemplate(value)) {
+        // Cleared / reduced to plain tokens: switch back to checkbox mode.
+        advancedBox.style.display = "none";
+        checksBox.style.display = "";
+        checksBox.textContent = "";
+        buildTemplateChecks(value);
+      }
+    });
+    renderNamePreview();
+    return;
+  }
+
+  advancedBox.style.display = "none";
+  buildTemplateChecks(storedTemplate);
+  renderNamePreview();
+}
+
+function buildTemplateChecks(storedTemplate) {
+  const checksBox = $("nameTemplateChecks");
+  const inUse = XDLNaming.templateTokensInUse(storedTemplate);
+  for (const token of XDLNaming.TEMPLATE_TOKENS) {
+    const wrapper = document.createElement("label");
+    wrapper.className = "check-label";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.id = `template_${token}`;
+    box.checked = !!inUse[token];
+    wrapper.appendChild(box);
+    wrapper.appendChild(document.createTextNode(` ${TEMPLATE_LABELS[token]}`));
+    checksBox.appendChild(wrapper);
+    box.addEventListener("change", () => {
+      const checked = {};
+      for (const t of XDLNaming.TEMPLATE_TOKENS) {
+        checked[t] = !!document.getElementById(`template_${t}`)?.checked;
+      }
+      // Nothing checked = empty template; produced names then fall back to
+      // the post id (never an empty file name).
+      saveNameTemplate(XDLNaming.buildTemplate(checked));
+    });
+  }
+}
+
+chrome.storage.sync.get(
+  { rawMasterFolder: XDLNaming.DEFAULT_RAW_MASTER_FOLDER, nameTemplate: XDLNaming.DEFAULT_NAME_TEMPLATE, outputFormat: "raw" },
+  (stored) => {
+    outputSettingsState.rawMasterFolder = String(stored.rawMasterFolder);
+    outputSettingsState.nameTemplate = String(stored.nameTemplate);
+    outputSettingsState.outputFormat = XDLNaming.normalizeOutputFormat(stored.outputFormat);
+
+    // Master folder: saved verbatim on change — the EMPTY string is
+    // meaningful ("no master folder, old flat layout"), so this field must
+    // not ride any generic "skip empty values" widget wiring.
+    const masterInput = $("rawMasterFolder");
+    masterInput.value = outputSettingsState.rawMasterFolder;
+    masterInput.addEventListener("change", () => {
+      outputSettingsState.rawMasterFolder = masterInput.value.trim();
+      chrome.storage.sync.set({ rawMasterFolder: outputSettingsState.rawMasterFolder });
+      renderNamePreview();
+    });
+
+    // Stored default format (settings card) + per-job picker (dock). The
+    // dock picker is seeded from the default but never writes it back.
+    $("defaultFormat").value = outputSettingsState.outputFormat;
+    $("jobFormat").value = outputSettingsState.outputFormat;
+    $("defaultFormat").addEventListener("change", () => {
+      outputSettingsState.outputFormat = XDLNaming.normalizeOutputFormat($("defaultFormat").value);
+      chrome.storage.sync.set({ outputFormat: outputSettingsState.outputFormat });
+      $("jobFormat").value = outputSettingsState.outputFormat;
+      renderNamePreview();
+    });
+
+    initNameTemplate(outputSettingsState.nameTemplate);
+  }
+);

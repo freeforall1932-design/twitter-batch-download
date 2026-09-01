@@ -96,6 +96,31 @@
       <button id="clearHistoryBtn" class="text-button danger">Clear list</button>
     </section>
 
+    <details id="outputSettings" class="source-card output-settings">
+      <summary>Output settings — folders, file names, formats</summary>
+
+      <label class="settings-label" for="rawMasterFolder">Master folder for saved files</label>
+      <input id="rawMasterFolder" type="text" placeholder="Empty = save loose files like before" autocomplete="off">
+      <p class="hint">Files save as <code>Downloads/&lt;folder&gt;/&lt;post name&gt;/001.jpg</code>. Leave <strong>empty</strong> to switch the folder off and go back to the old flat <code>x-media/</code> layout. Slashes nest deeper (e.g. <code>XMedia/raw</code>).</p>
+
+      <label class="settings-label" for="defaultFormat">Default format for photo posts</label>
+      <select id="defaultFormat">
+        <option value="raw">Separate files (raw)</option>
+        <option value="zip">One ZIP per post</option>
+        <option value="cbz">One CBZ per post</option>
+        <option value="pdf">One PDF per post</option>
+      </select>
+      <p class="hint">ZIP/CBZ/PDF bundle a post's photos (up to 4) into one file named after the post. Videos always save as separate MP4 files.</p>
+
+      <label class="settings-label">Post name is built from</label>
+      <div id="nameTemplateChecks" class="template-checks"></div>
+      <div id="nameTemplateAdvanced" class="template-advanced" style="display:none">
+        <input id="nameTemplateInput" type="text" autocomplete="off" spellcheck="false">
+        <p class="hint">Custom template detected — tokens: <code>{user}</code> <code>{name}</code> <code>{text}</code> <code>{id}</code> <code>{date}</code>. Clear it to get the checkboxes back.</p>
+      </div>
+      <p id="namePreview" class="hint name-preview"></p>
+    </details>
+
     <section id="queue" class="queue" aria-live="polite">
       <div class="empty-state">
         <div class="empty-icon">↓</div>
@@ -113,12 +138,22 @@
         <button data-concurrency="2" class="selected">2</button>
       </div>
     </div>
+    <div class="concurrency-control">
+      <span>Save photo posts as</span>
+      <select id="jobFormat" aria-label="Format for this download" title="Applies to this download only — set the default in Output settings.">
+        <option value="raw">Separate files</option>
+        <option value="zip">ZIP per post</option>
+        <option value="cbz">CBZ per post</option>
+        <option value="pdf">PDF per post</option>
+      </select>
+    </div>
     <div class="action-row">
       <button id="downloadSelectedBtn" class="button primary" disabled>Download selected</button>
       <button id="stopBtn" class="button secondary" disabled>Stop</button>
     </div>
     <p id="downloadNotice" class="download-notice">Tick items, or use Select all, then download. Downloads keep running while you scroll.</p>
   </footer>
+  <script src="lib/naming.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

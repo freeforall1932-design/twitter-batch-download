@@ -1,6 +1,6 @@
 # Session Handoff — X Media Downloader
 
-**Prepared:** 2026-08-26 · **Extension version:** 3.4 · **Status:** v3.4 = v3.3 + quoted-post ("mentioned post" card) media capture with per-tab **Include quoted** switches. Round-3 live test of v3.3 passed the core flows (capture, dedupe, queue, UI); quote card was the one gap — awaiting a live spot-check of the quote case.
+**Prepared:** 2026-09-01 · **Extension version:** 3.5 · **Status:** v3.5 = v3.4 + the media output upgrade ported from nh-dw-2.0 (master folder for raw downloads, per-post ZIP/CBZ/PDF via an offscreen document, naming-scheme checkboxes, offline CI workflow). All 88 offline tests green. Still pending live-X: the v3.4 quote-card spot-check AND the v3.5 output spot-check (WORKLIST P0 items 12 + 14).
 
 ---
 
@@ -28,17 +28,21 @@ a set and each answers a different question:
 
 ### User input carried into the next session
 
-_Latest input (2026-08-26, live round-3 result):_ all functions work, no
-double entries, UI/UX already decent for deployment — but media inside a
-**quoted ("mentioned") post card** (the small box with thumbnail + text shown
-on a GIF/video reaction post) was never fetched. The user asked whether it is
-impossible and pointed at the scrapyard + community GitHub. **Resolved in
-v3.4** — it was never impossible: the quoted post's full payload sits under
-`legacy.quoted_status_result` in the same GraphQL response (Rank S and Rank B
-both parse it); this repo deliberately skipped it pending an explicit option.
-Quoted media now lists by default with correct attribution, an `isQuote` flag,
-and per-tab **Include quoted** switches. Still to live-check: item 12 of the
-P0 round-3 checklist in `docs/WORKLIST.md`.
+_Latest input (2026-09-01, session brief):_ port three proven features from
+the sister repo [nh-dw-2.0](https://github.com/freeforall1932-design/nh-dw-2.0)
+(PR #30 / commit `9f86426` and the files it touches): (1) a master folder for
+loose raw downloads (`Downloads/XMedia/<post name>/001.jpg…`, empty setting =
+off, per-segment sanitizing), (2) ZIP/CBZ/PDF "one file per post" output for
+multi-picture posts (offscreen blob + `<a download>` anchor because some
+Chromium builds save blob downloads under a UUID), and (3) naming-scheme
+checkboxes over a stored template string with a live preview. **Shipped in
+v3.5** — see the 2026-09-01 IMPROVEMENT_LOG entry. The brief's guardrails are
+folded into §7. Not yet live-verified (P0 item 14).
+
+_(2026-08-26, kept for reference):_ live round-3 result — all functions work,
+no double entries, UI/UX decent for deployment; quote-card media was the one
+gap, fixed in v3.4 (`legacy.quoted_status_result`, per-tab **Include quoted**
+switches). Its live spot-check (P0 item 12) is still pending.
 
 _(2026-08-25, kept for reference):_ the pre-v3.2 `appendChild` crash trace and
 its two carry-forward notes — confirm which folder Chrome has loaded before
@@ -53,7 +57,11 @@ Open questions to ask the user if they are available:
   revisit only if the user asks for more aggressive pacing.
 - Should the two tab lists (Scroll capture / Remote fetch) finally be unified?
   They were kept separate on explicit past request — do not merge without a new decision.
-- Are per-batch subfolders (e.g. `x-media/{username}/`) wanted? Rank A does this.
+- ~~Are per-batch subfolders (e.g. `x-media/{username}/`) wanted?~~ —
+  **superseded by v3.5's master folder + per-post folders.**
+- Should archives also honor the master folder? Currently impossible for the
+  anchor path (the `download` attribute cannot carry folders); revisit only if
+  Chromium fixes the blob-filename bug that forced the anchor mechanism.
 
 ---
 
@@ -61,14 +69,19 @@ Open questions to ask the user if they are available:
 
 - Repository: `freeforall1932-design/twitter-batch-download`
 - Extension directory: `extension/` (the **Load unpacked** target)
-- Working branch for the last Arena session: `arena/01a03ae9-twitter-batch-download`
+- Working branch for the last Arena session: `arena/01a05aab-twitter-batch-download`
 - Recent history:
-  - **(v3.4, this branch → PR #9)** — Quoted-post ("mentioned post" card) media
+  - **(v3.5, this branch)** — Media output upgrade ported from nh-dw-2.0:
+    `rawMasterFolder` master folder for raw downloads (empty = off),
+    per-post ZIP/CBZ/PDF assembly in a new offscreen document with an
+    `<a download>` anchor save, `nameTemplate` checkbox UI + preview,
+    `extension/lib/` (naming/zipWriter/pdfBuilder), 33 new tests (88 total),
+    offline CI workflow
+  - `4b10c23` — Merge PR #9 (**v3.4**: quoted-post ("mentioned post" card) media
     capture: quote parsing in `mediaFromTweet`/`getTweetMedia` with
     quoted-post attribution, `isQuote` flag + `quote` badge, per-tab
     **Include quoted** switches (default on), 7 new tests; plus the
-    post-interrupt review pass (repost `rest_id` fallback restored,
-    README updated, seams documented) — commits `08e68d0` + `b943a84`
+    post-interrupt review pass — commits `08e68d0` + `b943a84`)
   - `abb3062` — Merge PR #8 (**v3.3**: `document_start` null-root crash fix;
     `queueClearFinished` + `queueClearDownloadedHistory` wired to toolbar
     buttons; message-contract and style-injection regression tests)
@@ -84,11 +97,17 @@ extension at `chrome://extensions` and load **`extension/`** unpacked.
 
 ```
 extension/                 # ← Load unpacked target (manifest.json at root)
-tests/                     # background.test.js (unit) + content.test.js (DOM sim)
+extension/lib/             # naming.js / zipWriter.js / pdfBuilder.js — UMD,
+                           # shared by worker, offscreen, sidepanel and tests
+extension/offscreen.html   # + offscreen.js: archive assembly (chrome.runtime ONLY)
+tests/                     # background/content/naming/zip-writer/pdf-builder/
+                           # downloader suites + helpers/load-background.js
 scripts/package-release.sh # zip extension/ → releases/x-media-downloader-v<version>.zip
 releases/                  # generated zips (gitignored)
 docs/                      # WORKLIST.md, SESSION_HANDOFF.md, IMPROVEMENT_LOG.md,
                            # PROJECT_IMPROVEMENT_OPINION.md
+docs/ci/                   # extension-tests.yml (offline CI) — must be installed
+                           # manually as .github/workflows/… (see docs/ci/README.md)
 reference/scrapyard/       # abandoned extensions, reference only:
                            # rank-s-plucker-xbd / rank-a-video-downloader / rank-b-x-exporter
 ```
@@ -148,17 +167,21 @@ Cookie headers.
 
 ---
 
-## 4. Current architecture (v3.4)
+## 4. Current architecture (v3.5)
 
 | File | Role |
 |---|---|
-| `manifest.json` | MV3, sidePanel, cookies/downloads/storage/scripting. Content scripts: `injected.js` (MAIN, document_start) + `content.js` (isolated, document_start). Hosts: x.com / twitter.com / twimg CDN only. |
-| `background.js` | Auth, GraphQL, source-tagged queue, remote discovery, downloads, capture bag, timeline response ingestion, downloaded-id history. Quoted-post media resolved from `quoted_status_result` (one level, soft-unwrap) with owning-post attribution. **No ZIP.** |
+| `manifest.json` | MV3, sidePanel, cookies/downloads/storage/scripting/**offscreen**. Content scripts: `injected.js` (MAIN, document_start) + `content.js` (isolated, document_start). Hosts: x.com / twitter.com / twimg CDN only. |
+| `background.js` | Auth, GraphQL, source-tagged queue, remote discovery, downloads, capture bag, timeline response ingestion, downloaded-id history. Quoted-post media resolved from `quoted_status_result` (one level, soft-unwrap) with owning-post attribution. v3.5: output settings bag (`getOutputSettings`), download-time path building (`rawPathForItem`), per-post archive pass (`runArchivePass`) relayed to the offscreen document with a worker data-URL fallback. **No whole-batch ZIP.** |
+| `lib/naming.js` | Shared naming engine (UMD → `XDLNaming`): `sanitizeArtifactFilename` (per-segment, from nh-dw), master-folder normalize (empty = off), format whitelist, template tokens/render/preview helpers, raw + archive path builders. |
+| `lib/zipWriter.js` | STORE-only ZIP writer (`XDLZip`) for per-post archives — local re-implementation instead of JSZip (no-npm guardrail). |
+| `lib/pdfBuilder.js` | Dependency-free PDF 1.4 writer (`XDLPdf`), ported verbatim from nh-dw `pdfBuilder.ts` (JPEG DCTDecode verbatim, byte-exact xref). |
+| `offscreen.html/js` | Archive assembly: fetch post photos, build ZIP/CBZ/PDF blob, save via in-document `<a download>` anchor. Exposes ONLY `chrome.runtime` — settings arrive relayed in the job message. |
 | `injected.js` | MAIN-world XHR/fetch observer. Forwards **any** media-bearing GraphQL response (no operation allowlist), keeps a 40-entry replay buffer, and watches SPA route changes via `pushState`/`replaceState`/`popstate`. The allowlist survives only for Remote-fetch *request metadata*. |
-| `content.js` | **Always-on** scroll capture (no watch command), SPA route re-arm, DOM photo listing, rate-bounded per-post video resolve (quote-card media resolved through the outer post id), content-driven auto-scroll with in-page badge, action-bar `Download` + `Add to queue`, toasts. |
-| `sidepanel.html/js/css` | Two-tab Side Panel: Scroll capture + Remote fetch. One download action, live active-tab status pill, per-row remove, skip-already-downloaded toggle, **Include quoted** switches in both tabs (default on) with a `quote` row badge, plus `Clear finished` / `Reset downloaded history` maintenance buttons (wired in the round-3 review; the handlers existed but nothing sent them). |
+| `content.js` | **Always-on** scroll capture (no watch command), SPA route re-arm, DOM photo listing, rate-bounded per-post video resolve (quote-card media resolved through the outer post id), content-driven auto-scroll with in-page badge, action-bar `Download` + `Add to queue`, toasts. v3.5: items carry `text`/`displayName`/`mediaIndex`; `downloadFile` sends the owning item. |
+| `sidepanel.html/js/css` | Two-tab Side Panel: Scroll capture + Remote fetch. One download action, live active-tab status pill, per-row remove, skip-already-downloaded toggle, **Include quoted** switches, `Clear finished` / `Reset downloaded history` buttons. v3.5: **Output settings** card (master folder, default format, name-template checkboxes + live preview + custom-template input — the ONLY writer of the sync output settings) and the dock's per-job **Save photo posts as** picker. |
 | `popup.html/js` | Side Panel launcher + capture status line. No scroll/download loop. |
-| `tests/` | `background.test.js` (Node VM unit tests + sanitized fixtures) and `content.test.js` (real `content.js` in a DOM + `chrome` shim). |
+| `tests/` | `background.test.js`, `content.test.js`, plus v3.5: `naming.test.js`, `zip-writer.test.js`, `pdf-builder.test.js` (verbatim port), `downloader.test.js` (real worker in a VM: master-folder + archive pipelines), `helpers/load-background.js`. |
 
 ### Design decisions that are deliberate — do not "simplify" these away
 
@@ -194,11 +217,37 @@ re-breaks a bug the user already reported:
    inside a quote card still attribute to the outer article (no stable
    selector); the mediaKey dedupe collapses the two, so do not "fix" that by
    guessing quote-card selectors.
+9. **Offscreen documents get a settings bag, never storage.** (v3.5, verified
+   on real Chrome in nh-dw-2.0.) Offscreen documents expose ONLY
+   `chrome.runtime`; a `chrome.storage`/`downloads`/`scripting` call there
+   crashes the whole download. Output settings are read in the worker and
+   relayed inside the job message.
+10. **Archive blobs save via an in-document `<a download>` anchor.** (v3.5,
+   nh-dw v3.2.1 hard-learned.) Some Chromium builds ignore
+   `chrome.downloads.download`'s `filename` for `blob:` URLs and save a
+   UUID. Remote URLs (raw mode) keep going through `chrome.downloads`,
+   which names http(s) and data: URLs correctly. Consequence: archives
+   cannot carry a folder (the anchor attribute strips paths) and land at
+   the Downloads root — do not "fix" this by handing blob URLs to
+   chrome.downloads.
+11. **The master-folder field saves the empty string.** (v3.5.) Empty is
+   meaningful — it means OFF (legacy flat layout, byte-for-byte). The Side
+   Panel wires the input manually with a `change` listener storing
+   `.value.trim()` verbatim; never route it through a generic widget that
+   drops empty values.
+12. **Raw paths are computed at download time, not at listing time.** Items
+   store metadata (`text`/`displayName`/`mediaIndex`) plus the legacy
+   `filename`; `rawPathForItem` renders the template + master folder when
+   the download starts, so settings changes apply to an already-listed
+   queue and the legacy filename survives as the master-off/fallback path.
 
 ### Removed / deprecated — do not reintroduce without a product decision
 
-- `lib/zip-writer.js` and all ZIP assembly (`downloadZip`, `fetchAsArrayBuffer`,
-  `zipBuffers`, `importScripts` of zip-writer).
+- `lib/zip-writer.js` (the OLD batch archiver) and all whole-batch ZIP
+  assembly (`downloadZip`, `fetchAsArrayBuffer`, `zipBuffers`). The v3.5
+  per-post archive (≤4 images, `lib/zipWriter.js`/`XDLZip` + offscreen) is a
+  separate, explicitly decided feature — it must not grow into batch
+  archiving.
 - Legacy runtime messages: `getVideoUrl`, `downloadVideo`, `downloadZip`,
   `fetchAsArrayBuffer`.
 - Popup bulk commands `start` / `stop` / `getStatus`, and the whole
@@ -211,7 +260,9 @@ re-breaks a bug the user already reported:
 ### Runtime message contract
 
 **Queue:** `queueGet`, `queueAdd` (returns `addedCount`), `queueSelect`,
-`queueSelectVisible`, `queueSetConcurrency`, `queueStart`, `queueStop`,
+`queueSelectVisible`, `queueSetConcurrency`, `queueStart` (v3.5: carries an
+optional per-job `format` — "raw"|"zip"|"cbz"|"pdf"; omitted → the stored
+default; never written back to storage), `queueStop`,
 `queueRetryFailed`, `queueClearFinished`, `queueClearAll`, `queueRemove`,
 `queueSetSkipDownloaded`, `queueClearDownloadedHistory`
 
@@ -226,7 +277,16 @@ button yet._
 **Capture / media:** `networkCapture`, `localTimelineCapture` (returns
 `{ addedCount, tweetIds }`; carries `mediaFilter`, `skipDownloaded`,
 `includeQuoted`), `initEnv`, `getTweetMedia` (each returned media entry carries
-its owning post's `username` / `tweetId` / `text` / `isQuote`), `downloadFile`
+its owning post's `username` / `displayName` / `tweetId` / `text` / `date` /
+`mediaIndex` / `isQuote`), `downloadFile` (v3.5: optional `item` with the
+owning post's metadata so the path honors master folder + template; without
+it the legacy `filename` is used verbatim)
+
+**Worker → offscreen:** `offscreenBuildArchive`
+`{ job: { format, filename, images: [{ url, name }] } }`, answered via
+`sendResponse` `{ ok }` / `{ ok: false, error }`. Not part of the UI contract
+test (no UI surface sends it); the offscreen document handles it in
+`offscreen.js`.
 
 **Side Panel → content script:** `scrollSettings` (carries `includeQuoted`),
 `scrollStart`, `scrollStop`, `scrollStatus`, `scrollRescan`
@@ -245,19 +305,32 @@ its owning post's `username` / `tweetId` / `text` / `isQuote`), `downloadFile`
   source: "scroll" | "remote",
   mediaKey,           // CDN-derived identity; collapses DOM vs GraphQL duplicates
   isRepost, isQuote,  // isQuote = media owned by the post inside a quote card
-  filename,           // x-media/{user}_{text}_{tweetId}_{index}.{ext}
+  text,               // v3.5: raw post text (owning post) for the {text} token
+  displayName,        // v3.5: owning author's display name ({name} token; "" from DOM scan)
+  mediaIndex,         // v3.5: 0-based position in the OWNING post → 001…004 numbering
+  filename,           // legacy flat path x-media/{user}_{text}_{tweetId}_{index}.{ext};
+                      // used verbatim when the master folder is off / metadata missing
   selected, status,   // discovered|queued|starting|downloading|completed|failed
   attempts, bytesReceived, totalBytes, downloadId?, error?
 }
 ```
 
+Queue STATE additionally persists `outputFormat` (the effective format of the
+current run, set by `queueStart`) so a worker restart mid-run cannot switch
+archive photos back to raw.
+
 ### Storage keys
 
-`batchDownloadQueueV1` (queue), `profileDiscoveryV1` (discovery),
-`downloadedMediaIdsV1` (completed item ids only, capped at 20k), plus UI prefs
-`sidePanelActiveTab`, `scrollMediaFilter`, `scrollSpeed`, `skipDownloaded`,
+`batchDownloadQueueV1` (queue, local), `profileDiscoveryV1` (discovery, local),
+`downloadedMediaIdsV1` (completed item ids only, capped at 20k, local), plus UI prefs
+(local) `sidePanelActiveTab`, `scrollMediaFilter`, `scrollSpeed`, `skipDownloaded`,
 `scrollIncludeQuoted`, `batchTarget`, `batchLimit`, `includeRetweets`,
 `includeQuoted`.
+
+**chrome.storage.sync (v3.5, written ONLY by the Side Panel Output settings
+card):** `rawMasterFolder` (default `"XMedia"`; **empty string = OFF**),
+`nameTemplate` (default `"{user} - {text} - {id}"`), `outputFormat`
+(default `"raw"`, whitelist raw|zip|cbz|pdf).
 
 ---
 
@@ -266,18 +339,26 @@ its owning post's `username` / `tweetId` / `text` / `isQuote`), `downloadFile`
 **Round 3 passed (2026-08-26, against v3.3).** The user reported: all
 functions work, no double entries, UI/UX already decent for deployment. That
 covers checklist items 1–11 of `docs/WORKLIST.md` → "P0 — remaining (live-X,
-round 3)". Offline tests still cover only logic, not X's live shapes, so two
-browser items remain open:
+round 3)". Offline tests still cover only logic, not X's live shapes, so
+these browser items remain open:
 
 - **Quote-card media (v3.4, checklist item 12)** — shipped *after* the
   round-3 test, so it has never run in a browser: a GIF/video reaction to a
   quoted post must list the card's media too, with the quoted author and a
   `quote` badge; **Include quoted** off must suppress it; the same quoted
   photo quoted by two different posts must stay a single row.
+- **Media output upgrade (v3.5, checklist item 14)** — never run in a
+  browser: master folder auto-creation on a real 4-photo post
+  (`Downloads/XMedia/<post name>/001…004.jpg` with "ask where to save" OFF),
+  empty box → old flat layout, ZIP/CBZ/PDF contents + names via the
+  offscreen anchor on current Chrome, `{text}` checkbox → preview + produced
+  names, dock picker not touching the stored default.
 - **First release zip** — `scripts/package-release.sh` output must be
-  confirmed to load from the unzipped folder.
+  confirmed to load from the unzipped folder (it now includes `lib/` and the
+  offscreen files; verified present in the zip listing offline).
 
-Do **not** declare P0 complete without the signed-in quote-case check.
+Do **not** declare P0 complete without the signed-in quote-case and
+output-upgrade checks.
 
 ### Required live data if something fails
 
@@ -314,12 +395,24 @@ one-line quality notes that inform ranking, not detailed specs.
 
 ## 7. Guardrails
 
-- No npm / TypeScript / webpack / build step.
+- No npm / TypeScript / webpack / build step. (This is why v3.5 ships a
+  local STORE-only ZIP writer instead of JSZip.)
 - No `<all_urls>` or non-X host permissions.
-- Privileged APIs stay in `background.js`.
+- Privileged APIs stay in `background.js` — and offscreen documents use
+  ONLY `chrome.runtime` (see design decision 9).
 - No manual auth-token input.
 - No dead `statuses/show.json` v1.1 endpoint.
-- No ZIP reintroduction for large batch queues (direct files only).
+- No whole-batch ZIP for large queues (direct files only). The v3.5
+  per-post ZIP/CBZ/PDF (≤4 images of ONE post) is the explicitly decided
+  exception and must stay per-post.
+- Download paths: RELATIVE subpaths only — never absolute, never `..`;
+  every artifact name passes `sanitizeArtifactFilename` per segment.
+- CI stays offline-only: GitHub-hosted runners cannot run real-browser MV3
+  tests (Chrome `Runtime.enable` timeout / Brave SIGTRAP — 100% failure
+  rate where tried in nh-dw-2.0). Real-browser verification is the local
+  P0 checklist. If a workflow push is ever rejected for a missing
+  `workflows` scope, hand the user the YAML to paste via the GitHub web UI
+  instead of retrying.
 - No claim of current X support without a live check.
 
 ---
@@ -329,36 +422,51 @@ one-line quality notes that inform ranking, not detailed specs.
 ```bash
 # from repo root
 node --check extension/background.js extension/content.js extension/popup.js \
-             extension/sidepanel.js extension/injected.js
-node --test tests/*.test.js            # 55 tests
+             extension/sidepanel.js extension/injected.js extension/offscreen.js \
+             extension/lib/naming.js extension/lib/zipWriter.js extension/lib/pdfBuilder.js
+node --test tests/*.test.js            # 88 tests
 scripts/package-release.sh             # → releases/x-media-downloader-v<version>.zip
 ```
 
 `tests/content.test.js` runs the real `content.js` inside a DOM + `chrome` shim
 and encodes each reported live failure as a regression test (homepage capture,
 in-tab route change, duplicate suppression, capture filter, auto-scroll
-lifecycle). **Extend it rather than testing capture by hand** — every future
-capture bug should land there first as a failing test.
+lifecycle). `tests/downloader.test.js` runs the real `background.js` (plus the
+real `lib/` files via a working `importScripts`) in a window-less VM and covers
+the whole v3.5 output pipeline — master folder on/custom/off/weird, ZIP/CBZ/PDF
+end-to-end through the data-URL fallback with byte-level archive assertions,
+and the offscreen job relay. **Extend these rather than testing by hand** —
+every future capture or output bug should land as a failing test first.
+
+CI (`docs/ci/extension-tests.yml`, to be installed by hand as
+`.github/workflows/extension-tests.yml` — the Arena GitHub App lacks the
+`workflows` scope; see `docs/ci/README.md`) runs exactly the offline set
+above plus a packaging smoke. It deliberately has NO real-browser job (§7).
 
 ---
 
 ## 9. Next session priorities
 
-1. **Live spot-check the v3.4 quote case** — WORKLIST round-3 item 12. Reload
-   `extension/` unpacked (manifest 3.4), scroll past a GIF/video reaction to a
-   quoted post, and confirm the card's media lists with the `quote` badge
-   under the quoted post's author; test the **Include quoted** switch in both
-   tabs. If a specific card still does not list, get a sanitized GraphQL
-   response from that exact view (§5 below) and add it to `tests/fixtures/`.
+1. **Live spot-check v3.4 + v3.5** — WORKLIST P0 items 12 and 14. Reload
+   `extension/` unpacked (manifest 3.5, "ask where to save" OFF), then:
+   the quote-card case (item 12), a 4-photo post in raw mode
+   (`Downloads/XMedia/<post name>/001…004.jpg`), the empty-master-folder
+   rollback, one ZIP + one CBZ + one PDF from the same post (contents,
+   order, names, PDF orientation), the `{text}` checkbox → preview + real
+   names, and the dock picker not persisting. If an archive still saves
+   under a UUID, capture the Chrome version — that is the blob-filename bug
+   the anchor mechanism is supposed to dodge.
 2. **Cut the first release zip** (`scripts/package-release.sh` →
-   `releases/x-media-downloader-v3.4.zip`) and confirm it loads from the
+   `releases/x-media-downloader-v3.5.zip`) and confirm it loads from the
    unzipped folder. Optionally start `CHANGELOG.md`. With that plus item 1,
    P0 is complete.
 3. P1 afterwards: Side Panel diagnostics + sanitized copy-debug-report,
-   explicit Include replies switch (quoted shipped in v3.4), filename
-   templates + video quality preference, per-batch subfolders if requested.
+   explicit Include replies switch (quoted shipped in v3.4), video quality
+   preference (name templates shipped in v3.5).
 4. Settled decisions that stay settled: separate scroll/remote lists (do not
-   merge without a new user decision), one download action, no ZIP,
-   no reply capture until it has its own switch.
+   merge without a new user decision), one download action, no whole-batch
+   ZIP (per-post archives only), no reply capture until it has its own
+   switch, offscreen documents = chrome.runtime only, blob saves via the
+   in-document anchor.
 5. Before finishing: update all three docs (log entry, worklist statuses,
    this file).

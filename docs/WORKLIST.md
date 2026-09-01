@@ -1,6 +1,6 @@
 # Development Worklist
 
-_Last audited: 2026-08-26 (live round-3 feedback: core flows verified working; **quoted-post media capture added — v3.4**; see the IMPROVEMENT_LOG entry of the same date)_
+_Last audited: 2026-09-01 (v3.5 media output upgrade: master folder for raw downloads, per-post ZIP/CBZ/PDF, naming-scheme checkboxes, offline CI workflow — see the IMPROVEMENT_LOG entry of the same date. Previous audit 2026-08-26: round-3 live pass + v3.4 quoted-post capture.)_
 
 ## Product target
 
@@ -18,10 +18,14 @@ No manual API key / password / cookie paste. Self-hosted against the signed-in X
 | Profile discovery | Implemented, needs live-X | Capture-first op IDs + bundle scrape fallback; timeline_v2/legacy; empty-page stop. |
 | Live GraphQL/header/response capture | Reworked after live testing | **No operation allowlist for responses** (that is what broke homepage capture). Allowlist retained only for Remote-fetch request metadata. Adds a 40-entry replay buffer and an SPA `pushState`/`popstate` route watcher. No cookie values in bag. |
 | Discovery error codes + RL countdown | Implemented, needs live-X | Side Panel countdown via `retryUntil`. |
-| Direct filenames + invalid-name ladder | Done | ZIP intentionally removed. |
+| Direct filenames + invalid-name ladder | Done | Whole-batch ZIP intentionally removed; v3.5 adds template-driven paths at download time. |
+| Master folder for raw downloads | **Done (v3.5), needs live spot-check** | `rawMasterFolder` (sync, default `XMedia`): `Downloads/XMedia/<post name>/001.jpg…`. Empty string = off → legacy flat `x-media/` names byte-for-byte. Per-segment sanitizing via `sanitizeArtifactFilename` (nh-dw port). |
+| Per-post ZIP/CBZ/PDF output | **Done (v3.5), needs live spot-check** | One archive per photo post (≤4 images), assembled in the offscreen document, saved via `<a download>` anchor (blob-filename quirk); worker data-URL fallback. Videos always raw. NOT the removed whole-batch ZIP. |
+| Naming-scheme checkboxes | **Done (v3.5)** | `nameTemplate` (sync, default `{user} - {text} - {id}`), checkbox UI + live preview + manual input for custom templates; id fallback, reserved-name prefix. |
+| Offline CI | **Done (v3.5)** | `docs/ci/extension-tests.yml` (install by hand as `.github/workflows/…` — see `docs/ci/README.md`): syntax + `node --test` + packaging smoke. No real-browser CI — GitHub runners cannot drive MV3 (verified in nh-dw-2.0). |
 | Per-tweet action bar | Expanded (Rank A) | `Download` **and** `Add to queue` on every media post, plus toasts. Reimplemented locally, not copied. |
 | Popup DOM auto-scroll bulk | **Removed** | The popup's competing scroll+download loop is deleted; the popup is now an Open-Side-Panel launcher with a live capture status line. |
-| ZIP export | **Removed** | Deprecated path deleted (`lib/zip-writer.js`, handlers). Do not ship multi-GB archives. |
+| ZIP export (whole-batch) | **Removed — stays removed** | The multi-GB whole-batch archive path stays deleted. v3.5's per-post archive (≤4 images, offscreen-assembled) is a different, explicitly requested feature and must not grow into batch archiving. |
 | Third-party tier/license | Absent | Do not add. |
 | Skip already-downloaded (Rank S "Ignore saved") | Done | `downloadedMediaIdsV1` stores completed item ids only. Toggle in the toolbar; resettable. |
 | Cross-source dedupe | Done | Every item carries a CDN-derived `mediaKey`, so DOM-found and GraphQL-found copies of one photo collapse into a single row. |
@@ -77,7 +81,7 @@ Use this before claiming “ready” or merging large changes:
 ### Fit / accidental shipment
 
 - [x] No third-party hosts, ExtPay, plucker/apixbd, license, or tier gates.
-- [x] No ZIP reintroduction without an explicit product decision.
+- [x] No whole-batch ZIP reintroduction. (v3.5's per-post ZIP/CBZ/PDF — ≤4 images, one post — was an explicit product decision this session and is the allowed exception.)
 - [x] No manual token/password fields.
 - [x] No `<all_urls>` or non-X permissions.
 - [x] No npm/TS/build step.
@@ -97,7 +101,7 @@ Use this before claiming “ready” or merging large changes:
 
 ### Deprecated / dead code to keep out
 
-- `downloadZip`, `fetchAsArrayBuffer`, `getVideoUrl`, `downloadVideo`, `zipBuffers`, `ZipWriter`, `useZip`, `bulkId` ZIP session ids.
+- Legacy runtime commands and batch-ZIP session state: `downloadZip`, `fetchAsArrayBuffer`, `getVideoUrl`, `downloadVideo`, `zipBuffers`, `useZip`, `bulkId`, and the old `lib/zip-writer.js` batch archiver. (The v3.5 `lib/zipWriter.js`/`XDLZip` STORE writer is per-post only and is NOT this.)
 - `webRequest` permission without a real listener.
 - Hardcoded third-party query IDs as the only discovery path (capture + scrape is OK; single stale ID as sole source is not).
 
@@ -142,6 +146,18 @@ never executed in a browser) and **item 13** (live fixtures).
     stay). Also confirm the same quoted photo quoted by two different posts
     still produces exactly one row.
 13. **Open —** replace synthetic fixtures with sanitized live captures when available.
+14. **Open (v3.5, never run in a browser)** — media output upgrade spot-check:
+    - Master folder ON, fixed download location, no save prompts: one 4-photo
+      post → `Downloads/XMedia/<post name>/001…004.jpg`, folders auto-created.
+    - Empty the master folder box → old flat `x-media/` layout is back exactly.
+    - ZIP and CBZ contain only the original full-size images in post order;
+      PDF has every page in order and orientation; all named
+      `<post name>.<ext>` (archives land at the Downloads root — anchor
+      downloads cannot carry folders).
+    - Unchecking `{text}` updates the example preview AND the produced names;
+      a post with no usable text falls back to the post id.
+    - The dock "Save photo posts as" picker changes one run without touching
+      the stored default; videos still save as separate MP4s.
 
 ## P1 — inclusion and review UX
 
@@ -149,7 +165,7 @@ never executed in a browser) and **item 13** (live fixtures).
 2. Improve manual-scroll media support across more live X response shapes, especially video timeline variants.
 3. Clearer badges/counts: scroll vs remote, photo/video/GIF counts, repost/original when exposed.
 4. Explicit Include replies switch (quoted media shipped in v3.4).
-5. Filename templates + video quality preference.
+5. ~~Filename templates~~ (shipped v3.5) + video quality preference.
 
 ## P2 — other sources
 
@@ -161,7 +177,7 @@ never executed in a browser) and **item 13** (live fixtures).
 ## P3 — robustness
 
 1. Download history UI; stronger resume policy.
-2. Per-batch subfolders (Rank A-style) if requested.
+2. ~~Per-batch subfolders (Rank A-style)~~ — superseded by v3.5's master folder + per-post folders.
 3. HLS policy after MP4 verified.
 4. Firefox MV3; avatar/banner; content-type extension detection.
 
@@ -188,4 +204,4 @@ never executed in a browser) and **item 13** (live fixtures).
 - Reposts off/on correct.
 - Protected / NSFW / logged-out / rate-limit messages specific.
 - Stop discovery; stop downloads; Side Panel reload retains state.
-- **55+** local Node tests still green after cleanup (`tests/background.test.js` + `tests/content.test.js`).
+- **88** local Node tests still green after cleanup (`node --test tests/*.test.js`: background + content + naming + zip-writer + pdf-builder + downloader suites).
