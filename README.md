@@ -17,11 +17,13 @@ Self-hosted against your signed-in X session. No third-party accounts, API keys,
 - **Action-bar buttons on media posts** — **Download** saves immediately; **Add to queue** sends the post's media to the Side Panel list.
 - **Remote fetch (advanced)** — Enter `@username` or a profile/media URL, discover media (cap default 99,999), then select and download.
 - **Skip already downloaded** — Finished files are remembered and not re-listed, even after you clear the list.
-- **Videos + photos** — Highest-bitrate MP4 (including animated GIFs as MP4); original-resolution photos (`name=orig`).
+- **Videos + photos + GIFs at full quality** — Highest-bitrate MP4 for videos; original-resolution photos (`name=orig` forced on every source); GIFs saved as **real animated `.gif` files** (v3.6, converted frame-by-frame from the silent MP4 clips X actually serves — switchable back to MP4 in Output settings).
 - **Include reposts** — Optional during profile discovery.
 - **Include quoted** — Media inside a quoted post's card (the "mentioned post" box with thumbnail and text) lists too, attributed to the quoted post's author, with a `quote` badge. On by default; switchable per tab.
 - **Rate-limit handling** — Throttle + exponential backoff; Side Panel shows a retry countdown on 429/503.
-- **Direct file naming** — `Downloads/x-media/{username}_{post text}_{tweetId}_{index}.{ext}` (no multi-GB ZIP archives).
+- **Master folder + per-post folders (v3.5)** — Raw downloads save as `Downloads/XMedia/<post name>/001.jpg…` (folders auto-created). The master folder is configurable in the Side Panel's **Output settings**; empty it to restore the old flat `Downloads/x-media/{username}_{post text}_{tweetId}_{index}.{ext}` layout exactly. Slashes nest deeper (`XMedia/raw`).
+- **One file per post (v3.5, media-kind rules v3.6)** — Optional **ZIP / CBZ / PDF** output: a post's media (up to 4 items) bundles into a single `<post name>.zip|cbz|pdf` with entries `001…004` in post order. PDF pages embed original JPEGs losslessly (PNG/WebP re-encoded via canvas). **PDF holds photos only** — a post whose archive includes a GIF or video is saved as ZIP instead. GIFs join archives by default (as real `.gif` entries); videos only when explicitly opted in — both toggles live in Output settings, and the run warns up front when a video post is being zipped or a post mixes photos/GIFs/videos. This is a per-post archive of at most four items — the old multi-GB whole-batch ZIP stays removed.
+- **Naming scheme checkboxes (v3.5)** — The post name is built from tokens (`{user}`, `{name}`, `{text}`, `{id}`, `{date}`; default `{user} - {text} - {id}`) picked with checkboxes and a live example preview; hand-typed custom templates keep working through a manual input. Degenerate names fall back to the post id; Windows-reserved names are prefixed.
 - **Live session capture** — MAIN-world observer learns current GraphQL operation IDs and safe request headers from the open X tab.
 - **No third-party services** — Calls go to X only, using your browser session.
 
@@ -57,13 +59,25 @@ Under any media post: **Download** saves it now, **Add to queue** sends it to th
 
 Switch to the **Remote fetch** tab, enter `@username` or a profile URL, set a limit, optionally include reposts and quoted-post media, then **Remote discover**. This crawls X directly, so it can hit rate limits sooner than normal scrolling — prefer Scroll capture when you can.
 
+### Output settings (v3.5–v3.6)
+
+Open **Output settings** (between the toolbar and the list):
+
+- **Master folder for saved files** — default `XMedia`; raw files save as `Downloads/XMedia/<post name>/001.jpg…`. Leave it **empty** to switch the folder off (old flat `x-media/` layout). Requires Chrome's *"Ask where to save each file"* to be off for folders to auto-create.
+- **Default format for posts with media** — separate files (raw) or one ZIP/CBZ/PDF per post. The dock's **Save posts as** picker overrides it for a single download without changing the stored default.
+- **GIF posts save as** (v3.6) — real `.gif` files (converted, keeps the animation and loops forever) or the original MP4 clips.
+- **Include GIFs / videos in post archives** (v3.6) — GIFs archive by default, videos are opt-in; both are ZIP/CBZ-only (never PDF). Switched off, they always save as separate files.
+- **Post name is built from** — tick the tokens; the example preview updates live. Untick everything and names fall back to the post id. A hand-typed custom template shows a manual input instead.
+
 ## How it works
 
 1. **Auth** — Reads `ct0` / `auth_token` cookies and a public Bearer token (from page JS, live capture, or known public fallback).
 2. **Live capture** — `injected.js` (MAIN world) observes GraphQL requests for operation IDs, features, and headers such as `x-client-transaction-id` (never stores Cookie header values in the capture bag).
 3. **Discovery** — Resolves user via `UserByScreenName`, pages `UserMedia` (or captured media-timeline aliases), parses timeline instructions, enqueues media.
 4. **Single tweet** — `TweetResultByRestId` for action-bar / DOM bulk.
-5. **Downloads** — `chrome.downloads` with concurrency 1–2, retries, and a safer filename ladder if Chrome rejects a path.
+5. **Downloads** — `chrome.downloads` with concurrency 1–2, retries, and a safer filename ladder if Chrome rejects a path. Paths honor the **Output settings** (master folder + name template); relative subpaths only, never absolute, never `..`.
+6. **Archives (v3.5/v3.6)** — With ZIP/CBZ/PDF selected, a post's archived media are fetched and assembled in an **offscreen document** (`offscreen.html`), then saved by clicking an in-document `<a download>` anchor — some Chromium builds ignore the `filename` argument for `blob:` URLs and would otherwise save a UUID. Archives land at the download-directory root as `<post name>.<ext>` (the anchor mechanism cannot carry folders). If the offscreen API is unavailable, the worker falls back to a small base64 `data:` URL (safe: at most 4 items per post; GIF entries then embed their MP4 source, since conversion needs a DOM). Offscreen documents only expose `chrome.runtime`, so settings are relayed into the job message — never read from storage there.
+7. **GIF conversion (v3.6)** — GIF items are converted in the same offscreen document: the MP4 clip is decoded through `<video>` + canvas at 12 fps (bounded: ≤30 s, ≤360 frames, ≤720 px) and encoded by a local GIF89a writer (`lib/gifEncoder.js`, median-cut palette + LZW). Raw-mode GIFs travel back as base64 and are saved via a `data:` URL so they still land inside the master folder; any failure falls back to the original MP4.
 
 ## Permissions
 
@@ -74,6 +88,7 @@ Switch to the **Remote fetch** tab, enter `@username` or a profile URL, set a li
 | `storage` | Queue, discovery state, settings |
 | `activeTab` + `scripting` | Buttons, bundle metadata, messaging |
 | `sidePanel` | Batch queue UI |
+| `offscreen` | Assemble per-post ZIP/CBZ/PDF blobs and convert GIF clips (MV3 workers have no object URLs, `<video>` or canvas) |
 
 **Host permissions:** `x.com`, `twitter.com`, `video.twimg.com`, `pbs.twimg.com`, `api.x.com`.
 
@@ -85,10 +100,12 @@ No data is sent to third-party extension backends.
 .
 ├── extension/                 # ← Load unpacked: select THIS folder in chrome://extensions
 │   ├── manifest.json          #   MV3, name/version live here
-│   ├── background.js          #   Auth, GraphQL, queue, discovery, downloads
+│   ├── background.js          #   Auth, GraphQL, queue, discovery, downloads, archive pass
 │   ├── injected.js            #   MAIN-world GraphQL/header capture
 │   ├── content.js             #   Capture forwarder, action bar, DOM bulk
-│   ├── sidepanel.html/js/css  #   Batch queue UI
+│   ├── sidepanel.html/js/css  #   Batch queue UI + Output settings card
+│   ├── offscreen.html/js      #   ZIP/CBZ/PDF assembly + MP4→GIF conversion
+│   ├── lib/                   #   naming.js, zipWriter.js, pdfBuilder.js, gifEncoder.js (shared with tests)
 │   ├── popup.html/js          #   Side Panel launcher + capture status
 │   └── icon48.png / icon128.png
 ├── tests/                     # Node unit tests + sanitized fixtures
@@ -112,10 +129,17 @@ never loaded by the browser.
 ## Development
 
 ```bash
-node --check extension/background.js extension/content.js extension/popup.js extension/sidepanel.js extension/injected.js
-node --test tests/*.test.js   # 43 tests
-node --test tests/background.test.js
+for f in extension/*.js extension/lib/*.js; do node --check "$f"; done
+node --test tests/*.test.js   # 106 tests (offline: fixtures + window-less VM pipelines)
+node --test tests/downloader.test.js
 ```
+
+CI runs the same offline suites once `docs/ci/extension-tests.yml` is installed
+as `.github/workflows/extension-tests.yml` (manual web-UI step — see
+`docs/ci/README.md`; the Arena GitHub App cannot push workflow files).
+GitHub-hosted runners cannot drive real-browser MV3 tests, so signed-in
+verification against live X remains a local manual step
+(see `docs/SESSION_HANDOFF.md` §5).
 
 After changing anything in `extension/`: reload the extension on `chrome://extensions`, then
 hard-refresh your X tab.

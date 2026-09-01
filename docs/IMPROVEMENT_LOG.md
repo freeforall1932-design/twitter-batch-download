@@ -2,6 +2,211 @@
 
 Chronological implementation record for X Media Downloader.
 
+## 2026-09-01 — Media-kind upgrade: GIF stays a GIF, quality guarantees, archive rules + warnings — v3.6
+
+**Branch:** `arena/01a05aab-twitter-batch-download` (same PR as v3.5) ·
+**Session input:** review the v3.5 diff for missing/misaligned logic, then:
+photos at highest quality, GIFs saved as GIFs (not MP4), videos at highest
+quality; multi-GIF posts archive like photo posts but ZIP/CBZ only (never
+PDF) and optional; GIF+photo mixes default to ZIP/CBZ; multi-video posts
+ZIP/CBZ only and optional; warn when zipping video posts or mixed-media
+posts; then clean up leftover code and keep the directory purpose-separated.
+
+### Review findings fixed
+
+- `normalizePhotoUrl` only added `name=orig` when no `name` param existed —
+  a pre-sized GraphQL variant (`name=small`) would have downloaded small.
+  Now forces `orig` on every source, matching the DOM path in `content.js`.
+- GIF identity was lost end to end: `animated_gif` collapsed into
+  `type:"video"` and saved as `.mp4`. Items now carry `isGif` (type stays
+  `"video"` so the photo/video capture filter keeps working); the Side Panel
+  shows a `gif` badge.
+- `content.js` had two ~55-line near-identical GraphQL-entry→item builders
+  (scroll resolver vs action-bar buttons). Consolidated into one
+  `mediaEntryToItem()` so the paths can never drift again.
+- Offscreen messaging generalized into `sendOffscreenRequest()` (one timeout/
+  lastError wrapper for archive + GIF jobs); output settings normalized
+  centrally (`normalizeOutputSettings`) so corrupt stored values can't flip
+  toggles.
+
+### GIF → GIF (new pipeline)
+
+- New `lib/gifEncoder.js`: dependency-free streaming GIF89a encoder (median-
+  cut 256-color palette from frame 1, nearest-color cache, spec-timed LZW,
+  NETSCAPE loop-forever). Verified in tests by a spec-faithful decoder —
+  pixels round-trip, including a noisy frame that forces LZW code-width
+  growth.
+- `offscreen.js` decodes X's silent MP4 clip through `<video>` + canvas
+  (12 fps, bounded ≤30 s / ≤360 frames / ≤720 px / ≤40 MB) and feeds the
+  encoder frame-by-frame (one RGBA buffer alive at a time). Raw-mode GIFs
+  return as base64 and download via `data:` URL — which, unlike the anchor,
+  honors the master-folder subpath. Every failure (no offscreen API,
+  timeout, oversized result) degrades to the original MP4, never a dead item.
+- New sync setting `gifOutput` (`"gif"` default | `"mp4"`).
+
+### Archive kind rules + toggles + warnings
+
+- `archivedKinds()`: photos always archive; GIFs when `archiveGifs` (default
+  ON); videos only when `archiveVideos` (default OFF). Non-archived kinds
+  stay in the raw pass.
+- `effectiveGroupFormat()`: PDF is photos-only — a post whose archive holds
+  a GIF or video degrades PDF→ZIP for that post; ZIP/CBZ allowed. Entries
+  are named per kind (`002.gif`, `003.mp4`); a failed in-archive GIF
+  conversion renames its entry back to `.mp4` so archives are never
+  mislabeled. The worker fallback (no DOM) embeds GIF sources as `.mp4`.
+- `buildRunNotices()` at `queueStart` → `state.notices`, rendered as an
+  amber alert box in the dock: video posts being packed, mixed-media posts
+  (photos+GIFs+videos in one post), and PDF→ZIP fallbacks are announced
+  before the first byte downloads. Raw runs never warn.
+
+### Plumbing
+
+- Manifest 3.5 → 3.6. Queue state persists `notices`; `publicQueueState`
+  exposes them. `downloadFile` (single-post button) runs through the same
+  `prepareRawDownload()` as the queue, so one-off GIF downloads convert too.
+- Side Panel Output settings: GIF format select + two archive-inclusion
+  checkboxes (written ONLY there, relayed as a settings bag everywhere,
+  offscreen included). Dock picker renamed "Save posts as".
+
+### Validation
+
+- 106 offline tests green (`node --test tests/*.test.js`): +5 GIF encoder
+  round-trip, +13 media-kind suites (quality forcing, gif identity, kind
+  rules, warnings, mixed-post pipelines, offscreen GIF relay, toggles), all
+  93 previous tests unchanged.
+- `scripts/package-release.sh` smoke: v3.6 zip carries `lib/gifEncoder.js`
+  + updated offscreen files. Not yet live-verified on x.com (WORKLIST P0
+  item 14 now covers v3.6).
+
+## 2026-09-01 — Media output upgrade: master folder, ZIP/CBZ/PDF per post, naming checkboxes — v3.5
+
+**Branch:** `arena/01a05aab-twitter-batch-download` · **Session input:** port
+three proven features from the sister repo
+[nh-dw-2.0](https://github.com/freeforall1932-design/nh-dw-2.0) (PR #30 /
+commit `9f86426` raw master folder; `Downloader.ts` save pipeline +
+`sanitizeArtifactFilename`; `pdfBuilder.ts`; `nameTemplate.ts` +
+`getDownloadName`; `extension-tests.yml`).
+
+### Feature 1 — Master folder for loose (raw) downloads
+
+Raw files now save as `Downloads/XMedia/<post name>/001.jpg…` instead of
+flooding a single flat folder with hundreds of files.
+
+- New sync setting `rawMasterFolder` (default `"XMedia"`). **EMPTY STRING =
+  OFF**: raw items then keep their legacy `x-media/…` filename byte-for-byte
+  (pinned by test). Slashes nest deeper (`XMedia/raw`).
+- Core trick (proven in nh-dw): `chrome.downloads.download({ filename })`
+  accepts RELATIVE subpaths and auto-creates folders when "ask where to
+  save" is off. Never absolute, never `..` — `sanitizeArtifactFilename`
+  (copied from nh-dw `Downloader.ts`) cleans every path segment: control
+  chars + `\:*?"<>|` stripped, leading dots and trailing dots/spaces
+  dropped, segments capped at 120 chars, never empty.
+- The empty string is SAVABLE: the Side Panel field is wired manually with a
+  `change` listener storing `.value.trim()` verbatim (nh-dw's generic input
+  widget dropped empties, which made "off" impossible — do not regress this).
+- Paths are computed at download time in `background.js`
+  (`rawPathForItem`), not at item-creation time, so the settings apply to
+  items already sitting in the queue. Items persisted by pre-3.5 versions
+  (no `mediaIndex`/`text` metadata) keep their stored leaf name under the
+  master folder rather than guessing.
+
+### Feature 2 — ZIP / CBZ / PDF output for multi-picture posts
+
+A post can carry up to 4 photos; the new formats bundle them into ONE file
+per post, named `<post name>.zip|cbz|pdf`, entries `001.jpg…004.png` at the
+archive root in post order.
+
+- `lib/zipWriter.js`: minimal STORE-only ZIP writer (CRC-32, central
+  directory, EOCD) written locally instead of adding JSZip — the repo's
+  "no npm / no build step" guardrail outweighs the sister repo's dependency
+  choice, and photos are already compressed.
+- `lib/pdfBuilder.js`: nh-dw's dependency-free PDF 1.4 writer ported
+  VERBATIM (its test suite came along, mocha → node:test): JPEG embedded
+  as-is (DCTDecode, dims from SOF frames), byte-exact xref. PNG/WebP (and
+  CMYK JPEGs) re-encode via `createImageBitmap` + `OffscreenCanvas`
+  flattened on white.
+- Assembly runs in a new **offscreen document** (`offscreen.html/js`,
+  `offscreen` permission, reason `BLOBS`): fetch images → build Blob →
+  object URL → click an in-document `<a download>` anchor. The anchor is
+  mandatory (nh-dw v3.2.1 hard-learned): some Chromium builds ignore the
+  `filename` arg for `blob:` URLs and save a UUID. Anchor downloads cannot
+  carry folders, so archives land at the Downloads root.
+- Offscreen documents expose ONLY `chrome.runtime` (verified on real Chrome
+  in nh-dw): settings travel inside the job message; the document never
+  touches storage/downloads/scripting.
+- Service-worker fallback when `chrome.offscreen` is missing: build in the
+  worker, hand a base64 `data:` URL to `chrome.downloads` (data: URLs do
+  respect `filename`). Acceptable only because a post is ≤4 images; this is
+  also the path the window-less VM tests exercise.
+- Format whitelist everywhere (`raw|zip|cbz|pdf`, corrupt → `raw`). The
+  per-job dock picker ("Save photo posts as") seeds from the stored default
+  and never writes it back. Videos always stay raw MP4s.
+- **Scope note on the "no ZIP" guardrail:** the removed feature was the
+  multi-GB whole-batch archive. This is a per-post archive of at most four
+  images, explicitly requested this session; the batch ZIP stays banned.
+
+### Feature 3 — Naming-scheme checkboxes
+
+- New sync setting `nameTemplate` (default `"{user} - {text} - {id}"`).
+  Tokens: `{user}` handle, `{name}` display name, `{text}` post text
+  (~40 chars, URLs/@mentions stripped), `{id}` post id, `{date}`
+  YYYY-MM-DD. The stored value is the TEMPLATE STRING; the UI renders one
+  checkbox per token in canonical order joined by " - ", with a live
+  "Example file name" preview (nh-dw `nameTemplate.ts` pattern).
+- A stored template that is not pure checkbox tokens shows a manual input
+  instead, so hand-typed templates are never lost.
+- The rendered name applies to BOTH the raw per-post folder and the archive
+  base name. Empty renders fall back to the post id (then "post");
+  Windows-reserved device names (CON, NUL, COM1…) get a "_" prefix.
+- Per-file numbering inside a post (001…004) is automatic — an `{index}`
+  token was deliberately not offered because the template names per-POST
+  artifacts (folder/archive), where an index would split one post across
+  names.
+
+### Plumbing
+
+- Queue items now carry `text`, `displayName`, `mediaIndex` (all three
+  producers: background GraphQL parser, content DOM scan, per-post resolve);
+  `getTweetMedia` entries gained `displayName`/`date`/`mediaIndex` with the
+  index counted per owning post (quote-card media numbers restart).
+- `queueStart` accepts `format`; the effective format persists as queue
+  state (`outputFormat`) so a worker restart mid-run cannot silently switch
+  archive photos back to raw.
+- `downloadFile` runtime message accepts the owning `item` so the on-post
+  Download button honors the master folder too (always raw — archives are a
+  Side Panel batch feature).
+- `content.js`/`sidepanel.js` senders unchanged in shape — no new runtime
+  actions, so the message-contract test needed no allowlist changes.
+
+### Tests / CI
+
+- +33 tests → **88 passing**: `tests/naming.test.js` (template engine,
+  sanitizer, master-folder paths, reserved names, id fallback),
+  `tests/zip-writer.test.js` (CRC-32 vector, headers, central directory
+  walk), `tests/pdf-builder.test.js` (ported verbatim),
+  `tests/downloader.test.js` (real background.js in a VM: default/custom/
+  empty/weird master folder, zip/cbz/pdf end-to-end through the data-URL
+  fallback with byte-level archive checks, offscreen job relay, video
+  passthrough, corrupt-format degradation, failure marking).
+- Test harnesses now run the real `lib/` files through `importScripts` and
+  stub `chrome.storage.sync`; shared loader in
+  `tests/helpers/load-background.js`.
+- New CI workflow `extension-tests.yml`: offline only (syntax +
+  `node --test` + packaging smoke). GitHub-hosted runners cannot run
+  real-browser MV3 tests (Chrome `Runtime.enable` timeout / Brave SIGTRAP —
+  100% failure rate in the sister repo), so signed-in verification stays a
+  local manual step.
+
+### Validation
+
+- All 88 offline tests green; `node --check` clean on every shipped script;
+  `scripts/package-release.sh` produces a v3.5 zip containing `lib/` and the
+  offscreen files. Manifest 3.4 → 3.5 (single manifest in this repo; the
+  release zip is generated, so there is no second built tree to diff).
+- **Not yet live-verified** (needs a signed-in browser): folder
+  auto-creation on a real 4-photo post, archive anchor saves on current
+  Chrome, and the v3.4 quote-card spot-check that was already pending.
+
 ## 2026-08-26 — Quoted-post media capture (the "mentioned post" card) — v3.4
 
 **Commits:** `08e68d0` (feature) + `b943a84` (review pass) on

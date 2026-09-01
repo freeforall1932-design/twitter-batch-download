@@ -109,6 +109,22 @@ function render() {
   ensureCountdownTimer();
   $("engineStatus").textContent = state.running ? "Downloading" : state.stopped ? "Paused" : activeTab === "scroll" ? "Capturing" : "Ready";
   $("engineStatus").className = "status-pill " + (state.running ? "running" : "idle");
+
+  // v3.6: archive-mode warnings computed by the background at queueStart
+  // (video posts being zipped, mixed-media posts, PDF→ZIP fallbacks).
+  const noticesBox = $("queueNotices");
+  const notices = Array.isArray(state.notices) ? state.notices : [];
+  if (notices.length && state.running) {
+    noticesBox.style.display = "";
+    noticesBox.textContent = "";
+    for (const notice of notices) {
+      const line = document.createElement("p");
+      line.textContent = notice;
+      noticesBox.appendChild(line);
+    }
+  } else {
+    noticesBox.style.display = "none";
+  }
   selectAllEl.checked = items.length > 0 && items.every((item) => item.selected);
   selectAllEl.indeterminate = items.some((item) => item.selected) && !selectAllEl.checked;
   if (!items.length) {
@@ -123,10 +139,11 @@ function render() {
     const thumbnail = item.thumbnail ? `<img src="${escapeHtml(item.thumbnail)}" alt="" loading="lazy">` : `<div class="thumb-placeholder">${item.type === "video" ? "▶" : "▧"}</div>`;
     const progress = item.status === "downloading" && item.totalBytes > 0 ? ` ${Math.round((item.bytesReceived || 0) * 100 / item.totalBytes)}%` : "";
     const retry = item.status === "failed" ? ` (${item.attempts || 0}/3)` : "";
+    const gif = item.isGif ? `<span class="type-badge gif" title="X serves GIFs as MP4 clips; saved per the GIF setting in Output settings.">gif</span>` : "";
     const repost = item.isRepost ? `<span class="type-badge repost">repost</span>` : "";
     const quote = item.isQuote ? `<span class="type-badge quote" title="Media from a post quoted inside another post.">quote</span>` : "";
     const link = item.tweetId ? `<a class="item-link" href="https://x.com/i/status/${escapeHtml(item.tweetId)}" target="_blank" rel="noreferrer" title="Open post">↗</a>` : "";
-    return `<article class="queue-item"><input class="item-select" data-id="${escapeHtml(item.id)}" type="checkbox" ${item.selected ? "checked" : ""} aria-label="Select media"><div>${thumbnail}</div><div class="item-info"><div class="item-title">${escapeHtml(item.author || "X post")}${link}</div><div class="item-meta">${escapeHtml(item.date || "Captured while scrolling")}</div><span class="type-badge">${escapeHtml(item.type || "media")}</span>${repost}${quote}</div><div class="item-right"><span class="item-status ${escapeHtml(item.status || "discovered")}" title="${escapeHtml(item.error || "")}">${escapeHtml(item.status || "discovered")}${progress}${retry}</span><button class="item-remove" data-remove="${escapeHtml(item.id)}" title="Remove from list" aria-label="Remove from list">×</button></div></article>`;
+    return `<article class="queue-item"><input class="item-select" data-id="${escapeHtml(item.id)}" type="checkbox" ${item.selected ? "checked" : ""} aria-label="Select media"><div>${thumbnail}</div><div class="item-info"><div class="item-title">${escapeHtml(item.author || "X post")}${link}</div><div class="item-meta">${escapeHtml(item.date || "Captured while scrolling")}</div><span class="type-badge">${escapeHtml(item.type || "media")}</span>${gif}${repost}${quote}</div><div class="item-right"><span class="item-status ${escapeHtml(item.status || "discovered")}" title="${escapeHtml(item.error || "")}">${escapeHtml(item.status || "discovered")}${progress}${retry}</span><button class="item-remove" data-remove="${escapeHtml(item.id)}" title="Remove from list" aria-label="Remove from list">×</button></div></article>`;
   }).join("");
 }
 
@@ -209,7 +226,7 @@ $("resetDownloadedBtn").addEventListener("click", async () => {
   state = await send({ action: "queueClearDownloadedHistory" });
   render();
 });
-$("downloadSelectedBtn").addEventListener("click", async () => { state = await send({ action: "queueStart", mode: "selected", source: sourceForActiveTab() }); render(); });
+$("downloadSelectedBtn").addEventListener("click", async () => { state = await send({ action: "queueStart", mode: "selected", source: sourceForActiveTab(), format: $("jobFormat").value }); render(); });
 $("stopBtn").addEventListener("click", async () => { state = await send({ action: "queueStop" }); render(); });
 
 document.querySelectorAll(".tab").forEach((button) => button.addEventListener("click", async () => {
@@ -285,3 +302,158 @@ chrome.storage.local.get(["batchTarget", "batchLimit", "includeRetweets", "inclu
 });
 localStatusTimer = setInterval(pollLocalStatus, 1500);
 refresh();
+
+// ==========================================================================
+// OUTPUT SETTINGS (v3.5) — master folder, per-post format, name template.
+// This card is the extension's "options page": it is the ONLY writer of the
+// chrome.storage.sync output settings. Downloading contexts receive the
+// values through a settings bag read in background.js.
+// ==========================================================================
+
+const TEMPLATE_LABELS = {
+  user: "@handle",
+  name: "Display name",
+  text: "Post text (first ~40 chars)",
+  id: "Post ID",
+  date: "Post date (YYYY-MM-DD)"
+};
+
+const PREVIEW_FIELDS = {
+  user: "nasa",
+  name: "NASA",
+  text: "Sunrise over the Pacific, seen from the ISS",
+  id: "1834567890123456789",
+  date: "2026-09-01T09:15:00.000Z"
+};
+
+const outputSettingsState = { rawMasterFolder: XDLNaming.DEFAULT_RAW_MASTER_FOLDER, nameTemplate: XDLNaming.DEFAULT_NAME_TEMPLATE, outputFormat: "raw" };
+
+function renderNamePreview() {
+  const master = XDLNaming.normalizeRawMasterFolder(outputSettingsState.rawMasterFolder);
+  const template = outputSettingsState.nameTemplate;
+  const format = XDLNaming.normalizeOutputFormat(outputSettingsState.outputFormat);
+  const base = XDLNaming.makePostBaseName(template, PREVIEW_FIELDS);
+  let example;
+  if (format === "raw") {
+    example = master !== ""
+      ? `Downloads/${master}/${base}/001.jpg`
+      : `Downloads/x-media/nasa_Sunrise over the Pacific…_${PREVIEW_FIELDS.id}_1.jpg (old flat layout)`;
+  } else {
+    example = `Downloads/${XDLNaming.buildArchiveFilename({ nameTemplate: template }, PREVIEW_FIELDS, format)}`;
+  }
+  $("namePreview").textContent = `Example file name: ${example}`;
+}
+
+function saveNameTemplate(template) {
+  outputSettingsState.nameTemplate = template;
+  chrome.storage.sync.set({ nameTemplate: template });
+  renderNamePreview();
+}
+
+function initNameTemplate(storedTemplate) {
+  const checksBox = $("nameTemplateChecks");
+  const advancedBox = $("nameTemplateAdvanced");
+  const advancedInput = $("nameTemplateInput");
+
+  if (!XDLNaming.isTokenOnlyTemplate(storedTemplate)) {
+    // A hand-written template the checkboxes cannot represent: show the
+    // manual input instead so nothing the user typed is lost.
+    checksBox.style.display = "none";
+    advancedBox.style.display = "";
+    advancedInput.value = storedTemplate;
+    advancedInput.addEventListener("change", () => {
+      const value = advancedInput.value.trim();
+      saveNameTemplate(value);
+      if (XDLNaming.isTokenOnlyTemplate(value)) {
+        // Cleared / reduced to plain tokens: switch back to checkbox mode.
+        advancedBox.style.display = "none";
+        checksBox.style.display = "";
+        checksBox.textContent = "";
+        buildTemplateChecks(value);
+      }
+    });
+    renderNamePreview();
+    return;
+  }
+
+  advancedBox.style.display = "none";
+  buildTemplateChecks(storedTemplate);
+  renderNamePreview();
+}
+
+function buildTemplateChecks(storedTemplate) {
+  const checksBox = $("nameTemplateChecks");
+  const inUse = XDLNaming.templateTokensInUse(storedTemplate);
+  for (const token of XDLNaming.TEMPLATE_TOKENS) {
+    const wrapper = document.createElement("label");
+    wrapper.className = "check-label";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.id = `template_${token}`;
+    box.checked = !!inUse[token];
+    wrapper.appendChild(box);
+    wrapper.appendChild(document.createTextNode(` ${TEMPLATE_LABELS[token]}`));
+    checksBox.appendChild(wrapper);
+    box.addEventListener("change", () => {
+      const checked = {};
+      for (const t of XDLNaming.TEMPLATE_TOKENS) {
+        checked[t] = !!document.getElementById(`template_${t}`)?.checked;
+      }
+      // Nothing checked = empty template; produced names then fall back to
+      // the post id (never an empty file name).
+      saveNameTemplate(XDLNaming.buildTemplate(checked));
+    });
+  }
+}
+
+chrome.storage.sync.get(
+  { rawMasterFolder: XDLNaming.DEFAULT_RAW_MASTER_FOLDER, nameTemplate: XDLNaming.DEFAULT_NAME_TEMPLATE, outputFormat: "raw", gifOutput: "gif", archiveGifs: true, archiveVideos: false },
+  (stored) => {
+    outputSettingsState.rawMasterFolder = String(stored.rawMasterFolder);
+    outputSettingsState.nameTemplate = String(stored.nameTemplate);
+    outputSettingsState.outputFormat = XDLNaming.normalizeOutputFormat(stored.outputFormat);
+
+    // Master folder: saved verbatim on change — the EMPTY string is
+    // meaningful ("no master folder, old flat layout"), so this field must
+    // not ride any generic "skip empty values" widget wiring.
+    const masterInput = $("rawMasterFolder");
+    masterInput.value = outputSettingsState.rawMasterFolder;
+    masterInput.addEventListener("change", () => {
+      outputSettingsState.rawMasterFolder = masterInput.value.trim();
+      chrome.storage.sync.set({ rawMasterFolder: outputSettingsState.rawMasterFolder });
+      renderNamePreview();
+    });
+
+    // GIF handling + archive-inclusion toggles (v3.6). Same contract as the
+    // other output settings: written ONLY here, read by the background as a
+    // plain settings bag.
+    const gifOutputSelect = $("gifOutput");
+    gifOutputSelect.value = stored.gifOutput === "mp4" ? "mp4" : "gif";
+    gifOutputSelect.addEventListener("change", () => {
+      chrome.storage.sync.set({ gifOutput: gifOutputSelect.value === "mp4" ? "mp4" : "gif" });
+    });
+    const archiveGifsBox = $("archiveGifs");
+    archiveGifsBox.checked = stored.archiveGifs !== false;
+    archiveGifsBox.addEventListener("change", () => {
+      chrome.storage.sync.set({ archiveGifs: archiveGifsBox.checked });
+    });
+    const archiveVideosBox = $("archiveVideos");
+    archiveVideosBox.checked = stored.archiveVideos === true;
+    archiveVideosBox.addEventListener("change", () => {
+      chrome.storage.sync.set({ archiveVideos: archiveVideosBox.checked });
+    });
+
+    // Stored default format (settings card) + per-job picker (dock). The
+    // dock picker is seeded from the default but never writes it back.
+    $("defaultFormat").value = outputSettingsState.outputFormat;
+    $("jobFormat").value = outputSettingsState.outputFormat;
+    $("defaultFormat").addEventListener("change", () => {
+      outputSettingsState.outputFormat = XDLNaming.normalizeOutputFormat($("defaultFormat").value);
+      chrome.storage.sync.set({ outputFormat: outputSettingsState.outputFormat });
+      $("jobFormat").value = outputSettingsState.outputFormat;
+      renderNamePreview();
+    });
+
+    initNameTemplate(outputSettingsState.nameTemplate);
+  }
+);

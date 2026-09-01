@@ -31,3 +31,31 @@ main { padding:14px 14px 156px; } .hidden { display:none !important; }
 .item-link { margin-left:5px; color:#82caff; font-size:11px; text-decoration:none; }
 .download-dock .action-row .button { flex:1; }
 .download-dock #stopBtn { flex:0 0 84px; }
+/* Output settings card (v3.5): master folder, per-post format, name template */
+.output-settings { margin:0 0 14px; }
+.output-settings summary { color:#b8c5ce; font-size:12px; font-weight:650; cursor:pointer; }
+.output-settings[open] summary { margin-bottom:10px; }
+.settings-label { display:block; margin:12px 1px 5px; }
+.output-settings input[type=text], .output-settings select { width:100%; padding:8px 10px; }
+.output-settings .hint code { color:#9fd6ff; font-size:10px; }
+.template-checks { display:flex; flex-wrap:wrap; gap:8px 14px; padding:2px 1px; }
+.template-checks .check-label { color:var(--text); font-weight:400; font-size:12px; }
+.name-preview { color:#9fd6ff; word-break:break-all; }
+.download-dock .concurrency-control + .concurrency-control { margin-top:6px; }
+.download-dock #jobFormat { padding:5px 7px; font-size:11px; }
+
+/* v3.6 — GIF badge + archive-run warnings */
+.type-badge.gif { margin-left: 4px; background: #3d2f14; color: #f5c065; }
+.settings-check { display: block; margin: 6px 0; }
+.queue-notices {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border: 1px solid #6b5516;
+  border-radius: 8px;
+  background: #2a2410;
+  color: #f5c065;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.queue-notices p { margin: 0 0 4px; }
+.queue-notices p:last-child { margin-bottom: 0; }

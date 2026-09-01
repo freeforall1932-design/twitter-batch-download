@@ -402,8 +402,55 @@
     return sendMessage("getTweetMedia", { tweetId });
   }
 
-  function downloadFile(url, filename) {
-    return sendMessage("downloadFile", { url, filename });
+  function downloadFile(url, filename, item) {
+    // The owning item's metadata lets the background honor the master-folder
+    // and name-template settings; url/filename stay as the legacy fallback.
+    return sendMessage("downloadFile", { url, filename, item });
+  }
+
+  // ==========================================================================
+  // SHARED — GraphQL media entry → queue item (used by the scroll-capture
+  // video resolver AND the per-post action-bar buttons; one builder so the
+  // two paths can never drift apart again)
+  // ==========================================================================
+
+  // entry: one element of getTweetMedia().videos / .photos (owning-post
+  // attribution included). Returns a queue item, or null when `dedupe` sets
+  // are provided and the media is already listed.
+  function mediaEntryToItem(entry, index, kind, context) {
+    const mediaKey = mediaKeyFromUrl(entry.url);
+    const ownerHandle = entry.username || context.handle;
+    const ownerText = entry.text || context.fallbackText || "media";
+    const ownerTweetId = entry.tweetId || context.tweetId;
+    const id = `${ownerTweetId}-${entry.mediaId || mediaKey || index}`;
+    if (context.dedupe) {
+      const { ids, keys } = context.dedupe;
+      if (ids.has(id) || (mediaKey && keys.has(mediaKey))) return null;
+      ids.add(id);
+      if (mediaKey) keys.add(mediaKey);
+    }
+    const extension = kind === "video" ? "mp4" : getPhotoExtension(entry.url);
+    return {
+      id,
+      mediaKey,
+      url: entry.url,
+      type: kind,
+      // X delivers "GIFs" as MP4 clips; the flag lets the background convert
+      // them back into real .gif files at download time.
+      isGif: entry.type === "animated_gif",
+      thumbnail: kind === "photo" ? entry.url : "",
+      author: `@${ownerHandle}`,
+      date: entry.date || "",
+      tweetId: ownerTweetId,
+      mediaId: String(entry.mediaId || mediaKey || index),
+      isRepost: false,
+      isQuote: Boolean(entry.isQuote),
+      source: "scroll",
+      text: entry.text || context.fallbackText || "",
+      displayName: entry.displayName || "",
+      mediaIndex: entry.mediaIndex ?? index,
+      filename: `x-media/${ownerHandle}_${sanitizeFilename(ownerText)}_${ownerTweetId}_${index + 1}.${extension}`
+    };
   }
 
   // ==========================================================================
@@ -450,6 +497,12 @@
         mediaId: mediaKey,
         isRepost: false,
         source: "scroll",
+        // Naming metadata (v3.5): raw post text + per-post media position for
+        // the download-time template/master-folder path builder. The DOM
+        // carries no display name; the {name} token just renders empty here.
+        text: info.tweetText || "",
+        displayName: "",
+        mediaIndex: index,
         filename: `x-media/${handle}_${safeName}_${info.tweetId}_${index + 1}.${getPhotoExtension(url)}`
       });
     });
@@ -504,60 +557,25 @@
         if (!media || media.error) continue;
 
         const handle = media.username || "unknown";
+        // Quoted-card media is attributed to the quoted post (its own author,
+        // text, and tweet id) so ids, filenames, and skip-history match the
+        // post that actually owns the media. Dedupe against everything this
+        // tab already listed (DOM scan or an earlier GraphQL capture).
+        const context = {
+          handle,
+          tweetId,
+          fallbackText: media.tweetText || "media",
+          dedupe: { ids: listedMediaIds, keys: listedMediaKeys }
+        };
         const items = [];
         (media.videos || []).forEach((video, index) => {
-          const mediaKey = mediaKeyFromUrl(video.url);
-          // Quoted-card media is attributed to the quoted post (its own author,
-          // text, and tweet id) so ids, filenames, and skip-history match the
-          // post that actually owns the media.
-          const ownerHandle = video.username || handle;
-          const ownerText = video.text || media.tweetText || "media";
-          const ownerTweetId = video.tweetId || tweetId;
-          const id = `${ownerTweetId}-${video.mediaId || mediaKey || index}`;
-          if (listedMediaIds.has(id) || (mediaKey && listedMediaKeys.has(mediaKey))) return;
-          listedMediaIds.add(id);
-          if (mediaKey) listedMediaKeys.add(mediaKey);
-          items.push({
-            id,
-            mediaKey,
-            url: video.url,
-            type: "video",
-            thumbnail: "",
-            author: `@${ownerHandle}`,
-            date: "",
-            tweetId: ownerTweetId,
-            mediaId: String(video.mediaId || mediaKey || index),
-            isRepost: false,
-            isQuote: Boolean(video.isQuote),
-            source: "scroll",
-            filename: `x-media/${ownerHandle}_${sanitizeFilename(ownerText)}_${ownerTweetId}_${index + 1}.mp4`
-          });
+          const item = mediaEntryToItem(video, index, "video", context);
+          if (item) items.push(item);
         });
         if (mediaFilter !== "video") {
           (media.photos || []).forEach((photo, index) => {
-            const mediaKey = mediaKeyFromUrl(photo.url);
-            const ownerHandle = photo.username || handle;
-            const ownerText = photo.text || media.tweetText || "media";
-            const ownerTweetId = photo.tweetId || tweetId;
-            const id = `${ownerTweetId}-${photo.mediaId || mediaKey || index}`;
-            if (listedMediaIds.has(id) || (mediaKey && listedMediaKeys.has(mediaKey))) return;
-            listedMediaIds.add(id);
-            if (mediaKey) listedMediaKeys.add(mediaKey);
-            items.push({
-              id,
-              mediaKey,
-              url: photo.url,
-              type: "photo",
-              thumbnail: photo.url,
-              author: `@${ownerHandle}`,
-              date: "",
-              tweetId: ownerTweetId,
-              mediaId: String(photo.mediaId || mediaKey || index),
-              isRepost: false,
-              isQuote: Boolean(photo.isQuote),
-              source: "scroll",
-              filename: `x-media/${ownerHandle}_${sanitizeFilename(ownerText)}_${ownerTweetId}_${index + 1}.${getPhotoExtension(photo.url)}`
-            });
+            const item = mediaEntryToItem(photo, index, "photo", context);
+            if (item) items.push(item);
           });
         }
         if (items.length) {
@@ -704,50 +722,20 @@
     if (!media || media.error) return { error: media?.error || "no_media" };
     const handle = media.username || info.handle || "unknown";
     const safeName = sanitizeFilename(info.tweetText || media.tweetText);
+    // Quoted ("mentioned") post media carries its own attribution so the
+    // download is named after the post that owns the media. No dedupe here —
+    // the action-bar buttons operate on exactly one post.
+    const context = {
+      handle,
+      tweetId: info.tweetId,
+      fallbackText: info.tweetText || media.tweetText || ""
+    };
     const items = [];
     (media.videos || []).forEach((video, index) => {
-      const mediaKey = mediaKeyFromUrl(video.url);
-      // Quoted ("mentioned") post media carries its own attribution so the
-      // download is named after the post that owns the media.
-      const ownerHandle = video.username || handle;
-      const ownerText = video.text ? sanitizeFilename(video.text) : safeName;
-      const ownerTweetId = video.tweetId || info.tweetId;
-      items.push({
-        id: `${ownerTweetId}-${video.mediaId || mediaKey || index}`,
-        mediaKey,
-        url: video.url,
-        type: "video",
-        thumbnail: "",
-        author: `@${ownerHandle}`,
-        date: "",
-        tweetId: ownerTweetId,
-        mediaId: String(video.mediaId || mediaKey || index),
-        isRepost: false,
-        isQuote: Boolean(video.isQuote),
-        source: "scroll",
-        filename: `x-media/${ownerHandle}_${ownerText}_${ownerTweetId}_${index + 1}.mp4`
-      });
+      items.push(mediaEntryToItem(video, index, "video", context));
     });
     (media.photos || []).forEach((photo, index) => {
-      const mediaKey = mediaKeyFromUrl(photo.url);
-      const ownerHandle = photo.username || handle;
-      const ownerText = photo.text ? sanitizeFilename(photo.text) : safeName;
-      const ownerTweetId = photo.tweetId || info.tweetId;
-      items.push({
-        id: `${ownerTweetId}-${photo.mediaId || mediaKey || index}`,
-        mediaKey,
-        url: photo.url,
-        type: "photo",
-        thumbnail: photo.url,
-        author: `@${ownerHandle}`,
-        date: "",
-        tweetId: ownerTweetId,
-        mediaId: String(photo.mediaId || mediaKey || index),
-        isRepost: false,
-        isQuote: Boolean(photo.isQuote),
-        source: "scroll",
-        filename: `x-media/${ownerHandle}_${ownerText}_${ownerTweetId}_${index + 1}.${getPhotoExtension(photo.url)}`
-      });
+      items.push(mediaEntryToItem(photo, index, "photo", context));
     });
     return { items, media, handle, safeName };
   }
@@ -779,7 +767,7 @@
     for (let i = 0; i < collected.items.length; i++) {
       const item = collected.items[i];
       btn.innerHTML = `${DOWNLOAD_SVG} ${i + 1}/${collected.items.length}…`;
-      const result = await downloadFile(item.url, item.filename);
+      const result = await downloadFile(item.url, item.filename, item);
       if (result?.success) success++;
     }
 

@@ -6,6 +6,9 @@ const vm = require("node:vm");
 
 function loadBackground(options = {}) {
   const stored = { ...(options.stored || {}) };
+  // chrome.storage.sync — output settings written by the Side Panel settings
+  // card (rawMasterFolder / nameTemplate / outputFormat).
+  const syncStored = { ...(options.syncStored || {}) };
   const downloadChangedListeners = [];
   const startupListeners = [];
   const installedListeners = [];
@@ -15,10 +18,20 @@ function loadBackground(options = {}) {
     TextEncoder,
     URL,
     URLSearchParams,
+    btoa: (value) => Buffer.from(value, "binary").toString("base64"),
+    atob: (value) => Buffer.from(value, "base64").toString("binary"),
     clearTimeout,
     console,
     fetch: options.fetch || (async () => { throw new Error("Unexpected network request in unit test"); }),
-    importScripts: () => {},
+    // The worker really loads lib/naming.js, lib/zipWriter.js and
+    // lib/pdfBuilder.js through importScripts — run the actual files in the
+    // VM context so tests exercise the shipped naming/archive engine.
+    importScripts: (...files) => {
+      for (const file of files) {
+        const libSource = fs.readFileSync(path.join(__dirname, "..", "extension", file), "utf8");
+        vm.runInContext(libSource, context, { filename: file });
+      }
+    },
     setTimeout,
     chrome: {
       cookies: {
@@ -30,18 +43,32 @@ function loadBackground(options = {}) {
         search: options.downloadsSearch || (async () => []),
         onChanged: { addListener: (listener) => downloadChangedListeners.push(listener) }
       },
+      // chrome.offscreen stays absent by default (like the test VM has no
+      // DOM): archive jobs then take the worker data:-URL fallback, which is
+      // exactly the offline-testable path. Pass options.offscreen to fake it.
+      ...(options.offscreen ? { offscreen: options.offscreen } : {}),
       runtime: {
         lastError: null,
         onInstalled: { addListener: (listener) => installedListeners.push(listener) },
         onMessage: { addListener: () => {} },
         onStartup: { addListener: (listener) => startupListeners.push(listener) },
-        sendMessage: async () => {}
+        sendMessage: options.runtimeSendMessage || (async () => {})
       },
       scripting: { executeScript: async () => [] },
       storage: {
         local: {
           get: async (key) => ({ [key]: stored[key] }),
           set: async (values) => { Object.assign(stored, values); }
+        },
+        sync: {
+          get: (defaults, callback) => {
+            const out = defaults && typeof defaults === "object" ? { ...defaults } : {};
+            for (const key of Object.keys(out)) {
+              if (key in syncStored) out[key] = syncStored[key];
+            }
+            callback(out);
+          },
+          set: async (values) => { Object.assign(syncStored, values); }
         }
       },
       tabs: { query: options.tabsQuery || (async () => []) }
