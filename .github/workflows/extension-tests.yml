@@ -1,0 +1,45 @@
+name: extension-tests
+
+# Offline verification only. GitHub-hosted runners CANNOT run real-browser
+# MV3 extension tests (Chrome DevTools Runtime.enable timeouts / Brave
+# SIGTRAP — 100% failure rate where tried in the sister repo nh-dw-2.0), so
+# this workflow sticks to what is reliable headless: syntax checks, the
+# fixture/unit suites, and the window-less VM download-pipeline suites.
+# Real-browser verification stays a local manual step — see
+# docs/SESSION_HANDOFF.md §5.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'extension/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - '.github/workflows/extension-tests.yml'
+  pull_request:
+    paths:
+      - 'extension/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - '.github/workflows/extension-tests.yml'
+
+jobs:
+  offline:
+    name: Offline suites (syntax + fixtures + window-less VM pipelines)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntax check every shipped script
+        run: |
+          for f in extension/*.js extension/lib/*.js; do
+            node --check "$f"
+          done
+      - name: Unit + pipeline suites (node --test)
+        run: node --test tests/*.test.js
+      - name: Release zip packages cleanly
+        run: |
+          sudo apt-get install -y zip >/dev/null 2>&1 || true
+          scripts/package-release.sh ci
