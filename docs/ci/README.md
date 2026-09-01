@@ -1,9 +1,12 @@
 # CI workflow (manual install required)
 
-`extension-tests.yml` is the offline CI workflow for this repo. Arena's
-GitHub App lacks the `workflows` OAuth scope, so it CANNOT push files under
-`.github/workflows/` — the branch push is rejected outright. Install it via
-the GitHub web UI instead:
+`extension-tests.yml` is the offline CI workflow for this repo.
+**STATUS: installed** — the user committed it as
+`.github/workflows/extension-tests.yml` via the GitHub web UI on 2026-09-01
+(byte-identical to the copy in this folder) and it runs green. Arena's
+GitHub App lacks the `workflows` OAuth scope, so agent sessions CANNOT push
+changes under `.github/workflows/` — any future edit must again go through
+the web UI:
 
 1. Open the repo on github.com → **Add file → Create new file**.
 2. Name it exactly: `.github/workflows/extension-tests.yml`

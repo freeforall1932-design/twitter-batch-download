@@ -2,6 +2,82 @@
 
 Chronological implementation record for X Media Downloader.
 
+## 2026-09-01 — Media-kind upgrade: GIF stays a GIF, quality guarantees, archive rules + warnings — v3.6
+
+**Branch:** `arena/01a05aab-twitter-batch-download` (same PR as v3.5) ·
+**Session input:** review the v3.5 diff for missing/misaligned logic, then:
+photos at highest quality, GIFs saved as GIFs (not MP4), videos at highest
+quality; multi-GIF posts archive like photo posts but ZIP/CBZ only (never
+PDF) and optional; GIF+photo mixes default to ZIP/CBZ; multi-video posts
+ZIP/CBZ only and optional; warn when zipping video posts or mixed-media
+posts; then clean up leftover code and keep the directory purpose-separated.
+
+### Review findings fixed
+
+- `normalizePhotoUrl` only added `name=orig` when no `name` param existed —
+  a pre-sized GraphQL variant (`name=small`) would have downloaded small.
+  Now forces `orig` on every source, matching the DOM path in `content.js`.
+- GIF identity was lost end to end: `animated_gif` collapsed into
+  `type:"video"` and saved as `.mp4`. Items now carry `isGif` (type stays
+  `"video"` so the photo/video capture filter keeps working); the Side Panel
+  shows a `gif` badge.
+- `content.js` had two ~55-line near-identical GraphQL-entry→item builders
+  (scroll resolver vs action-bar buttons). Consolidated into one
+  `mediaEntryToItem()` so the paths can never drift again.
+- Offscreen messaging generalized into `sendOffscreenRequest()` (one timeout/
+  lastError wrapper for archive + GIF jobs); output settings normalized
+  centrally (`normalizeOutputSettings`) so corrupt stored values can't flip
+  toggles.
+
+### GIF → GIF (new pipeline)
+
+- New `lib/gifEncoder.js`: dependency-free streaming GIF89a encoder (median-
+  cut 256-color palette from frame 1, nearest-color cache, spec-timed LZW,
+  NETSCAPE loop-forever). Verified in tests by a spec-faithful decoder —
+  pixels round-trip, including a noisy frame that forces LZW code-width
+  growth.
+- `offscreen.js` decodes X's silent MP4 clip through `<video>` + canvas
+  (12 fps, bounded ≤30 s / ≤360 frames / ≤720 px / ≤40 MB) and feeds the
+  encoder frame-by-frame (one RGBA buffer alive at a time). Raw-mode GIFs
+  return as base64 and download via `data:` URL — which, unlike the anchor,
+  honors the master-folder subpath. Every failure (no offscreen API,
+  timeout, oversized result) degrades to the original MP4, never a dead item.
+- New sync setting `gifOutput` (`"gif"` default | `"mp4"`).
+
+### Archive kind rules + toggles + warnings
+
+- `archivedKinds()`: photos always archive; GIFs when `archiveGifs` (default
+  ON); videos only when `archiveVideos` (default OFF). Non-archived kinds
+  stay in the raw pass.
+- `effectiveGroupFormat()`: PDF is photos-only — a post whose archive holds
+  a GIF or video degrades PDF→ZIP for that post; ZIP/CBZ allowed. Entries
+  are named per kind (`002.gif`, `003.mp4`); a failed in-archive GIF
+  conversion renames its entry back to `.mp4` so archives are never
+  mislabeled. The worker fallback (no DOM) embeds GIF sources as `.mp4`.
+- `buildRunNotices()` at `queueStart` → `state.notices`, rendered as an
+  amber alert box in the dock: video posts being packed, mixed-media posts
+  (photos+GIFs+videos in one post), and PDF→ZIP fallbacks are announced
+  before the first byte downloads. Raw runs never warn.
+
+### Plumbing
+
+- Manifest 3.5 → 3.6. Queue state persists `notices`; `publicQueueState`
+  exposes them. `downloadFile` (single-post button) runs through the same
+  `prepareRawDownload()` as the queue, so one-off GIF downloads convert too.
+- Side Panel Output settings: GIF format select + two archive-inclusion
+  checkboxes (written ONLY there, relayed as a settings bag everywhere,
+  offscreen included). Dock picker renamed "Save posts as".
+
+### Validation
+
+- 106 offline tests green (`node --test tests/*.test.js`): +5 GIF encoder
+  round-trip, +13 media-kind suites (quality forcing, gif identity, kind
+  rules, warnings, mixed-post pipelines, offscreen GIF relay, toggles), all
+  93 previous tests unchanged.
+- `scripts/package-release.sh` smoke: v3.6 zip carries `lib/gifEncoder.js`
+  + updated offscreen files. Not yet live-verified on x.com (WORKLIST P0
+  item 14 now covers v3.6).
+
 ## 2026-09-01 — Media output upgrade: master folder, ZIP/CBZ/PDF per post, naming checkboxes — v3.5
 
 **Branch:** `arena/01a05aab-twitter-batch-download` · **Session input:** port
