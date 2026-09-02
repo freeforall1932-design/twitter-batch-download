@@ -82,7 +82,8 @@ Open questions to ask the user if they are available:
 - Extension directory: `extension/` (the **Load unpacked** target)
 - Working branch for the last Arena session: `arena/01a05aab-twitter-batch-download`; this session's branch is `arena/01a05f98-twitter-batch-download`
 - Recent history:
-  - **(CI follow-up, this branch, no version bump)** — `actions/checkout` +
+  - **(CI follow-up — merged to `main` as PR #12, merge commit `15b72a7`,
+    no version bump)** — `actions/checkout` +
     `actions/setup-node` `@v4` → `@v5` in both CI copies (clears the node20
     deprecation warning), `scripts/package-release.sh` SIGPIPE fix (`sed`
     instead of `head`, so it stops exiting 141), glob-safe CI artifact
@@ -505,7 +506,14 @@ pipelines; `gif-encoder.test.js` round-trips encoded GIFs through a real
 decoder. **Extend these rather than testing by hand** — every future capture
 or output bug should land as a failing test first.
 
-CI is LIVE: `.github/workflows/extension-tests.yml` is installed and runs
+CI is LIVE and on the v5 actions: the 2026-09-02 follow-up bumped
+`checkout`/`setup-node` `@v4`→`@v5` and was merged to `main` via PR #12, so
+`main`'s runs now finish with **zero annotations** (the "Node.js 20 is
+deprecated … actions/checkout@v4, actions/setup-node@v4" warning that used to
+appear on every run is gone — verified by comparing the check-run annotations
+of the last v4 run against the first v5 run).
+
+`.github/workflows/extension-tests.yml` is installed and runs
 green on GitHub (installed via the web UI on 2026-09-01 — the Arena GitHub
 App has historically lacked the `workflows` scope to push it, so if a push
 touching `.github/workflows/` is rejected, keep `docs/ci/extension-tests.yml`

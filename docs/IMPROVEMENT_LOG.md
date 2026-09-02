@@ -4,7 +4,8 @@ Chronological implementation record for X Media Downloader.
 
 ## 2026-09-02 — CI follow-up: actions v4→v5, two packaging exit-code bugs, release-zip verification
 
-**Branch:** `arena/01a06027-twitter-batch-download` · **Session input:** follow-up to
+**Branch:** `arena/01a06027-twitter-batch-download` · **Merged to `main`:** PR
+#12, merge commit `15b72a7`, 2026-09-02 · **Session input:** follow-up to
 the v3.6.1 run. GitHub logged a deprecation **warning** (not a failure) because
 `actions/checkout@v4` / `actions/setup-node@v4` declare the `node20` runtime and
 runner images now force node20 actions onto node24. Bump both to `@v5` in the two
