@@ -60,6 +60,11 @@
     for (const segment of segments) {
       let cleaned = segment
         .replace(/[\x00-\x1f\x7f]/g, "")
+        // Invisible bidi/format control characters scramble mixed-script and
+        // RTL folder names in file explorers (and in Chrome's own filename
+        // handling). Strip them so a post with bidi controls does not yield a
+        // "garbled" name. Keeps visible non-ASCII (CJK, emoji, Arabic, …).
+        .replace(/[\u200b\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "")
         .replace(/[\\:*?"<>|]/g, "")
         .replace(/^\.+/, "")
         .replace(/[. ]+$/g, "");
@@ -192,9 +197,14 @@
   function makePostBaseName(template, fields) {
     const source = fields || {};
     let base = renderNameTemplate(template, source).replace(/[/\\]+/g, " ");
-    base = sanitizeArtifactFilename(base, "").split("/").join(" ").trim();
+    // sanitizeArtifactFilename strips reserved characters, so a token whose
+    // only content was such a character (e.g. text "???") would leave an empty
+    // slot and a dangling " - " in the middle ("nasa -  - 111"). Collapse the
+    // separators AFTER sanitizing so those gaps close up. This runs BEFORE the
+    // reserved-name prefix is added, so a "_CON" prefix is never stripped.
+    base = collapseSeparators(sanitizeArtifactFilename(base, "").split("/").join(" "));
     if (base === "" || base === "download") {
-      base = String(source.id || "").trim();
+      base = collapseSeparators(String(source.id || "").trim());
     }
     if (base === "") base = "post";
     const stem = base.includes(".") ? base.slice(0, base.indexOf(".")) : base;

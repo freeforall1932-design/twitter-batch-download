@@ -1,16 +1,26 @@
 # Development Worklist
 
-_Last audited: 2026-09-02 (v3.6.1 review pass: shared `lib/archive.js` engine
-replaces duplicated worker/offscreen archive code, Stop scan cancels the
-429/503 countdown, storage save chains survive a failed write, queueStart
-gives failed items a fresh attempt budget, dead state removed, CI YAML
-cleaned in both copies. **Same-day CI follow-up:** `actions/checkout` /
-`actions/setup-node` bumped `@v4`→`@v5` in both copies (clears the node20
-deprecation warning), `scripts/package-release.sh` no longer exits 141 on a
-SIGPIPE, CI's packaging assertion made glob-safe, and the v3.6.1 release zip
-offline-verified (browser load-unpacked click still pending). Previous audit
-2026-09-01: v3.6 media-kind upgrade; v3.5 master folder + per-post archives +
-naming; 2026-08-26 round-3 live pass + v3.4 quoted-post capture.)_
+_Last audited: 2026-09-02 (this session = v3.6.3 naming-degarble + perf queue:
+`sanitizeArtifactFilename` strips invisible bidi/format controls, the
+`buildFallbackFilenames` last resort is no longer random
+`media_<timestamp>` text, `queueChanged` broadcasts are throttled, one
+`resolveTweetMedia` media resolver for both extractors, and the `injected.js`
+replay buffer is bounded + marker-walked. Earlier v3.6.2 naming +
+archive-warning pass: `makePostBaseName`
+collapses separators after sanitizing so a stripped token no longer leaves a
+double empty " - " gap in the post folder, and `buildRunNotices` counts
+"mixed media" only among kinds actually packed into the archive. Previous v3.6.1
+review pass: shared `lib/archive.js` engine replaces duplicated worker/offscreen
+archive code, Stop scan cancels the 429/503 countdown, storage save chains
+survive a failed write, queueStart gives failed items a fresh attempt budget,
+dead state removed, CI YAML cleaned in both copies. **Same-day CI follow-up:**
+`actions/checkout` / `actions/setup-node` bumped `@v4`→`@v5` in both copies
+(clears the node20 deprecation warning), `scripts/package-release.sh` no longer
+exits 141 on a SIGPIPE, CI's packaging assertion made glob-safe, and the v3.6.1
+release zip offline-verified (browser load-unpacked click still pending).
+Previous audit 2026-09-01: v3.6 media-kind upgrade; v3.5 master folder +
+per-post archives + naming; 2026-08-26 round-3 live pass + v3.4 quoted-post
+capture.)_
 
 ## Product target
 
@@ -32,8 +42,8 @@ No manual API key / password / cookie paste. Self-hosted against the signed-in X
 | Master folder for raw downloads | **Done (v3.5), needs live spot-check** | `rawMasterFolder` (sync, default `XMedia`): `Downloads/XMedia/<post name>/001.jpg…`. Empty string = off → legacy flat `x-media/` names byte-for-byte. Per-segment sanitizing via `sanitizeArtifactFilename` (nh-dw port). |
 | Per-post ZIP/CBZ/PDF output | **Done (v3.5, kind rules v3.6), needs live spot-check** | One archive per post (≤4 items), assembled in the offscreen document, saved via `<a download>` anchor (blob-filename quirk); worker data-URL fallback. v3.6: PDF is photos-only (GIF/video posts degrade PDF→ZIP); GIFs archive by default, videos opt-in; warnings at queueStart. NOT the removed whole-batch ZIP. |
 | GIF → real .gif + quality guarantees | **Done (v3.6), needs live spot-check** | `normalizePhotoUrl` forces `name=orig` on every source; videos keep highest-bitrate MP4; GIFs convert MP4→GIF89a in the offscreen document (`lib/gifEncoder.js`, bounded 30 s/360 frames/720 px) with MP4 fallback on any failure; `gifOutput` toggle. |
-| Naming-scheme checkboxes | **Done (v3.5)** | `nameTemplate` (sync, default `{user} - {text} - {id}`), checkbox UI + live preview + manual input for custom templates; id fallback, reserved-name prefix. |
-| Offline CI | **Done (v3.5), hardened (v3.6.1), actions bumped (2026-09-02 follow-up)** | `.github/workflows/extension-tests.yml` + byte-identical `docs/ci/extension-tests.yml` (see `docs/ci/README.md`): read-only permissions, concurrency cancel, timeout, glob safe syntax check, packaging artifact assertion; syntax + `node --test` (116) + packaging smoke. Actions on `@v5` — v4 declared the `node20` runtime that runner images now force onto node24 with a warning; v5+ declare `node24` (upstream is at v7, see IMPROVEMENT_LOG). Both the packaging script and its CI assertion were made exit-code-honest this pass (see next row). No real-browser CI — GitHub runners cannot drive MV3 (verified in nh-dw-2.0). |
+| Naming-scheme checkboxes | **Done (v3.5), hardening (v3.6.2)** | `nameTemplate` (sync, default `{user} - {text} - {id}`), checkbox UI + live preview + manual input for custom templates; id fallback, reserved-name prefix. v3.6.2: `makePostBaseName` collapses separators after sanitizing so a token whose content is stripped (e.g. text "???") can't leave `nasa -  - 111`. |
+| Offline CI | **Done (v3.5), hardened (v3.6.1), actions bumped (2026-09-02 follow-up)** | `.github/workflows/extension-tests.yml` + byte-identical `docs/ci/extension-tests.yml` (see `docs/ci/README.md`): read-only permissions, concurrency cancel, timeout, glob safe syntax check, packaging artifact assertion; syntax + `node --test` (125 as of the v3.6.3 naming-degarble queue: Tasks 1–5 landed 5 new regression tests + 1 review-pass photo-extension test) + packaging smoke. Actions on `@v5` — v4 declared the `node20` runtime that runner images now force onto node24 with a warning; v5+ declare `node24` (upstream is at v7, see IMPROVEMENT_LOG). Both the packaging script and its CI assertion were made exit-code-honest this pass (see next row). No real-browser CI — GitHub runners cannot drive MV3 (verified in nh-dw-2.0). |
 | Per-tweet action bar | Expanded (Rank A) | `Download` **and** `Add to queue` on every media post, plus toasts. Reimplemented locally, not copied. |
 | Popup DOM auto-scroll bulk | **Removed** | The popup's competing scroll+download loop is deleted; the popup is now an Open-Side-Panel launcher with a live capture status line. |
 | ZIP export (whole-batch) | **Removed — stays removed** | The multi-GB whole-batch archive path stays deleted. v3.5's per-post archive (≤4 images, offscreen-assembled) is a different, explicitly requested feature and must not grow into batch archiving. |
@@ -127,8 +137,8 @@ New this session (2026-08-25): restructure so the extension can be **Load unpack
 - [x] Flattened scrapyard to `reference/scrapyard/{rank-s-plucker-xbd, rank-a-video-downloader, rank-b-x-exporter}` (rank A/B were nested inside rank S; rank A extension was double-nested). Context notes + install instructions preserved per rank.
 - [x] Added `scripts/package-release.sh` → `releases/x-media-downloader-v<version>.zip` (manifest at zip root, optional date tag, Windows fallback documented); `releases/*.zip` gitignored.
 - [x] **Try it out:** loaded unpacked and live-tested across rounds 1–3. Round 3 (2026-08-26, v3.3) passed the core checklist — user report: all functions work, no double entries, UI/UX already decent for deployment. Only the v3.4 quote-case spot-check (item 12 below) remains.
-- [~] Cut the first release zip (`scripts/package-release.sh`) and confirm it loads from the unzipped folder — **half done 2026-09-02**: `releases/x-media-downloader-v3.6.1.zip` is cut and offline-verified — `manifest.json` at the zip root (no wrapper folder), `diff -r` byte-identical to `extension/`, and all 23 manifest-declared *and* runtime-resolved resources present (`lib/*`, `offscreen.*`, every `importScripts`/`<script src>` target). **Remaining:** the one click only a browser can make — Load unpacked on the unzipped folder — plus (optionally) starting `CHANGELOG.md`.
-- [x] Bump `extension/manifest.json` version when shipping the next user-visible change — now at **3.6.1** (v3.4 quoted-media capture, v3.5 output upgrade, v3.6 media kinds, v3.6.1 Stop/retry fixes are all user-visible; the 2026-09-02 CI pass changed no `extension/` file, so it did not bump the version). Still open: starting a `CHANGELOG.md` per release.
+- [~] Cut the first release zip (`scripts/package-release.sh`) and confirm it loads from the unzipped folder — **half done 2026-09-02**: `releases/x-media-downloader-v3.6.2.zip` is cut and offline-verified — `manifest.json` at the zip root (no wrapper folder), `diff -r` byte-identical to `extension/`, and all manifest-declared *and* runtime-resolved resources present (`lib/*`, `offscreen.*`, every `importScripts`/`<script src>` target). **Remaining:** the one click only a browser can make — Load unpacked on the unzipped folder — plus (optionally) starting `CHANGELOG.md`.
+- [x] Bump `extension/manifest.json` version when shipping the next user-visible change — now at **3.6.3** (v3.4 quoted-media capture, v3.5 output upgrade, v3.6 media kinds, v3.6.1 Stop/retry fixes, v3.6.2 naming/`{name}`/archive-warning fixes, and v3.6.3 bidi-strip + deterministic-fallback + `queueChanged` throttle + one media resolver + replay bound are all user-visible; the 2026-09-02 CI pass changed no `extension/` file, so it did not bump the version). Still open: starting a `CHANGELOG.md` per release.
 
 ## P0 — remaining (live-X, round 3)
 
@@ -179,6 +189,101 @@ never executed in a browser) and **item 13** (live fixtures).
       videos in post archives" + zipping a video post shows the size warning
       and produces `NNN.mp4` entries; a photo already saved at `name=small`
       re-downloads at `orig` resolution.
+15. **Open (v3.6.2)** — the display name (`{name}`) token and the naming fixes
+    need one signed-in browser pass:
+    - Set the name template to `{user} - {name} - {id}`, then on a scroll
+      capture (DOM path) list a photo post: the example preview and the
+      produced `<post name>` folder must contain the display name, AND it must
+      match the name produced for the *same* post discovered through Remote
+      fetch (GraphQL path). This is what the v3.6.2 `content.js` fix targets.
+    - Confirm `[data-testid="User-Name"]` still holds the display name as
+      `span:first-child` / the first non-`@` `<span>` (cross-checked against
+      2026 X/DOM scrapers; verify live in the current DOM). If X has changed
+      the header, capture the new shape and update `getDisplayName`.
+    - Confirm a post with a text that sanitizes to nothing (e.g. `"???"`) now
+      names its folder `nasa - <id>` (no `-  -` gap), and that a photo-only
+      ZIP run never shows the "mix" warning while a photo+GIF run still does.
+
+**Live GraphQL reference needed for item 15 / 14 (a sanitized capture, no
+credentials):** the display-name field on the GraphQL path is
+`core.user_results.result.legacy.name` (already used by `background.js` for
+`displayName`). A DOM snapshot of one `article[data-testid="tweet"]` from the
+same post is what confirms the `[data-testid="User-Name"]` `span` maps to the
+same value — item 15 needs both a real DOM capture and the matching
+`UserMedia` / `TweetResultByRestId` response for a handle like `@nasa`.
+
+## Active task queue (v3.6.3 — naming degarble + perf; worked one by one)
+
+Session input (2026-09-02): the pipeline was already live-tested OK before the
+naming feature; the naming feature itself is what produced **"garbled random
+text"** in saved names. Work the tasks below one at a time, then update this
+list (tick `[x]`) AND the three docs before ending the session so the next one
+picks up here.
+
+1. [x] **Naming: strip invisible bidi/format control characters.** `???`
+      `sanitizeArtifactFilename` now removes invisible bidi/format controls
+      (`\u200b\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff`) so mixed-script /
+      RTL post text no longer scrambles folder names. Keeps visible non-ASCII
+      (CJK, emoji, Arabic) so legitimate scripts are preserved.
+2. [x] **Naming: kill the random-text fallback.** `buildFallbackFilenames`
+      no longer ends in `x-media/media_<random base36>.<ext>`. The last rung is
+      now deterministic `x-media/download_<stem>.<ext>`; uniqueness comes from
+      `conflictAction: uniquify` (unchanged) rather than a timestamp. The ladder
+      is run-to-run deterministic and can never produce "garbled random text".
+      Regression assertion added (no `media_[a-z0-9]{5,}` stem + determinism).
+3. [x] **Perf: throttle `queueChanged` broadcasts.** Added `broadcastQueueChanged()`
+      (leading-edge emit + one trailing emit per 250 ms) and routed both
+      `saveQueueState()` and `saveDiscoveryState()` through it, so a download's
+      `chrome.downloads.onChanged` byte-delta ticks no longer flood
+      `sidepanel.refresh()` with a `queueChanged` message per tick. Regression
+      test: a 20-save burst coalesces to ≤4 broadcasts.
+4. [x] **Drift risk: consolidate the two media extractors in `background.js`.**
+      Added a single `resolveTweetMedia(item)` for URL selection (orig photo,
+      highest-bitrate MP4), GIF detection, and target extension; both
+      `getTweetMedia`'s `collectTweetMediaEntries` and `mediaItemsFromTweetObject`
+      now call it. The two paths can no longer drift on media rules. Regression
+      tests pin photo/video/GIF resolution and that both paths agree on the
+      same CDN URL.
+5. [x] **Perf: bound the `injected.js` replay buffer + cheap media marker.**
+      `emitGraphqlResponse` now runs an early-exit `containsMediaMarker` object
+      walk BEFORE any `JSON.stringify`, so non-media GraphQL payloads (metrics
+      polls, profile metadata) skip serialization entirely. The replay buffer is
+      bounded by BOTH count (40) and total serialized bytes (~8 MB) via
+      `replayBytes` in `bufferResponse`. New `tests/injected.test.js` pins the
+      marker walk and the 40-entry count cap.
+6. [ ] **Hold (do not implement yet, decide after live jank):** `content.js`
+      re-queries all articles + recomputes `getTweetInfo` every 2.5s on top of
+      the MutationObserver. Only tune if a big-queue session shows real jank.
+7. [ ] **Hold:** don't split `background.js` (2.3k lines) — MV3 single-worker +
+      no-build guardrail makes the split not worth the importScripts/test-loader
+      risk.
+
+**Queue status (this session, 2026-09-02):** Tasks **1–5 are DONE** and ticked
+above — the "garbled random text" root causes are fixed (invisible bidi/format
+control strip in `sanitizeArtifactFilename`, and the deterministic fallback in
+`buildFallbackFilenames`) plus three perf/consistency wins (throttled
+`queueChanged`, one `resolveTweetMedia` media resolver, bounded `injected.js`
+replay + marker walk). Tasks **6–7 stay holds** — do not implement them until a
+big-queue session provides live jank evidence, or a decision to split
+`background.js` regardless. Full suite: **125 pass / 0 fail**. Manifest bumped
+**3.6.2 → 3.6.3** and `releases/x-media-downloader-v3.6.3.zip` was cut +
+offline-verified (manifest at root, byte-identical to `extension/`).
+
+**Diff review pass (added after the 1–5 queue):** re-reviewed the session's
+diff for remaining missing logic / misalignment / bugs and fixed one real one —
+`resolveTweetMedia`'s photo-extension fallback returned a garbage extension
+(`commediaabc`) for a bare CDN URL with no `format` and no file extension,
+while the DOM path (`content.js getPhotoExtension`) safely returned `jpg`, so
+the two extractors could name the same photo differently. Added
+`photoExtensionFromUrl()` mirroring `getPhotoExtension` (format → jpg/png/webp
+→ jpg default) and +1 regression. **Note:** this touched `extension/background.js`
+after the zip was cut, so re-run `scripts/package-release.sh` before shipping.
+
+**Live data still genuinely useful (not required for the above):** one
+signed-in run of the v3.5–v3.6.2 output + naming path (WORKLIST P0 items 12 /
+14 / 15), and one sanitized `UserMedia` request+response to lock the
+`features`/`fieldToggles`/`variables` and confirm
+`core.user_results.result.legacy.name` is the live display-name field.
 
 ## P1 — inclusion and review UX
 
@@ -226,7 +331,7 @@ never executed in a browser) and **item 13** (live fixtures).
 - Reposts off/on correct.
 - Protected / NSFW / logged-out / rate-limit messages specific.
 - Stop discovery; stop downloads; Side Panel reload retains state.
-- **116** local Node tests still green after cleanup (`node --test tests/*.test.js`: background + content + naming + zip-writer + pdf-builder + gif-encoder + archive-lib + downloader + media-kinds suites).
+- **125** local Node tests still green after cleanup (`node --test tests/*.test.js`: background + content + naming + zip-writer + pdf-builder + gif-encoder + archive-lib + downloader + media-kinds + injected suites).
 - Both CI copies parse as YAML and stay byte-identical (`diff .github/workflows/extension-tests.yml docs/ci/extension-tests.yml`); a workflow edit must be re-applied to BOTH.
 - `scripts/package-release.sh` exits **0** (was a deterministic 141 SIGPIPE) and the CI packaging step passes verbatim even with more than one zip in `releases/`.
 - The release zip unzips to a structurally loadable folder: manifest at root, contents identical to `extension/`, every manifest + runtime reference resolvable.

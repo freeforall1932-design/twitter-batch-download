@@ -45,6 +45,13 @@ test("sanitizeArtifactFilename keeps structure, cleans per segment", () => {
   // Nothing usable left → fallback stem, then "download".
   assert.equal(naming.sanitizeArtifactFilename("???", "Backup"), "Backup");
   assert.equal(naming.sanitizeArtifactFilename(":::", "***"), "download");
+  // Invisible bidi/format control characters are stripped so mixed-script and
+  // RTL post text cannot scramble the folder name, while visible non-ASCII
+  // (CJK / emoji / Arabic) survives. Regression for the naming degarble pass.
+  assert.equal(naming.sanitizeArtifactFilename("nasa - M\u202Eabc\u202C [test] - 123/001.jpg", "x"), "nasa - Mabc [test] - 123/001.jpg");
+  assert.equal(naming.sanitizeArtifactFilename("\u200Bok\u200E\u202E\u2066\u2069\uFEFFname", "x"), "okname");
+  assert.equal(naming.sanitizeArtifactFilename("今天天气很好 这是一个测试帖子", "x"), "今天天气很好 这是一个测试帖子");
+  assert.equal(naming.sanitizeArtifactFilename("🎉🎉🎉 big win", "x"), "🎉🎉🎉 big win");
 });
 
 test("template helpers: token detection, custom detection, rebuild order", () => {
@@ -106,6 +113,17 @@ test("makePostBaseName: single segment, reserved names, id fallback", () => {
   assert.equal(naming.makePostBaseName("{text}", { text: "???", id: "123" }), "123");
   assert.equal(naming.makePostBaseName("", { id: "123" }), "123");
   assert.equal(naming.makePostBaseName("", {}), "post");
+  // A token whose only content gets stripped by sanitizing still collapses the
+  // leftover separators so the folder name never shows a double empty gap
+  // ("nasa -  - 111" → "nasa - 111"). Regression for the naming pass.
+  assert.equal(
+    naming.makePostBaseName(naming.DEFAULT_NAME_TEMPLATE, { user: "nasa", text: "???", id: "111" }),
+    "nasa - 111"
+  );
+  assert.equal(
+    naming.buildRawMediaPath({}, { user: "nasa", text: "???", id: "111" }, 0, "jpg", "legacy"),
+    "XMedia/nasa - 111/001.jpg"
+  );
 });
 
 test("buildRawMediaPath: master folder on/off/nested/sanitized", () => {

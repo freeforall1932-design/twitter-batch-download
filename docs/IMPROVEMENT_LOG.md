@@ -2,6 +2,184 @@
 
 Chronological implementation record for X Media Downloader.
 
+## 2026-09-02 — Naming-degarble + perf queue — v3.6.3 (Tasks 1–5 of the live queue)
+
+**Branch:** `arena/01a06058-twitter-batch-download` · **Session input:** the user
+confirmed the v3.5–v3.6.2 pipeline was already live-tested OK **before** the
+naming feature landed; the naming feature itself produced the **"garbled random
+text"** seen in saved names. Instruction: put every task/suggestion on
+`docs/WORKLIST.md`'s new active queue and work them **one by one**, so the next
+session picks up where this one stops.
+
+### Root cause (two, both confirmed by reproduction)
+
+1. **`buildFallbackFilenames`'s last resort was literally random text.** When
+   Chrome rejects a naming path, the ladder ended in
+   `x-media/media_<Date.now().toString(36)>.<ext>` — the anonymous random
+   stem the user saw. Reproduced: `buildFallbackFilenames("XMedia/nasa - My
+   Post - 123/001.jpg")` → `…/x-media/media_mtjmkxme.jpg`.
+2. **Invisible Unicode bidi/format controls survived sanitization.** A folder
+   `"nasa - M\u202Eabc\u202C [test] - 123"` kept U+202E/U+202C (and similar)
+   through `sanitizeArtifactFilename`, which scrambled mixed-script/RTL names.
+
+### Fixed (Tasks 1–5), one at a time
+
+1. **Bidi/format-control strip (Task 1).** `sanitizeArtifactFilename` now
+   removes invisible bidi/format controls
+   (`\u200b\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff`) while keeping visible
+   non-ASCII (CJK/emoji/Arabic). +3 regression assertions in `tests/naming.test.js`.
+2. **Deterministic fallback (Task 2).** `buildFallbackFilenames` no longer emits
+   `media_<timestamp>`; the last rung is now `x-media/download_<stem>.<ext>`,
+   uniqueness handled by the unchanged `conflictAction: "uniquify"`. The ladder
+   is run-to-run deterministic and can never show random text. +1 regression in
+   `tests/background.test.js`.
+3. **Throttled `queueChanged` (Task 3).** New `broadcastQueueChanged()` (a
+   leading-edge emit plus one trailing emit per 250 ms) replaces the raw
+   `chrome.runtime.sendMessage({action:"queueChanged"})` in **both**
+   `saveQueueState()` and `saveDiscoveryState()`. A download's
+   `chrome.downloads.onChanged` byte-delta ticks used to broadcast per tick and
+   force a full `sidepanel.refresh()` each time. +1 regression (20-save burst
+   coalesces to ≤4 broadcasts).
+4. **Extractor consolidation (Task 4).** A single
+   `resolveTweetMedia(item)` now returns the CDN URL (photo forced to `orig`,
+   video to the highest-bitrate MP4), the media kind/extension, and the GIF
+   flag. **Both** `getTweetMedia`'s `collectTweetMediaEntries` and
+   `mediaItemsFromTweetObject` call it, so the single-post and timeline paths can
+   never drift on media rules. +2 regressions (resolution rules + path agreement).
+5. **Replay bound + cheap marker (Task 5).** `injected.js` now runs an
+   early-exit `containsMediaMarker` object walk **before** any
+   `JSON.stringify`, so non-media GraphQL payloads (metrics polls, profile
+   metadata) skip serialization entirely. The replay buffer is bounded by both
+   count (40) and total serialized bytes (~8 MB) via `replayBytes`. New
+   `tests/injected.test.js` (+2) pins both behaviors.
+
+### Review pass after the cut (Task 4 diff audit)
+
+The user asked to re-review the diff from this session for remaining missing
+logic / misaligned code / error bugs. Everything else in the diff checked out
+(buildFallbackFilenames dedupe, the queueChanged throttle, buildRunNotices
+archive-kind filter, injected.js byte budget + marker walk, naming.js bidi strip
++ separator collapse), but **one real bug and cross-path divergence** was found
+and fixed in the extractor consolidation:
+
+- **`resolveTweetMedia` produced a garbage photo extension for bare CDN URLs.**
+  The photo-extension fallback was
+  `url.match(/[?&]format=([^&]+)/)?.[1] || url.split("?")[0].split(".").pop() || "jpg"`.
+  For a URL with no `format` param and no file extension (e.g.
+  `https://pbs.example.com/media/abc?name=orig` or `…/abc`),
+  `url.split("?")[0].split(".").pop()` returned the **whole host path**, which
+  after the `[^a-z0-9]` strip became `commediaabc` — so discovery filenames
+  gained `….commediaabc`. Meanwhile the DOM path (`content.js
+  getPhotoExtension`) safely defaults to `jpg` for the same URL, so the two
+  extractors could name the same photo **differently** (the exact drift the
+  consolidation was meant to remove). Fixed by a dedicated
+  `photoExtensionFromUrl()` that mirrors `getPhotoExtension` exactly: explicit
+  `format` param wins (`jpeg → jpg`), then a known `png`/`webp` pathname
+  extension, then `jpg`. `resolveTweetMedia` now returns the same extension as
+  the DOM path for every URL shape. (Note the earlier `format === "jpeg" ? "jpg"`
+  mapping was *not* a bug — `extensionForItem` derives from the filename, and
+  the filename is built from `resolved.extension`, so both resolve to `jpg`.)
+  +1 regression in `tests/background.test.js` (`photo extension matches
+  content.js getPhotoExtension for bare CDN URLs`).
+
+### Validation
+
+- `node --test tests/*.test.js` — **125 pass / 0 fail** (was 124): +1
+  photo-extension consistency regression added during the review pass.
+- `node --check` clean on all `extension/*.js` and `extension/lib/*.js`.
+- Manifest **3.6.2 → 3.6.3** (Tasks 1–5 are the user-visible fixes: no more
+  garbled names, quieter Side Panel during downloads, one media resolver,
+  bounded replay). `scripts/package-release.sh` →
+  `releases/x-media-downloader-v3.6.3.zip`, offline-verified: `manifest.json`
+  at the zip root, `diff -r` byte-identical to `extension/`, full resource set
+  present. Tasks 6–7 remain holds pending live-jank evidence. (Note: the review
+  pass edited `extension/background.js` *after* the zip was cut; re-run
+  `scripts/package-release.sh` before shipping to keep the release in sync.)
+
+### Still open (from WORKLIST queue)
+
+- Tasks 6–7 are **holds** to decide only after a big-queue session shows real
+  jank (`content.js` 2.5s re-scan sweep; `background.js` 2.3k-line split).
+- Live-X still needed: one signed-in run of the v3.5–v3.6.2 output + naming path
+  (WORKLIST P0 12/14/15) and a sanitized `UserMedia` request+response to confirm
+  `core.user_results.result.legacy.name` is the live display-name field.
+
+## 2026-09-02 — Naming-engine + archive-warning review pass — v3.6.2
+
+**Branch:** `arena/01a06058-twitter-batch-download` · **Session input:** review the
+whole codebase for missing logic / sloppy code, with the naming system the
+primary suspect (the sister repo's rule-34 downloader found bugs after its own
+naming feature landed). Read the three docs in `docs/`, walked the naming engine
+and every consumer (`background.js`, `offscreen.js`, `sidepanel.js`, `content.js`,
+`injected.js`, `lib/`), and ran the offline suites before changing anything.
+
+### Bugs found and fixed
+
+1. **Post-folder names could carry a double empty " - " gap.** When a token's
+   only content was characters that `sanitizeArtifactFilename` strips (e.g. a
+   post whose text is `"???"`), `renderNameTemplate` collapsed separators for
+   *empty fields* but the sanitize step ran *after* that collapse. So
+   `{user} - {text} - {id}` rendered `nasa - ??? - 111`, sanitize removed the
+   `?`, and the folder became `XMedia/nasa -  - 111/001.jpg`. Real path seen in
+   tests. Fixed in `makePostBaseName` by collapsing separators again **after**
+   sanitizing (and before the reserved-name prefix is applied, so a `_CON`
+   prefix is never stripped). Now `nasa - 111`.
+2. **`buildRunNotices` raised a false "mixed-media" warning.** A post carrying,
+   say, photos + a video while "Include videos in archives" is OFF produces a
+   clean photo-only ZIP plus a separate raw MP4 — that is *not* a mixed single
+   archive. The old code counted any post whose media kinds totaled >1, so a
+   photo+video post warned even when the video was never packed. `buildRunNotices`
+   now counts "mixed" only among kinds actually in the archive
+   (`archivedKindsForPost`); photo-only ZIPs and photo+raw-video runs stay
+   silent, while photo+GIF (GIFs archive by default) still correctly warns.
+   Also tightened the PDF→ZIP fallback count to the same archived-kind set.
+3. **DOM-scanned photos dropped the display name (`{name}` token) entirely.**
+   This was the inconsistency the first review pass left as a known limitation.
+   GraphQL-captured items carry `displayName`; DOM-scanned photos hardcoded
+   `displayName: ""`, so a template using `{name}` named the same post
+   differently depending on how it was captured. `content.js` now reads the
+   display name from the same header block as the handle
+   (`[data-testid="User-Name"]`, first `<span>` that is not `@handle` — the
+   selector several 2026 X/DOM scrapers use) and `makeDomQueueItems` sets it on
+   every DOM item. Falls back to `""` (the template renders nothing) when the
+   block is absent, so capture can never throw on an unknown header shape.
+
+### Also reviewed (not changed)
+
+- **Flat-layout (`master == ""`) legacy names differ by source.** Discovery
+  filenames keep the `@` (`x-media/@nasa_…`), content-script filenames drop it
+  (`x-media/nasa_…`). Irrelevant in practice because mediaKey dedupe means only
+  one source row survives, and it only shows when the master folder is emptied.
+- **Master folder isn't reserved-name guarded.** Setting `rawMasterFolder` to
+  `CON`/`NUL` would hit the invalid-filename fallback ladder rather than save
+  under a `_CON` folder. Niche (a user would have to type a device name) and
+  safely degraded by the ladder, so left as a note.
+- **Side Panel archive preview prepends `Downloads/`.** Archives actually land at
+  the download root (the anchor can't carry folders); the preview example is
+  cosmetic and was not touched.
+
+### Validation
+
+- `node --test tests/*.test.js` — **119 pass / 0 fail** (was 116): +1 naming
+  regression (double-gap collapse for `???` text), +1 `buildRunNotices`
+  regression (photo+raw-video does not warn; photo+GIF and opt-in video do),
+  +2 content regressions (DOM-scanned photo carries the display name; a missing
+  `User-Name` header falls back to `""`).
+- `node --check` clean on all 11 shipped scripts.
+- Manifest 3.6.1 → **3.6.2** (all three fixes are user-visible: cleaner folder
+  names, fewer misleading archive warnings, consistent `{name}` naming).
+- `scripts/package-release.sh` → `releases/x-media-downloader-v3.6.2.zip`,
+  offline-verified: `manifest.json` at the zip root, `diff -r` byte-identical
+  to `extension/`, all 19 manifest-declared + runtime-resolved resources present.
+
+### Still open (live-X)
+
+The `{name}` selector was cross-checked against public 2026 X/DOM scrapers, but
+has NOT run in a signed-in browser. See WORKLIST P0 — a live DOM snapshot is
+needed to confirm `[data-testid="User-Name"] span:first-child` still returns the
+display name on current X, plus confirmation that the GraphQL `displayName`
+field (`core.user_results.result.legacy.name`) matches it for the same post.
+
 ## 2026-09-02 — CI follow-up: actions v4→v5, two packaging exit-code bugs, release-zip verification
 
 **Branch:** `arena/01a06027-twitter-batch-download` · **Session input:** follow-up to
