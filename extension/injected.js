@@ -42,7 +42,6 @@
   // payloads so a late listener can still receive them.
   const REPLAY_MAX = 40;
   const replayBuffer = [];
-  const replayedKeys = new Set();
   const capturedOperations = new Map();
 
   function post(type, data, extra = {}) {
@@ -273,6 +272,4 @@
   patchFetch();
   patchHistory();
   post("xdlInjectedReady", { ok: true });
-  // Exposed for the isolated world's dedupe bookkeeping in tests/diagnostics.
-  globalScope.__xdlInjectedReplayKeys = replayedKeys;
 })(window);

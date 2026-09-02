@@ -8,6 +8,13 @@ name: extension-tests
 # Real-browser verification stays a local manual step — see
 # docs/SESSION_HANDOFF.md §5.
 
+permissions:
+  contents: read
+
+concurrency:
+  group: extension-tests-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   workflow_dispatch:
   push:
@@ -27,6 +34,7 @@ jobs:
   offline:
     name: Offline suites (syntax + fixtures + window-less VM pipelines)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -34,12 +42,16 @@ jobs:
           node-version: 22
       - name: Syntax check every shipped script
         run: |
-          for f in extension/*.js extension/lib/*.js; do
+          shopt -s nullglob
+          files=(extension/*.js extension/lib/*.js)
+          test "${#files[@]}" -gt 0
+          for f in "${files[@]}"; do
             node --check "$f"
           done
       - name: Unit + pipeline suites (node --test)
         run: node --test tests/*.test.js
       - name: Release zip packages cleanly
         run: |
-          sudo apt-get install -y zip >/dev/null 2>&1 || true
+          command -v zip >/dev/null 2>&1 || sudo apt-get install -y zip
           scripts/package-release.sh ci
+          test -f releases/x-media-downloader-v*.zip

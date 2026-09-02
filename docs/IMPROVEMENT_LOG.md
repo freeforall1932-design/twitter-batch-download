@@ -2,6 +2,74 @@
 
 Chronological implementation record for X Media Downloader.
 
+## 2026-09-02 — Codebase + CI review pass: shared archive engine, Stop-cancels-backoff, save-chain hardening — v3.6.1
+
+**Branch:** `arena/01a05f98-twitter-batch-download` · **Session input:** review the
+CI workflow and the whole codebase (after reading the three docs in
+`docs/`), find errors / missing logic / misaligned or rotten code, clean the
+CI YAML up in both source and docs, and write less code for the same output
+without changing behavior.
+
+### Bugs found and fixed
+
+1. **Archive plumbing existed twice and could drift.** `background.js`
+   (worker fallback) and `offscreen.js` (primary path) carried near-identical
+   `fetchImageBytes` / `preparePdfImage` / `bytesToBase64` / ZIP-PDF assembly
+   copies (~120 lines duplicated). Extracted into a single
+   **`lib/archive.js`** (`XDLArchive`: fetch, PDF page prep, base64,
+   `buildArchiveBytes`) loaded by both contexts and the Node VM suites.
+   Byte-level output is pinned to the same writers by the new
+   `tests/archive-lib.test.js` (ZIP/CBZ/PDF parity, MIME, PDF page size,
+   unknown-format degradation).
+2. **Stop scan did not cancel the 429/503 countdown.** `discoveryStop` only
+   set `stopRequested`; `sleepWithRateLimitCountdown` kept waiting up to 60 s
+   and `fetchWithRetry` kept retrying — the stop button looked dead (the
+   documented P1/item 4 in PROJECT_IMPROVEMENT_OPINION.md). Now
+   `fetchWithRetry`/`sleepWithRateLimitCountdown` accept a `shouldAbort`
+   callback that the discovery run wires to `stopRequested` + run-id
+   staleness; an aborted retry returns `{ aborted: true }`, `callDiscoveryGraphQL`
+   throws code `stopped`, and the run's catch reports a clean
+   "Discovery stopped — N media found" instead of an error.
+3. **Storage save chains were poisonable.** `queueSaving`,
+   `downloadedSaving` and `discoverySaving` chained
+   `previous.then(() => chrome.storage.local.set(...))`; one rejected write
+   permanently rejected the chain, so every later save silently stopped
+   happening (in-memory state diverged from storage). Each chain step now
+   catches; a failed write is skipped without breaking later saves.
+4. **`queueStart` re-queued failed items without a fresh attempt budget.**
+   An item that exhausted its 3 attempts stayed at `attempts: 3`, so
+   "Download selected" re-queued it and it failed instantly (only "Retry
+   failed" worked). `queueStart` now resets `attempts`/`error` for every item
+   it moves into the queue — a user-triggered start is a fresh run.
+5. **Dead state removed.** `injected.js`'s `replayedKeys` /
+   `__xdlInjectedReplayKeys` were written but never read (replay dedupe is
+   done downstream by item id/CDN key); `content.js`'s `scanStats.photos`/
+   `scanStats.videos` were write-only; `collectTweetMedia` returned
+   `safeName`/`media`/`handle` that no caller used.
+
+### CI cleanup (both copies, byte-identical)
+
+`.github/workflows/extension-tests.yml` and `docs/ci/extension-tests.yml`
+were cleaned up together: read-only `permissions`, a `concurrency` group that
+cancels superseded runs, `timeout-minutes`, a syntax-check glob guard so an
+empty match fails instead of passing silently (`nullglob` + count check), and
+a packaging step that only installs `zip` when missing and asserts the
+generated artifact exists. The workflow itself still runs offline suites only
+(no real-browser MV3 job — see docs/ci/README.md).
+
+### Validation
+
+- `node --test tests/*.test.js` — **116 pass** (was 106): +6
+  `tests/archive-lib.test.js` (shared engine parity) and +4 background
+  regressions (abort on Stop, `stopped` classification, attempt-budget reset,
+  storage-write recovery).
+- The three new behavior tests fail against the pre-fix tree by design
+  (abort path, attempt reset, second-save visibility).
+- `node --check` clean on every shipped script; packaging smoke produced a
+  v3.6.1 zip carrying `lib/archive.js`.
+- Manifest 3.6 → **3.6.1** (user-visible fixes: Stop now interrupts backoff,
+  Download selected retries exhausted items).
+
 ## 2026-09-01 — Media-kind upgrade: GIF stays a GIF, quality guarantees, archive rules + warnings — v3.6
 
 **Branch:** `arena/01a05aab-twitter-batch-download` (same PR as v3.5) ·

@@ -6,11 +6,12 @@
 
 // Shared output engine: naming/template/sanitize (lib/naming.js), STORE-only
 // ZIP writer (lib/zipWriter.js), dependency-free PDF 1.4 writer
-// (lib/pdfBuilder.js). The same files load in the offscreen document and in
-// Node tests. Guarded so a packaging mistake degrades to raw downloads
-// instead of killing the whole worker at parse time.
+// (lib/pdfBuilder.js), and the fetch/PDF-page/archive-bytes helpers
+// (lib/archive.js, shared with the offscreen document). The same files load
+// there and in Node tests. Guarded so a packaging mistake degrades to raw
+// downloads instead of killing the whole worker at parse time.
 try {
-  importScripts("lib/naming.js", "lib/zipWriter.js", "lib/pdfBuilder.js");
+  importScripts("lib/naming.js", "lib/zipWriter.js", "lib/pdfBuilder.js", "lib/archive.js");
 } catch (error) {
   console.error("[X-DL BG] Failed to load lib/ scripts:", error);
 }
@@ -546,6 +547,7 @@ async function sleepWithRateLimitCountdown(waitMs, meta = {}) {
   const endedAt = Date.now() + total;
   await notifyRateLimitWait(total, meta);
   while (Date.now() < endedAt) {
+    if (meta.shouldAbort?.()) return;
     const remaining = endedAt - Date.now();
     await new Promise((resolve) => setTimeout(resolve, Math.min(1000, remaining)));
     if (Date.now() < endedAt) await notifyRateLimitWait(endedAt - Date.now(), meta);
@@ -553,7 +555,7 @@ async function sleepWithRateLimitCountdown(waitMs, meta = {}) {
   await notifyRateLimitWait(0, meta);
 }
 
-async function rateLimitWait() {
+async function rateLimitWait(options = {}) {
   const now = Date.now();
   const elapsed = now - lastRequestTime;
 
@@ -567,14 +569,20 @@ async function rateLimitWait() {
     console.log(`[X-DL BG] Rate limit wait: ${Math.round(waitTime)}ms`);
     // Spacing delays stay quiet in the UI; only 429/503 retries show a countdown.
     await new Promise(r => setTimeout(r, waitTime));
+    if (options.shouldAbort?.()) return;
   }
 
   lastRequestTime = Date.now();
 }
 
-async function fetchWithRetry(url, headers, maxRetries = 4) {
+// options.shouldAbort: optional callback — when it returns true (e.g. the user
+// pressed Stop scan during a discovery retry), the wait/retry loop stops on
+// the next tick and `{ aborted: true }` is returned instead of a response.
+async function fetchWithRetry(url, headers, maxRetries = 4, options = {}) {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    await rateLimitWait();
+    if (options.shouldAbort?.()) return { aborted: true };
+    await rateLimitWait(options);
+    if (options.shouldAbort?.()) return { aborted: true };
 
     const resp = await fetch(url, { headers });
 
@@ -590,8 +598,10 @@ async function fetchWithRetry(url, headers, maxRetries = 4) {
       await sleepWithRateLimitCountdown(waitTime, {
         attempt: attempt + 1,
         maxAttempts: maxRetries + 1,
-        status: resp.status
+        status: resp.status,
+        shouldAbort: options.shouldAbort
       });
+      if (options.shouldAbort?.()) return { aborted: true };
 
       // Refresh auth in case CSRF expired
       await refreshAuth(null);
@@ -899,7 +909,11 @@ async function saveDownloadedIds() {
   const list = Array.from(downloadedIds);
   const trimmed = list.length > DOWNLOADED_HISTORY_MAX ? list.slice(list.length - DOWNLOADED_HISTORY_MAX) : list;
   if (trimmed.length !== list.length) downloadedIds = new Set(trimmed);
-  downloadedSaving = downloadedSaving.then(() => chrome.storage.local.set({ [DOWNLOADED_STORAGE_KEY]: trimmed }));
+  // Catch so one rejected storage write cannot poison every later save on the
+  // same promise chain (the in-memory state stays authoritative).
+  downloadedSaving = downloadedSaving
+    .then(() => chrome.storage.local.set({ [DOWNLOADED_STORAGE_KEY]: trimmed }))
+    .catch(() => {});
   await downloadedSaving;
 }
 
@@ -1021,7 +1035,11 @@ async function getQueueState() {
 
 async function saveQueueState() {
   if (!queueState) return;
-  queueSaving = queueSaving.then(() => chrome.storage.local.set({ [QUEUE_STORAGE_KEY]: queueState }));
+  // Catch so one rejected storage write cannot poison every later save on the
+  // same promise chain (the in-memory state stays authoritative).
+  queueSaving = queueSaving
+    .then(() => chrome.storage.local.set({ [QUEUE_STORAGE_KEY]: queueState }))
+    .catch(() => {});
   await queueSaving;
   chrome.runtime.sendMessage({ action: "queueChanged" }).catch(() => {});
 }
@@ -1176,72 +1194,24 @@ async function convertGifViaOffscreen(url) {
   return sendOffscreenRequest("offscreenConvertGif", { job: { url } }, 120000, "GIF conversion timed out");
 }
 
-async function fetchImageBytesInWorker(url) {
-  const response = await fetch(url, { credentials: "omit" });
-  if (!response.ok) throw new Error(`Image fetch failed (${response.status})`);
-  const buffer = await response.arrayBuffer();
-  if (!buffer || buffer.byteLength < 32) throw new Error("Image response too small");
-  return { bytes: new Uint8Array(buffer), contentType: response.headers?.get?.("content-type") || null };
-}
-
-function bytesToBase64(bytes) {
-  let binary = "";
-  const chunkSize = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunkSize, bytes.length)));
-  }
-  return btoa(binary);
-}
-
-async function preparePdfImageInWorker(bytes, contentType) {
-  const info = globalThis.XDLPdf.jpegInfo(bytes);
-  if (info !== null && info.components === 3 && info.width > 0 && info.height > 0) {
-    return { bytes, width: info.width, height: info.height };
-  }
-  const createImageBitmapFn = globalThis.createImageBitmap;
-  const OffscreenCanvasCtor = globalThis.OffscreenCanvas;
-  if (typeof createImageBitmapFn !== "function" || typeof OffscreenCanvasCtor !== "function") {
-    throw new Error("PDF export cannot encode a non-JPEG page in this context.");
-  }
-  const bitmap = await createImageBitmapFn(new Blob([bytes], { type: contentType || "image/jpeg" }));
-  try {
-    const canvas = new OffscreenCanvasCtor(bitmap.width, bitmap.height);
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("PDF export cannot encode a page (no 2d canvas).");
-    // JPEG has no alpha channel: flatten transparency onto white.
-    ctx.fillStyle = "#FFFFFF";
-    ctx.fillRect(0, 0, bitmap.width, bitmap.height);
-    ctx.drawImage(bitmap, 0, 0);
-    const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.92 });
-    return { bytes: new Uint8Array(await blob.arrayBuffer()), width: bitmap.width, height: bitmap.height };
-  } finally {
-    if (typeof bitmap.close === "function") bitmap.close();
-  }
-}
-
 // Service-worker fallback: assemble the archive here and hand a data: URL to
 // chrome.downloads (data: URLs respect the filename argument; blob: URLs do
-// not on some builds). Never used for large payloads — a post is ≤4 items.
-// No DOM here, so GIF entries cannot be converted: their MP4 bytes go in
-// verbatim under an .mp4 entry name.
+// not on some builds). Byte-level archive work (fetch, PDF page prep, ZIP/PDF
+// build) lives in lib/archive.js — the same code the offscreen document runs.
+// Never used for large payloads — a post is ≤4 items. No DOM here, so GIF
+// entries cannot be converted: their MP4 bytes go in verbatim under an .mp4
+// entry name.
 async function buildArchiveInWorker(job) {
+  const archive = globalThis.XDLArchive;
+  if (!archive) throw new Error("Archive engine unavailable.");
   const format = globalThis.XDLNaming.normalizeOutputFormat(job.format);
   const fetched = [];
   for (const image of job.images) {
     const name = image.kind === "gif" ? image.name.replace(/\.gif$/i, ".mp4") : image.name;
-    fetched.push({ name, ...(await fetchImageBytesInWorker(image.url)) });
+    fetched.push({ name, ...(await archive.fetchImageBytes(image.url)) });
   }
-  let bytes, mime;
-  if (format === "pdf") {
-    const pages = [];
-    for (const page of fetched) pages.push(await preparePdfImageInWorker(page.bytes, page.contentType));
-    bytes = globalThis.XDLPdf.buildPdfDocument(pages);
-    mime = "application/pdf";
-  } else {
-    bytes = globalThis.XDLZip.buildZip(fetched.map((entry) => ({ name: entry.name, data: entry.bytes })));
-    mime = format === "cbz" ? "application/vnd.comicbook+zip" : "application/zip";
-  }
-  const result = await downloadFile(`data:${mime};base64,${bytesToBase64(bytes)}`, job.filename);
+  const assembled = await archive.buildArchiveBytes(fetched, format);
+  const result = await downloadFile(`data:${assembled.mime};base64,${archive.bytesToBase64(assembled.bytes)}`, job.filename);
   if (!result.success) throw new Error(result.error || "Unable to start archive download");
   return { ok: true };
 }
@@ -1516,7 +1486,14 @@ async function handleQueueMessage(msg) {
     state.items.forEach((item) => {
       const sourceOk = !msg.source || (item.source || "remote") === msg.source;
       const allowed = sourceOk && (msg.mode === "all" || item.selected);
-      if (allowed && ["discovered", "failed"].includes(item.status)) item.status = "queued";
+      if (allowed && ["discovered", "failed"].includes(item.status)) {
+        // A user-triggered start is a fresh attempt budget. Without the reset,
+        // a previously exhausted item (attempts == MAX) would be re-queued by
+        // this button and then fail instantly without a real retry.
+        item.status = "queued";
+        item.attempts = 0;
+        item.error = null;
+      }
     });
     state.stopped = false;
     state.running = true;
@@ -1579,7 +1556,11 @@ async function getDiscoveryState() {
 
 async function saveDiscoveryState() {
   const snapshot = { ...discoveryState };
-  discoverySaving = discoverySaving.then(() => chrome.storage.local.set({ [DISCOVERY_STORAGE_KEY]: snapshot }));
+  // Catch so one rejected storage write cannot poison every later save on the
+  // same promise chain (the in-memory state stays authoritative).
+  discoverySaving = discoverySaving
+    .then(() => chrome.storage.local.set({ [DISCOVERY_STORAGE_KEY]: snapshot }))
+    .catch(() => {});
   await discoverySaving;
   chrome.runtime.sendMessage({ action: "queueChanged" }).catch(() => {});
 }
@@ -1783,7 +1764,7 @@ function buildUserMediaVariables(userId, cursor, capture) {
   return variables;
 }
 
-async function callDiscoveryGraphQL(operationId, operationName, variables, capture = null) {
+async function callDiscoveryGraphQL(operationId, operationName, variables, capture = null, options = {}) {
   const params = new URLSearchParams({
     variables: JSON.stringify(variables),
     features: JSON.stringify(mergeDiscoveryFeatures(capture)),
@@ -1791,8 +1772,11 @@ async function callDiscoveryGraphQL(operationId, operationName, variables, captu
   });
   const response = await fetchWithRetry(
     `https://x.com/i/api/graphql/${operationId}/${operationName}?${params}`,
-    makeHeaders()
+    makeHeaders(),
+    4,
+    options
   );
+  if (response?.aborted) throwClassifiedDiscoveryError("Discovery stopped.", { code: "stopped" });
   if (!response) throwClassifiedDiscoveryError("X rate limit retries were exhausted.", { code: "rate_limited" });
   if (!response.ok) {
     const body = await response.text().catch(() => "");
@@ -2080,6 +2064,10 @@ async function runProfileDiscovery(options, runId) {
   };
 
   try {
+    // Stop scan must break out of a 429/503 backoff quickly instead of letting
+    // the countdown run out — the stop button is otherwise dead for up to a
+    // minute. fetchWithRetry checks this callback on every wait boundary.
+    const shouldAbort = () => !isCurrentDiscoveryRun(state, runId) || state.stopRequested;
     const username = normalizeProfileTarget(options.target);
     state.target = `@${username}`;
     state.status = "Reading current X session…";
@@ -2106,7 +2094,8 @@ async function runProfileDiscovery(options, runId) {
       operations.UserByScreenName,
       operations.userOperationName || "UserByScreenName",
       { screen_name: username, withSafetyModeUserFields: true },
-      operations.userCapture
+      operations.userCapture,
+      { shouldAbort }
     );
     if (!isCurrentDiscoveryRun(state, runId)) return;
     const resolved = resolveUserResult(userJson);
@@ -2133,7 +2122,8 @@ async function runProfileDiscovery(options, runId) {
         operations.UserMedia,
         operations.mediaOperationName || "UserMedia",
         variables,
-        operations.mediaCapture
+        operations.mediaCapture,
+        { shouldAbort }
       );
       if (!isCurrentDiscoveryRun(state, runId)) return;
       const instructions = extractTimelineInstructions(page) || page;
@@ -2173,9 +2163,16 @@ async function runProfileDiscovery(options, runId) {
     const classified = classifyDiscoveryError(error, { code: error.code });
     state.running = false;
     state.activeRunId = null;
-    state.error = classified.message;
-    state.errorCode = classified.code;
-    state.status = "Discovery needs attention";
+    if (classified.code === "stopped" || state.stopRequested) {
+      // User pressed Stop mid-backoff: a clean stop, not an error.
+      state.error = null;
+      state.errorCode = null;
+      state.status = `Discovery stopped — ${state.found} media found.`;
+    } else {
+      state.error = classified.message;
+      state.errorCode = classified.code;
+      state.status = "Discovery needs attention";
+    }
     await clearDiscoveryRetry(state);
   } finally {
     globalThis.rateLimitStatusListener = previousListener;
