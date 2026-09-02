@@ -348,6 +348,23 @@
   // DOM — tweet inspection
   // ==========================================================================
 
+  // Author's display name (the {name} template token). Copied from where the
+  // handle lives ([data-testid="User-Name"]): the first <span> that is not the
+  // "@handle" is the display name. Live shape (2026): the block holds the
+  // display name span(s) and the handle link; verified against several 2026
+  // scrapers' selectors ([data-testid="User-Name"] span:first-child,
+  // div[data-testid="User-Name"] div span). Safe fallback "" so a template
+  // using {name} simply renders nothing for a post we could not read.
+  function getDisplayName(article) {
+    const nameBlock = article.querySelector('[data-testid="User-Name"]');
+    if (!nameBlock) return "";
+    for (const span of nameBlock.querySelectorAll("span")) {
+      const text = (span.textContent || "").trim();
+      if (text && !text.startsWith("@")) return text;
+    }
+    return "";
+  }
+
   function getTweetInfo(article) {
     const tweetTextEl = article.querySelector('[data-testid="tweetText"]');
     const tweetText = tweetTextEl ? tweetTextEl.innerText : "";
@@ -382,6 +399,7 @@
       handle,
       tweetId,
       tweetHref,
+      displayName: getDisplayName(article),
       hasVideo,
       hasPhoto,
       photoImages,
@@ -498,10 +516,11 @@
         isRepost: false,
         source: "scroll",
         // Naming metadata (v3.5): raw post text + per-post media position for
-        // the download-time template/master-folder path builder. The DOM
-        // carries no display name; the {name} token just renders empty here.
+        // the download-time template/master-folder path builder. DOM-scanned
+        // photos carry the article's display name too (v3.6.2), so a template
+        // using {name} names this post the same as its GraphQL-captured copy.
         text: info.tweetText || "",
-        displayName: "",
+        displayName: info.displayName || "",
         mediaIndex: index,
         filename: `x-media/${handle}_${safeName}_${info.tweetId}_${index + 1}.${getPhotoExtension(url)}`
       });

@@ -130,7 +130,7 @@ never loaded by the browser.
 
 ```bash
 for f in extension/*.js extension/lib/*.js; do node --check "$f"; done
-node --test tests/*.test.js   # 106 tests (offline: fixtures + window-less VM pipelines)
+node --test tests/*.test.js   # 119 tests (offline: fixtures + window-less VM pipelines)
 node --test tests/downloader.test.js
 ```
 

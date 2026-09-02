@@ -107,8 +107,24 @@ function matches(node, selector) {
 }
 
 // Builds an <article data-testid="tweet"> the way X renders one.
-function makeTweetArticle({ tweetId, handle, text, photos = [], video = false }) {
+function makeTweetArticle({ tweetId, handle, displayName, text, photos = [], video = false }) {
   const article = makeElement("article", { attributes: { "data-testid": "tweet" } });
+
+  // The author header lives in [data-testid="User-Name"]: a display-name span
+  // plus a handle anchor (real X shape, see content.js getDisplayName). When
+  // `displayName` is omitted, no User-Name block is built (the safe fallback).
+  if (displayName !== undefined) {
+    const nameBlock = makeElement("div", { attributes: { "data-testid": "User-Name" } });
+    const nameLink = makeElement("a", { attributes: { role: "link", href: `/${handle}` } });
+    const nameDiv = makeElement("div");
+    nameDiv.appendChild(makeElement("span", { textContent: displayName }));
+    nameLink.appendChild(nameDiv);
+    nameBlock.appendChild(nameLink);
+    const handleLink = makeElement("a", { attributes: { role: "link", href: `/${handle}` } });
+    handleLink.appendChild(makeElement("span", { textContent: `@${handle}` }));
+    nameBlock.appendChild(handleLink);
+    article.appendChild(nameBlock);
+  }
 
   const profileLink = makeElement("a", { attributes: { role: "link", href: `/${handle}` } });
   article.appendChild(profileLink);
@@ -348,6 +364,40 @@ test("the same photo is never listed twice across rescans", () => {
 
   const ids = env.queueAdds().flatMap((add) => add.items.map((item) => item.id));
   assert.deepEqual(ids, ["300-DDD444"]);
+});
+
+test("DOM-scanned photos carry the author's display name for the {name} token", () => {
+  const env = loadContentScript();
+  env.body.appendChild(makeTweetArticle({
+    tweetId: "405",
+    handle: "real_loonarae",
+    displayName: "Real Loonarae",
+    text: "display name post",
+    photos: ["NAM999"]
+  }));
+  env.runIntervals();
+
+  const adds = env.queueAdds();
+  assert.equal(adds.length, 1);
+  assert.equal(adds[0].items[0].displayName, "Real Loonarae",
+    "a DOM-scanned photo must carry the display name so {name} matches the GraphQL path");
+});
+
+test("DOM-scanned photos without a readable header fall back to an empty display name", () => {
+  const env = loadContentScript();
+  // No [data-testid="User-Name"] block at all — extraction must not throw and
+  // must leave displayName "" (the {name} token then just renders nothing).
+  env.body.appendChild(makeTweetArticle({
+    tweetId: "406",
+    handle: "real_loonarae",
+    text: "no header post",
+    photos: ["NON888"]
+  }));
+  env.runIntervals();
+
+  const adds = env.queueAdds();
+  assert.equal(adds.length, 1);
+  assert.equal(adds[0].items[0].displayName, "");
 });
 
 test("video posts are queued for per-post resolve instead of being dropped", () => {

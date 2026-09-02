@@ -39,10 +39,36 @@
   // content script can be re-created by an extension reload while this MAIN
   // world patch survives, and the very first timeline response of a hard page
   // load can land before the isolated listener is ready. Keep the recent
-  // payloads so a late listener can still receive them.
+  // payloads so a late listener can still receive them. Bounded by BOTH entry
+  // count and total serialized size so a burst of huge timeline responses
+  // cannot pin this MAIN-world heap.
   const REPLAY_MAX = 40;
+  const REPLAY_MAX_BYTES = 8 * 1024 * 1024; // ~8MB of serialized JSON, newest wins
   const replayBuffer = [];
+  let replayBytes = 0;
   const capturedOperations = new Map();
+
+  // Cheap media-marker walk. The old code JSON.stringify()'d every GraphQL
+  // response just to regex the string, so even a non-media metric poll paid a
+  // full string allocation. Walk the object and bail as soon as a media marker
+  // KEY appears — those keys (extended_entities / media_url_https / video_info)
+  // are exactly where X stores media, and they sit near the top of each tweet.
+  // Returns false for non-object input so callers skip null/string payloads.
+  const MEDIA_MARKER_KEYS = new Set(["extended_entities", "media_url_https", "video_info"]);
+  function containsMediaMarker(value) {
+    if (!value || typeof value !== "object") return false;
+    if (Array.isArray(value)) {
+      for (const element of value) {
+        if (containsMediaMarker(element)) return true;
+      }
+      return false;
+    }
+    for (const key in value) {
+      if (MEDIA_MARKER_KEYS.has(key)) return true;
+      if (Object.prototype.hasOwnProperty.call(value, key) && containsMediaMarker(value[key])) return true;
+    }
+    return false;
+  }
 
   function post(type, data, extra = {}) {
     try {
@@ -106,26 +132,35 @@
 
   function bufferResponse(entry) {
     replayBuffer.push(entry);
-    while (replayBuffer.length > REPLAY_MAX) replayBuffer.shift();
+    replayBytes += entry.bytes || 0;
+    while (replayBuffer.length > REPLAY_MAX || replayBytes > REPLAY_MAX_BYTES) {
+      const dropped = replayBuffer.shift();
+      replayBytes -= dropped.bytes || 0;
+    }
   }
 
   function emitGraphqlResponse(urlString, body) {
     if (!isGraphqlUrl(urlString) || !body || typeof body !== "object") return;
     const parsed = parseGraphqlUrl(urlString) || { operationName: "Unknown", queryId: "" };
-    // Cheap pre-filter: only forward payloads that plausibly contain media so
-    // large non-media GraphQL responses are not serialized across worlds.
+    // Cheap media-marker walk BEFORE any serialization. Non-media GraphQL
+    // payloads (metrics polls, profile metadata, empty timelines) are the vast
+    // majority and would otherwise pay a full JSON.stringify across worlds.
+    if (!containsMediaMarker(body)) return;
+    // Only media-bearing payloads reach here, which caps the serialization cost
+    // and feeds the replay byte budget.
     let serialized = "";
     try {
       serialized = JSON.stringify(body);
     } catch (_) {
       return;
     }
-    if (!serialized || !/"(extended_entities|media_url_https|video_info)"/.test(serialized)) return;
+    if (!serialized) return;
     const entry = {
       operationName: parsed.operationName,
       queryId: parsed.queryId,
       json: body,
       at: Date.now(),
+      bytes: serialized.length,
       key: `${parsed.operationName}:${parsed.queryId}:${serialized.length}:${serialized.slice(0, 64)}`
     };
     bufferResponse(entry);

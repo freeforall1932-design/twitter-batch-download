@@ -382,12 +382,71 @@ function buildFallbackFilenames(filename) {
   const stem = leaf.replace(/\.[a-z0-9]{1,5}$/i, "").slice(0, 80) || "media";
   const safeStem = stem.replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "") || "media";
   const folder = parts[0] && parts[0] !== ".." ? parts[0].replace(/[^\w.-]+/g, "_") : "x-media";
-  return [
+  // The last resort used to be `x-media/media_<random base36>.<ext>` — literal
+  // "garbled random text" whenever Chrome rejected a naming path. Uniqueness is
+  // already handled by `conflictAction: "uniquify"` in chromeDownloadOnce, so
+  // the last candidate can be a deterministic, readable name instead. The
+  // `download_` prefix keeps it distinct from the `x-media/<stem>` rung even
+  // when the original path's first segment is already `x-media` (otherwise the
+  // dedupe below collapses two rungs into one).
+  const candidates = [
     cleaned,
     `${folder}/${safeStem}.${ext}`,
     `x-media/${safeStem}.${ext}`,
-    `x-media/media_${Date.now().toString(36)}.${ext}`
-  ].filter((value, index, list) => value && list.indexOf(value) === index);
+    `x-media/download_${safeStem}.${ext}`
+  ];
+  return candidates.filter((value, index, list) => value && list.indexOf(value) === index);
+}
+
+// Photo extension derived from a CDN URL, matching content.js `getPhotoExtension`
+// exactly. The DOM path (content.js mediaEntryToItem) and the discovery path
+// (mediaItemsFromTweetObject via resolveTweetMedia) must produce the SAME
+// extension for the SAME photo or a photo listed from the rendered DOM and the
+// same photo parsed from GraphQL would get different filenames. The old inline
+// `url.split("?")[0].split(".").pop()` fallback returned the WHOLE host path
+// (e.g. "commediaabc") for a bare URL with no `format` param and no file
+// extension, so this favours the explicit `format` param, then a known pathname
+// extension, and only then the safe default "jpg".
+function photoExtensionFromUrl(url) {
+  try {
+    const parsed = new URL(url, "https://x.com");
+    const format = (parsed.searchParams.get("format") || "").toLowerCase();
+    if (["png", "webp", "jpg", "jpeg"].includes(format)) return format === "jpeg" ? "jpg" : format;
+    const path = parsed.pathname.toLowerCase();
+    if (path.endsWith(".png")) return "png";
+    if (path.endsWith(".webp")) return "webp";
+  } catch (_) {
+    const clean = String(url || "").split("?")[0].toLowerCase();
+    if (clean.endsWith(".png")) return "png";
+    if (clean.endsWith(".webp")) return "webp";
+  }
+  return "jpg";
+}
+
+// ONE media resolver for both media-extraction paths. The single-post GraphQL
+// path (getTweetMedia) and the timeline/discovery path (mediaItemsFromTweetObject)
+// used to each re-implement the same rules for picking a downloadable CDN URL —
+// photo URLs forced to orig resolution, MP4 clips to the highest-bitrate
+// variant, and GIF detection. Keeping it in one place means the two paths can
+// never drift apart again. Returns null for media with no usable URL.
+function resolveTweetMedia(item) {
+  if (!item) return null;
+  if (item.type === "photo") {
+    const url = normalizePhotoUrl(item.media_url_https || item.media_url || "");
+    if (!url) return null;
+    return { url, kind: "photo", extension: photoExtensionFromUrl(url), isGif: false, bitrate: null };
+  }
+  if (item.type === "video" || item.type === "animated_gif") {
+    // X delivers animated_gif media as a silent MP4 clip; keep kind "video"
+    // (capture filters and existing queues treat GIFs as motion media) and
+    // flag it so download time can convert it back into a real .gif.
+    const variants = (item.video_info?.variants || []).filter((variant) => variant.content_type === "video/mp4");
+    variants.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+    const best = variants[0];
+    if (!best?.url) return null;
+    return { url: best.url, kind: "video", extension: "mp4", isGif: item.type === "animated_gif", bitrate: best.bitrate || 0 };
+  }
+  return null;
 }
 
 // ==========================================================================
@@ -763,54 +822,43 @@ async function getTweetMedia(tweetId) {
     const ownerDate = ownerLegacy.created_at || "";
     const mediaItems = ownerLegacy.extended_entities?.media || ownerLegacy.entities?.media || [];
     // Position within the OWNING post's media list — drives the 001…004
-    // numbering inside the master folder and archive entry order.
+    // numbering inside the master folder and archive entry order. URL selection,
+    // GIF detection, and extension come from the shared resolveTweetMedia so the
+    // single-post path and the timeline path use identical rules.
     let mediaIndex = -1;
     for (const m of mediaItems) {
       mediaIndex += 1;
-      if (m.type === "video" || m.type === "animated_gif") {
-        const variants = m.video_info?.variants || [];
-        let bestUrl = null;
-        let bestBitrate = -1;
-        for (const v of variants) {
-          if (v.content_type === "video/mp4") {
-            const br = v.bitrate || 0;
-            if (br > bestBitrate) {
-              bestBitrate = br;
-              bestUrl = v.url;
-            }
-          }
-        }
-        if (bestUrl) {
-          videos.push({
-            url: bestUrl,
-            bitrate: bestBitrate,
-            mediaId: m.id_str || m.id,
-            type: m.type,
-            username: ownerUsername,
-            displayName: ownerDisplayName,
-            tweetId: ownerTweetId,
-            text: ownerText,
-            date: ownerDate,
-            mediaIndex,
-            isQuote
-          });
-        }
-      } else if (m.type === "photo") {
-        const photoUrl = normalizePhotoUrl(m.media_url_https || m.media_url || "");
-        if (photoUrl) {
-          photos.push({
-            url: photoUrl,
-            mediaId: m.id_str || m.id,
-            type: "photo",
-            username: ownerUsername,
-            displayName: ownerDisplayName,
-            tweetId: ownerTweetId,
-            text: ownerText,
-            date: ownerDate,
-            mediaIndex,
-            isQuote
-          });
-        }
+      const resolved = resolveTweetMedia(m);
+      if (!resolved) continue;
+      if (resolved.kind === "photo") {
+        photos.push({
+          url: resolved.url,
+          mediaId: m.id_str || m.id,
+          type: "photo",
+          username: ownerUsername,
+          displayName: ownerDisplayName,
+          tweetId: ownerTweetId,
+          text: ownerText,
+          date: ownerDate,
+          mediaIndex,
+          isQuote
+        });
+      } else {
+        videos.push({
+          url: resolved.url,
+          bitrate: resolved.bitrate,
+          mediaId: m.id_str || m.id,
+          // Keep the raw X media type ("video" | "animated_gif") so the content
+          // script can still detect GIFs via `entry.type === "animated_gif"`.
+          type: m.type,
+          username: ownerUsername,
+          displayName: ownerDisplayName,
+          tweetId: ownerTweetId,
+          text: ownerText,
+          date: ownerDate,
+          mediaIndex,
+          isQuote
+        });
       }
     }
   };
@@ -885,6 +933,40 @@ const MAX_DOWNLOAD_ATTEMPTS = 3;
 let queueState = null;
 let queueSaving = Promise.resolve();
 let queueProcessing = Promise.resolve();
+
+// --- Throttled `queueChanged` broadcast ------------------------------------
+// `saveQueueState()` is called on every queue mutation AND on every
+// chrome.downloads.onChanged bytesReceived tick, so a long multi-file download
+// can fire dozens of `queueChanged` runtime messages a second. The Side Panel
+// only needs the latest state, not every intermediate one. Coalesce broadcasts
+// to at most one per tick window: the first call emits immediately, and any
+// calls arriving inside the window are folded into one trailing emit carrying
+// the newest state. A trailing emit is scheduled with setTimeout instead of a
+// leading timer so the worker is never held awake purely by the throttle.
+const QUEUE_CHANGED_TICK_MS = 250;
+let queueChangedTimer = null;
+let queueChangedPending = false;
+
+function broadcastQueueChanged() {
+  // Leading edge: emit immediately so the Side Panel stays responsive.
+  if (!queueChangedTimer) {
+    chrome.runtime.sendMessage({ action: "queueChanged" }).catch(() => {});
+    queueChangedTimer = setTimeout(() => {
+      queueChangedTimer = null;
+      // Trailing edge: anything a burst of writes stacked inside the window is
+      // folded into ONE final emit carrying the newest state. sendMessage here
+      // carries no payload, so the Side Panel just re-reads the freshest state.
+      if (queueChangedPending) {
+        queueChangedPending = false;
+        chrome.runtime.sendMessage({ action: "queueChanged" }).catch(() => {});
+      }
+    }, QUEUE_CHANGED_TICK_MS);
+    return;
+  }
+  // A timer is already running — a leading emit already went out. Remember that
+  // the state changed again so the trailing emit conveys the newest snapshot.
+  queueChangedPending = true;
+}
 
 // --- Completed-download history (Rank S "Ignore saved") -------------------
 // Remembers queue item ids that finished successfully so the same media is not
@@ -1041,7 +1123,9 @@ async function saveQueueState() {
     .then(() => chrome.storage.local.set({ [QUEUE_STORAGE_KEY]: queueState }))
     .catch(() => {});
   await queueSaving;
-  chrome.runtime.sendMessage({ action: "queueChanged" }).catch(() => {});
+  // Coalesced so a long batch of downloads does not flood the Side Panel with a
+  // runtime message on every queue mutation and every bytesReceived tick.
+  broadcastQueueChanged();
 }
 
 // Up-front warnings for the run that just started, computed from the posts
@@ -1061,9 +1145,14 @@ function buildRunNotices(state, settings, format) {
   const archived = archivedKinds(settings);
   let mixedPosts = 0, videoArchivePosts = 0, pdfFallbackPosts = 0;
   for (const kinds of kindsPerPost.values()) {
-    if (kinds.size > 1) mixedPosts++;
+    // Only kinds actually packed into this post's archive matter. A post that
+    // mixes, say, photos + a video while video archiving is OFF produces a
+    // clean photo-only ZIP plus a separate raw MP4 — that is *not* a mixed
+    // single archive, so it must not raise the "mix" warning.
+    const archivedKindsForPost = [...kinds].filter((kind) => archived.has(kind));
+    if (archivedKindsForPost.length > 1) mixedPosts++;
     if (archived.has("video") && kinds.has("video")) videoArchivePosts++;
-    if (format === "pdf" && [...kinds].some((kind) => kind !== "photo" && archived.has(kind))) pdfFallbackPosts++;
+    if (format === "pdf" && archivedKindsForPost.some((kind) => kind !== "photo")) pdfFallbackPosts++;
   }
   const plural = (n) => (n === 1 ? "post" : "posts");
   if (videoArchivePosts) {
@@ -1562,7 +1651,7 @@ async function saveDiscoveryState() {
     .then(() => chrome.storage.local.set({ [DISCOVERY_STORAGE_KEY]: snapshot }))
     .catch(() => {});
   await discoverySaving;
-  chrome.runtime.sendMessage({ action: "queueChanged" }).catch(() => {});
+  broadcastQueueChanged();
 }
 
 async function findXTab() {
@@ -1952,20 +2041,12 @@ function mediaItemsFromTweetObject(source, { isRepost = false, isQuote = false, 
   const text = sourceLegacy.full_text || sourceLegacy.text || "media";
   const media = sourceLegacy.extended_entities?.media || sourceLegacy.entities?.media || [];
   return media.map((item, index) => {
-    let url = "", type = item.type === "photo" ? "photo" : "video";
-    // X delivers animated_gif media as a silent MP4 clip. Keep type "video"
-    // (capture filters and existing queues treat GIFs as motion media) and
-    // mark it, so download time can convert it back into a real .gif.
-    const isGif = item.type === "animated_gif";
-    if (item.type === "photo") {
-      url = normalizePhotoUrl(item.media_url_https || item.media_url || "");
-    } else if (item.type === "video" || item.type === "animated_gif") {
-      const variants = (item.video_info?.variants || []).filter((variant) => variant.content_type === "video/mp4");
-      variants.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-      url = variants[0]?.url || "";
-    }
-    if (!url) return null;
-    const extension = type === "photo" ? ((url.match(/[?&]format=([^&]+)/)?.[1] || url.split("?")[0].split(".").pop() || "jpg").replace(/[^a-z0-9]/gi, "") || "jpg") : "mp4";
+    // URL selection (orig photo, highest-bitrate MP4), GIF detection, and the
+    // target extension all come from the shared resolver — identical to the
+    // single-post getTweetMedia path, so the two can never drift apart.
+    const resolved = resolveTweetMedia(item);
+    if (!resolved) return null;
+    const type = resolved.kind === "photo" ? "photo" : "video";
     const mediaId = item.id_str || item.id || index;
     // A repost target virtually always carries rest_id; keep the outer post's
     // id as the historical fallback. Quoted media never falls back — a quoted
@@ -1976,9 +2057,9 @@ function mediaItemsFromTweetObject(source, { isRepost = false, isQuote = false, 
       // Same CDN key the content script derives, so a photo listed from the
       // rendered DOM and the same photo parsed from GraphQL collapse into one
       // queue row instead of appearing twice.
-      mediaKey: mediaKeyFromUrl(url),
-      url, type, thumbnail: item.media_url_https || item.media_url || "", author: `@${author}`,
-      date: timestamp, tweetId, mediaId: String(mediaId), isRepost, isQuote, isGif,
+      mediaKey: mediaKeyFromUrl(resolved.url),
+      url: resolved.url, type, thumbnail: item.media_url_https || item.media_url || "", author: `@${author}`,
+      date: timestamp, tweetId, mediaId: String(mediaId), isRepost, isQuote, isGif: resolved.isGif,
       // Naming metadata (v3.5): the download-time path builder renders the
       // user's name template and per-post 001…004 numbering from these.
       // `filename` stays the legacy flat path — it is used verbatim when the
@@ -1986,7 +2067,7 @@ function mediaItemsFromTweetObject(source, { isRepost = false, isQuote = false, 
       text: String(text || "").slice(0, 280),
       displayName: source.core?.user_results?.result?.legacy?.name || "",
       mediaIndex: index,
-      filename: makeMediaFilename({ username: author, text, tweetId, mediaId, index, extension })
+      filename: makeMediaFilename({ username: author, text, tweetId, mediaId, index, extension: resolved.extension })
     };
   }).filter(Boolean);
 }

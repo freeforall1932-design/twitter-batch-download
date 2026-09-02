@@ -792,6 +792,26 @@ test("a rejected storage write cannot poison later queue saves", async () => {
   );
 });
 
+test("queueChanged broadcasts are throttled during a burst of saves", async () => {
+  const sends = [];
+  const background = loadBackground({
+    runtimeSendMessage: async (message) => { sends.push(message); }
+  });
+  await background.getQueueState();
+  // A burst of saves inside one throttle window (e.g. a download's bytesReceived
+  // ticks or a queue mutation storm) must coalesce to a leading + trailing emit,
+  // not one runtime message per save.
+  for (let i = 0; i < 20; i++) await background.saveQueueState();
+  assert.ok(sends.length >= 1, "the first save emits immediately");
+  // Let the trailing timer clear before counting the coalesced total.
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  assert.ok(
+    sends.length <= 4,
+    `20 rapid saves must coalesce, got ${sends.length} broadcasts`
+  );
+  assert.ok(sends.every((message) => message.action === "queueChanged"));
+});
+
 test("network captures prefer live operation ids and headers without storing cookies", () => {
   const background = loadBackground();
   background.rememberNetworkCapture({
@@ -873,12 +893,21 @@ test("normalizePhotoUrl forces orig and preserves format", () => {
   );
 });
 
-test("buildFallbackFilenames produces a short safe ladder", () => {
+test("buildFallbackFilenames produces a short safe, deterministic ladder", () => {
   const background = loadBackground();
-  const ladder = background.buildFallbackFilenames('x-media/alice:bad?/name_hello world_1.mp4');
+  const input = 'x-media/alice:bad?/name_hello world_1.mp4';
+  const ladder = background.buildFallbackFilenames(input);
   assert.ok(ladder.length >= 3);
   assert.ok(ladder.every((name) => !/[<>:"|?*]/.test(name)));
   assert.ok(ladder.some((name) => name.startsWith("x-media/")));
+  // Regression (naming degarble): the old last resort was
+  // `media_<random base36>` — run-to-run random "garbled text". The ladder must
+  // now be deterministic and contain no random timestamp stem.
+  assert.ok(
+    ladder.every((name) => !/media_[a-z0-9]{5,}\./i.test(name)),
+    `no random-timestamp fallback expected: ${ladder}`
+  );
+  assert.deepEqual(ladder, background.buildFallbackFilenames(input));
 });
 
 test("queueAdd collapses the same CDN media discovered from DOM and GraphQL", async () => {
@@ -1193,6 +1222,112 @@ test("a quoted photo collapses with a DOM-listed copy into one row", async () =>
   assert.equal(state.items.length, 1);
 });
 
+test("resolveTweetMedia is the single source for URL pick, extension, and GIF flag", () => {
+  const background = loadBackground();
+  // Photo: forced to orig, format-derived extension.
+  const photo = background.resolveTweetMedia({
+    type: "photo",
+    media_url_https: "https://pbs.example.com/media/photo.jpg"
+  });
+  assert.equal(photo.kind, "photo");
+  assert.equal(photo.extension, "jpg");
+  assert.equal(photo.isGif, false);
+  assert.match(photo.url, /name=orig/);
+
+  // Video: picks the highest-bitrate MP4 variant.
+  const video = background.resolveTweetMedia({
+    type: "video",
+    video_info: {
+      variants: [
+        { content_type: "video/webm", bitrate: 999999, url: "https://video.example.com/no.webm" },
+        { content_type: "video/mp4", bitrate: 832000, url: "https://video.example.com/low.mp4" },
+        { content_type: "video/mp4", bitrate: 2176000, url: "https://video.example.com/high.mp4" }
+      ]
+    }
+  });
+  assert.equal(video.url, "https://video.example.com/high.mp4");
+  assert.equal(video.extension, "mp4");
+  assert.equal(video.kind, "video");
+  assert.equal(video.isGif, false);
+
+  // Animated GIF: same MP4 pick but flagged as a GIF for later conversion.
+  const gif = background.resolveTweetMedia({
+    type: "animated_gif",
+    video_info: {
+      variants: [{ content_type: "video/mp4", bitrate: 832000, url: "https://video.example.com/gif.mp4" }]
+    }
+  });
+  assert.equal(gif.isGif, true);
+  assert.equal(gif.kind, "video");
+
+  // Photo with a non-default format keeps its extension.
+  const png = background.resolveTweetMedia({
+    type: "photo",
+    media_url_https: "https://pbs.example.com/media/pic.png?format=png"
+  });
+  assert.equal(png.extension, "png");
+});
+
+test("photo extension matches content.js getPhotoExtension for bare CDN URLs", () => {
+  // content.js `getPhotoExtension` safe rules: explicit `format` param wins
+  // (jpeg→jpg), else a known pathname extension (png/webp), else "jpg". The
+  // old resolver fallback `url.split("?")[0].split(".").pop()` returned the
+  // WHOLE host path for a bare URL, so discovery filenames gained garbage like
+  // "commediaabc" while the same photo scanned from the DOM was ".jpg". Both
+  // paths must produce the SAME extension or a photo collapses/diverges.
+  const background = loadBackground();
+  // Reproduces content.js getPhotoExtension exactly (kept in lockstep here).
+  const expected = (url) => {
+    try {
+      const parsed = new URL(url, "https://x.com");
+      const format = (parsed.searchParams.get("format") || "").toLowerCase();
+      if (["png", "webp", "jpg", "jpeg"].includes(format)) return format === "jpeg" ? "jpg" : format;
+      const path = parsed.pathname.toLowerCase();
+      if (path.endsWith(".png")) return "png";
+      if (path.endsWith(".webp")) return "webp";
+    } catch (_) { /* fall through to jpg */ }
+    return "jpg";
+  };
+  const urls = [
+    "https://pbs.example.com/media/photo.jpg",
+    "https://pbs.example.com/media/abc?name=orig",       // no format, no ext — used to yield "commediaabc"
+    "https://pbs.example.com/media/abc",                  // no query at all
+    "https://pbs.example.com/media/pic?format=jpeg",     // jpeg format maps to jpg
+    "https://pbs.example.com/media/pic.png?format=png",
+    "https://pbs.example.com/media/pic.webp?format=webp"
+  ];
+  for (const url of urls) {
+    const resolved = background.resolveTweetMedia({ type: "photo", media_url_https: url });
+    assert.equal(
+      resolved.extension,
+      expected(url),
+      `extension mismatch for ${url}`
+    );
+    // Guard against the original garbage fallback ever returning the host path.
+    assert.notEqual(resolved.extension, "commediaabc");
+    assert.match(resolved.extension, /^(jpg|png|webp)$/);
+  }
+});
+
+test("getTweetMedia and mediaItemsFromTweetObject agree on shared media rules", async () => {
+  const payload = { data: { tweetResult: { result: makeQuoteReactionTweet() } } };
+  const background = loadBackground({
+    fetch: async () => ({ ok: true, status: 200, text: async () => "", json: async () => payload })
+  });
+  const media = await background.getTweetMedia("7001");
+  // The shared resolver must mark the animated_gif reaction clip as a GIF on
+  // BOTH the single-post path and the timeline/discovery path.
+  const reaction = media.videos.find((entry) => entry.tweetId === "7001");
+  assert.equal(reaction.type, "animated_gif");
+  const items = background.mediaFromTweet(makeQuoteReactionTweet(), "reactor", { includeRetweets: false, includeQuoted: true });
+  const queueReaction = items.find((item) => item.tweetId === "7001");
+  assert.equal(queueReaction.isGif, true);
+  // Both paths pick the same MP4 URL for the quoted video.
+  const quotedVideo = media.videos.find((entry) => entry.tweetId === "7000");
+  const queueQuoted = items.find((item) => item.tweetId === "7000");
+  assert.equal(quotedVideo.url, queueQuoted.url);
+});
+
 test("getTweetMedia returns quoted media with owning-post attribution", async () => {
   const payload = {
     data: { tweetResult: { result: makeQuoteReactionTweet() } }
@@ -1230,6 +1365,62 @@ test("queueClearFinished drops only completed and failed rows", async () => {
   const remaining = cleared.items.map((item) => item.id);
   assert.ok(!remaining.includes("901-a"), "the completed row must be removed");
   assert.ok(remaining.includes("901-b"), "an unfinished row must survive Clear finished");
+});
+
+test("buildRunNotices only warns about media kinds actually packed into the archive", () => {
+  const background = loadBackground();
+  // Items that share a tweetId belong to the same post, so media kinds combine.
+  const queued = (id, kind) => ({
+    id, tweetId: "tw-mix", type: kind === "gif" ? "video" : kind, isGif: kind === "gif", status: "queued"
+  });
+
+  // A post with photos + a video while video archiving is OFF: the archive is a
+  // clean photo-only ZIP and the video stays a separate raw MP4. This must NOT
+  // raise the "mix ... not a single-format post" warning.
+  const photoVideoPost = [
+    queued("p1", "photo"),
+    queued("v1", "video")
+  ];
+  const off = background.buildRunNotices(
+    { items: photoVideoPost },
+    { archiveGifs: true, archiveVideos: false },
+    "zip"
+  );
+  assert.ok(!off.some((notice) => /mix/i.test(notice)), `no mix warning expected: ${off}`);
+
+  // Same post with videos opted in: now the archive genuinely mixes photo/video
+  // entries, so the warning is correct.
+  const on = background.buildRunNotices(
+    { items: photoVideoPost },
+    { archiveGifs: true, archiveVideos: true },
+    "zip"
+  );
+  assert.ok(on.some((notice) => /mix/i.test(notice)), "mix warning expected when video is archived");
+  assert.ok(on.some((notice) => /include video files packed/i.test(notice)), "video archive warning expected");
+
+  // A post mixing photo + GIF (GIFs archive by default) raises the mix warning.
+  const photoGifPost = [
+    queued("p2", "photo"),
+    queued("g1", "gif")
+  ];
+  const gifOn = background.buildRunNotices(
+    { items: photoGifPost },
+    { archiveGifs: true, archiveVideos: false },
+    "zip"
+  );
+  assert.ok(gifOn.some((notice) => /mix/i.test(notice)), "photo+GIF is a genuinely mixed archive");
+
+  // A single-format post (photos only) never warns.
+  const photosOnly = [
+    queued("p3", "photo"),
+    queued("p4", "photo")
+  ];
+  const singleFormat = background.buildRunNotices(
+    { items: photosOnly },
+    { archiveGifs: true, archiveVideos: false },
+    "zip"
+  );
+  assert.equal(singleFormat.length, 0, "a photos-only post never warns");
 });
 
 // Regression for the round-3 review: two handlers existed in background.js and
