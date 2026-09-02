@@ -4,9 +4,13 @@ _Last audited: 2026-09-02 (v3.6.1 review pass: shared `lib/archive.js` engine
 replaces duplicated worker/offscreen archive code, Stop scan cancels the
 429/503 countdown, storage save chains survive a failed write, queueStart
 gives failed items a fresh attempt budget, dead state removed, CI YAML
-cleaned in both copies. Previous audit 2026-09-01: v3.6 media-kind upgrade;
-v3.5 master folder + per-post archives + naming; 2026-08-26 round-3 live pass
-+ v3.4 quoted-post capture.)_
+cleaned in both copies. **Same-day CI follow-up:** `actions/checkout` /
+`actions/setup-node` bumped `@v4`→`@v5` in both copies (clears the node20
+deprecation warning), `scripts/package-release.sh` no longer exits 141 on a
+SIGPIPE, CI's packaging assertion made glob-safe, and the v3.6.1 release zip
+offline-verified (browser load-unpacked click still pending). Previous audit
+2026-09-01: v3.6 media-kind upgrade; v3.5 master folder + per-post archives +
+naming; 2026-08-26 round-3 live pass + v3.4 quoted-post capture.)_
 
 ## Product target
 
@@ -29,7 +33,7 @@ No manual API key / password / cookie paste. Self-hosted against the signed-in X
 | Per-post ZIP/CBZ/PDF output | **Done (v3.5, kind rules v3.6), needs live spot-check** | One archive per post (≤4 items), assembled in the offscreen document, saved via `<a download>` anchor (blob-filename quirk); worker data-URL fallback. v3.6: PDF is photos-only (GIF/video posts degrade PDF→ZIP); GIFs archive by default, videos opt-in; warnings at queueStart. NOT the removed whole-batch ZIP. |
 | GIF → real .gif + quality guarantees | **Done (v3.6), needs live spot-check** | `normalizePhotoUrl` forces `name=orig` on every source; videos keep highest-bitrate MP4; GIFs convert MP4→GIF89a in the offscreen document (`lib/gifEncoder.js`, bounded 30 s/360 frames/720 px) with MP4 fallback on any failure; `gifOutput` toggle. |
 | Naming-scheme checkboxes | **Done (v3.5)** | `nameTemplate` (sync, default `{user} - {text} - {id}`), checkbox UI + live preview + manual input for custom templates; id fallback, reserved-name prefix. |
-| Offline CI | **Done (v3.5), hardened (v3.6.1)** | `.github/workflows/extension-tests.yml` + byte-identical `docs/ci/extension-tests.yml` (see `docs/ci/README.md`): read-only permissions, concurrency cancel, timeout, glob safe syntax check, packaging artifact assertion; syntax + `node --test` (116) + packaging smoke. No real-browser CI — GitHub runners cannot drive MV3 (verified in nh-dw-2.0). |
+| Offline CI | **Done (v3.5), hardened (v3.6.1), actions bumped (2026-09-02 follow-up)** | `.github/workflows/extension-tests.yml` + byte-identical `docs/ci/extension-tests.yml` (see `docs/ci/README.md`): read-only permissions, concurrency cancel, timeout, glob safe syntax check, packaging artifact assertion; syntax + `node --test` (116) + packaging smoke. Actions on `@v5` — v4 declared the `node20` runtime that runner images now force onto node24 with a warning; v5+ declare `node24` (upstream is at v7, see IMPROVEMENT_LOG). Both the packaging script and its CI assertion were made exit-code-honest this pass (see next row). No real-browser CI — GitHub runners cannot drive MV3 (verified in nh-dw-2.0). |
 | Per-tweet action bar | Expanded (Rank A) | `Download` **and** `Add to queue` on every media post, plus toasts. Reimplemented locally, not copied. |
 | Popup DOM auto-scroll bulk | **Removed** | The popup's competing scroll+download loop is deleted; the popup is now an Open-Side-Panel launcher with a live capture status line. |
 | ZIP export (whole-batch) | **Removed — stays removed** | The multi-GB whole-batch archive path stays deleted. v3.5's per-post archive (≤4 images, offscreen-assembled) is a different, explicitly requested feature and must not grow into batch archiving. |
@@ -40,7 +44,7 @@ No manual API key / password / cookie paste. Self-hosted against the signed-in X
 | Include replies / quoted | **Quoted done (v3.4); replies not implemented** | Quote-card ("mentioned post") media now lists by default in both tabs with an **Include quoted** switch, correct quoted-post attribution, and a `quote` badge. Replies still need their own explicit switch. |
 | Live signed-in verification | **Round 3 mostly passed; one gap fixed, needs spot-check** | Round 3 (v3.3): all functions work, no double entries, UI/UX decent for deployment — except quote-card media never listed (now fixed in v3.4 with quoted-post parsing + Include quoted switches). Re-verify the quote case plus the v3.3 items below. |
 | `document_start` null-root crash | **Fixed + regression-tested** | Reported `Cannot read properties of null (reading 'appendChild')` at `content.js:105`. That file is a pre-v3.2 build (still has `localCapture*` + the popup bulk loop). The null-`<head>` case was already covered by a `documentElement` fallback; the null-`<head>`-and-null-`<html>` case still threw and killed capture. Now deferred-and-retried, never throws. 3 regression tests. |
-| Code-review checklist (fit + missing logic + dead code) | **Run in full (v3.6.1)** | v3.6.1 pass found/fixed: duplicated worker↔offscreen archive plumbing (→ shared `lib/archive.js`), Stop scan not cancelling the rate-limit countdown, poisonable storage save chains, failed items re-queued without a fresh attempt budget, dead `replayedKeys`/`scanStats.photos|videos`/unused `collectTweetMedia` fields. Previous pass: two contract commands handled with no UI sender (`queueClearFinished`, `queueClearDownloadedHistory`) — now wired, guard test keeps them reachable; `scrollRescan` stays a documented hook with no button (read-only, allowlisted). |
+| Code-review checklist (fit + missing logic + dead code) | **Run in full (v3.6.1)** | v3.6.1 pass found/fixed: duplicated worker↔offscreen archive plumbing (→ shared `lib/archive.js`), Stop scan not cancelling the rate-limit countdown, poisonable storage save chains, failed items re-queued without a fresh attempt budget, dead `replayedKeys`/`scanStats.photos|videos`/unused `collectTweetMedia` fields. Previous pass: two contract commands handled with no UI sender (`queueClearFinished`, `queueClearDownloadedHistory`) — now wired, guard test keeps them reachable; `scrollRescan` stays a documented hook with no button (read-only, allowlisted). **Same-day follow-up:** the CI/packaging path was re-read too and two exit-code bugs surfaced there — `scripts/package-release.sh` returning **141** (its `unzip -l \| head -n 15` SIGPIPEs `unzip`, which `set -o pipefail` turns into a failure for a script that succeeded) and CI's `test -f releases/*.zip` failing with `binary operator expected` whenever a second zip exists. Both fixed; the packaging step was re-run verbatim with two zips present (exit 0). |
 
 
 ## Current product opinion / direction
@@ -123,8 +127,8 @@ New this session (2026-08-25): restructure so the extension can be **Load unpack
 - [x] Flattened scrapyard to `reference/scrapyard/{rank-s-plucker-xbd, rank-a-video-downloader, rank-b-x-exporter}` (rank A/B were nested inside rank S; rank A extension was double-nested). Context notes + install instructions preserved per rank.
 - [x] Added `scripts/package-release.sh` → `releases/x-media-downloader-v<version>.zip` (manifest at zip root, optional date tag, Windows fallback documented); `releases/*.zip` gitignored.
 - [x] **Try it out:** loaded unpacked and live-tested across rounds 1–3. Round 3 (2026-08-26, v3.3) passed the core checklist — user report: all functions work, no double entries, UI/UX already decent for deployment. Only the v3.4 quote-case spot-check (item 12 below) remains.
-- [ ] Cut the first release zip (`scripts/package-release.sh`) and confirm it loads from the unzipped folder.
-- [x] Bump `extension/manifest.json` version when shipping the next user-visible change — now at **3.4** (quoted-media capture + Include quoted switches are user-visible); optionally start a `CHANGELOG.md` per release.
+- [~] Cut the first release zip (`scripts/package-release.sh`) and confirm it loads from the unzipped folder — **half done 2026-09-02**: `releases/x-media-downloader-v3.6.1.zip` is cut and offline-verified — `manifest.json` at the zip root (no wrapper folder), `diff -r` byte-identical to `extension/`, and all 23 manifest-declared *and* runtime-resolved resources present (`lib/*`, `offscreen.*`, every `importScripts`/`<script src>` target). **Remaining:** the one click only a browser can make — Load unpacked on the unzipped folder — plus (optionally) starting `CHANGELOG.md`.
+- [x] Bump `extension/manifest.json` version when shipping the next user-visible change — now at **3.6.1** (v3.4 quoted-media capture, v3.5 output upgrade, v3.6 media kinds, v3.6.1 Stop/retry fixes are all user-visible; the 2026-09-02 CI pass changed no `extension/` file, so it did not bump the version). Still open: starting a `CHANGELOG.md` per release.
 
 ## P0 — remaining (live-X, round 3)
 
@@ -223,3 +227,6 @@ never executed in a browser) and **item 13** (live fixtures).
 - Protected / NSFW / logged-out / rate-limit messages specific.
 - Stop discovery; stop downloads; Side Panel reload retains state.
 - **116** local Node tests still green after cleanup (`node --test tests/*.test.js`: background + content + naming + zip-writer + pdf-builder + gif-encoder + archive-lib + downloader + media-kinds suites).
+- Both CI copies parse as YAML and stay byte-identical (`diff .github/workflows/extension-tests.yml docs/ci/extension-tests.yml`); a workflow edit must be re-applied to BOTH.
+- `scripts/package-release.sh` exits **0** (was a deterministic 141 SIGPIPE) and the CI packaging step passes verbatim even with more than one zip in `releases/`.
+- The release zip unzips to a structurally loadable folder: manifest at root, contents identical to `extension/`, every manifest + runtime reference resolvable.
