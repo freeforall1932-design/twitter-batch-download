@@ -58,7 +58,7 @@ function loadBackground(options = {}) {
       storage: {
         local: {
           get: async (key) => ({ [key]: stored[key] }),
-          set: async (values) => { Object.assign(stored, values); }
+          set: options.localSet || (async (values) => { Object.assign(stored, values); })
         },
         sync: {
           get: (defaults, callback) => {
@@ -90,6 +90,7 @@ function loadBackground(options = {}) {
   context.emitInstalled = async () => {
     await Promise.all(installedListeners.map((listener) => listener()));
   };
+  context.__stored = stored;
   return context;
 }
 
@@ -694,6 +695,101 @@ test("fetchWithRetry surfaces countdown callbacks on 429 before succeeding", asy
   assert.equal(calls, 2);
   assert.ok(events.includes(0));
   background.rateLimitStatusListener = null;
+});
+
+test("fetchWithRetry aborts the 429 retry loop once shouldAbort fires (Stop scan)", async () => {
+  const background = loadBackground();
+  background.rateLimitWait = async () => {};
+  background.refreshAuth = async () => ({ ok: true });
+  let calls = 0;
+  let stopNow = false;
+  background.fetch = async () => {
+    calls++;
+    // User presses Stop scan while the first attempt is in flight.
+    stopNow = true;
+    return { status: 429, ok: false, headers: { get: () => "0" } };
+  };
+  // Stop scan during a rate-limit retry must not keep spinning the countdown:
+  // the caller gets an explicit abort marker instead of a response.
+  const result = await background.fetchWithRetry("https://x.com/i/api/graphql/test", {}, 2, {
+    shouldAbort: () => stopNow
+  });
+  assert.equal(result.aborted, true);
+  assert.equal(calls, 1, "no further attempts after the abort");
+});
+
+test("callDiscoveryGraphQL reports a user stop as code stopped, not a rate-limit error", async () => {
+  const background = loadBackground();
+  background.rateLimitWait = async () => {};
+  background.refreshAuth = async () => ({ ok: true });
+  background.fetch = async () => ({ status: 429, ok: false, headers: { get: () => "0" } });
+  await assert.rejects(
+    () => background.callDiscoveryGraphQL("queryId99", "UserMedia", {}, null, {
+      shouldAbort: () => true
+    }),
+    (error) => error.code === "stopped" && /stopped/i.test(error.message)
+  );
+});
+
+test("queueStart gives previously failed items a fresh attempt budget", async () => {
+  const background = loadBackground({
+    stored: {
+      batchDownloadQueueV1: {
+        items: [{
+          id: "f1",
+          url: "https://pbs.example.com/f1.jpg",
+          type: "photo",
+          filename: "f1.jpg",
+          source: "scroll",
+          selected: true,
+          status: "failed",
+          attempts: 3,
+          error: "old failure"
+        }],
+        concurrency: 2,
+        running: false,
+        stopped: false
+      }
+    },
+    download: (options, callback) => callback(1)
+  });
+
+  const started = await background.handleQueueMessage({ action: "queueStart", mode: "selected", source: "scroll" });
+  const item = started.items[0];
+  assert.equal(item.status, "queued");
+  assert.equal(item.attempts, 0, "a user-triggered start resets the attempt budget");
+  assert.equal(item.error, null);
+
+  // Without the reset the item would go straight to failed again (attempts 4/3).
+  await background.processQueue();
+  const state = await background.handleQueueMessage({ action: "queueGet" });
+  assert.equal(state.items[0].status, "downloading");
+  assert.equal(state.items[0].attempts, 1);
+});
+
+test("a rejected storage write cannot poison later queue saves", async () => {
+  let failNext = true;
+  const background = loadBackground({
+    localSet: async (values) => {
+      if (failNext) { failNext = false; throw new Error("quota exceeded"); }
+      Object.assign(background.__stored, values);
+    }
+  });
+
+  await background.handleQueueMessage({
+    action: "queueAdd",
+    items: [{ id: "a", url: "https://pbs.example.com/a.jpg", filename: "a.jpg" }]
+  });
+  await background.handleQueueMessage({
+    action: "queueAdd",
+    items: [{ id: "b", url: "https://pbs.example.com/b.jpg", filename: "b.jpg" }]
+  });
+
+  // The second save must actually reach storage, not inherit the first failure.
+  assert.deepEqual(
+    Array.from(background.__stored.batchDownloadQueueV1.items, (item) => item.id),
+    ["b", "a"]
+  );
 });
 
 test("network captures prefer live operation ids and headers without storing cookies", () => {

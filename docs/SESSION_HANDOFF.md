@@ -1,6 +1,6 @@
 # Session Handoff — X Media Downloader
 
-**Prepared:** 2026-09-01 · **Extension version:** 3.6 · **Status:** v3.6 = v3.5 + the media-kind upgrade (GIF→real-.gif conversion via a local GIF89a encoder, forced-orig photo quality, archive kind rules: PDF photos-only, GIF/video ZIP/CBZ-only behind optional toggles, queueStart warnings). v3.5 earlier the same day added master folder / per-post ZIP-CBZ-PDF / naming checkboxes / offline CI. All 106 offline tests green; CI live on GitHub. Still pending live-X: the v3.4 quote-card spot-check AND the v3.5–v3.6 output spot-check (WORKLIST P0 items 12 + 14).
+**Prepared:** 2026-09-02 · **Extension version:** 3.6.1 · **Status:** v3.6.1 = the 2026-09-02 review/cleanup pass: shared `lib/archive.js` archive engine (worker + offscreen no longer carry duplicated fetch/PDF/ZIP code), Stop scan now cancels the 429/503 countdown, storage save chains survive a rejected write, `queueStart` gives failed items a fresh attempt budget, dead state removed, CI YAML cleaned in both byte-identical copies. All 116 offline tests green. Still pending live-X: the v3.4 quote-card spot-check AND the v3.5–v3.6 (now also v3.6.1) output spot-check — WORKLIST P0 items 12 + 14.
 
 ---
 
@@ -80,9 +80,15 @@ Open questions to ask the user if they are available:
 
 - Repository: `freeforall1932-design/twitter-batch-download`
 - Extension directory: `extension/` (the **Load unpacked** target)
-- Working branch for the last Arena session: `arena/01a05aab-twitter-batch-download`
+- Working branch for the last Arena session: `arena/01a05aab-twitter-batch-download`; this session's branch is `arena/01a05f98-twitter-batch-download`
 - Recent history:
-  - **(v3.6, this branch)** — Media-kind upgrade: GIF→real-.gif conversion
+  - **(v3.6.1, this branch)** — Review/cleanup pass: shared archive engine
+    (`lib/archive.js`), Stop-cancels-backoff (`shouldAbort` through
+    `fetchWithRetry`), save-chain hardening (`.catch` on queue/downloaded/
+    discovery chains), `queueStart` attempt-budget reset, dead code removed
+    (`replayedKeys`, `scanStats` counters, unused `collectTweetMedia` fields),
+    CI YAML cleaned in both copies. Manifest 3.6 → 3.6.1, 116 offline tests.
+  - **(v3.6, main)** — Media-kind upgrade: GIF→real-.gif conversion
     (`lib/gifEncoder.js` + offscreen `<video>`/canvas decode), forced
     `name=orig` photo quality, archive kind rules (PDF photos-only,
     GIF default-in / video opt-in, ZIP/CBZ only), queueStart warnings,
@@ -113,11 +119,13 @@ extension at `chrome://extensions` and load **`extension/`** unpacked.
 
 ```
 extension/                 # ← Load unpacked target (manifest.json at root)
-extension/lib/             # naming.js / zipWriter.js / pdfBuilder.js — UMD,
-                           # shared by worker, offscreen, sidepanel and tests
+extension/lib/             # naming.js / zipWriter.js / pdfBuilder.js /
+                           # gifEncoder.js / archive.js — UMD, shared by
+                           # worker, offscreen, sidepanel and tests
 extension/offscreen.html   # + offscreen.js: archive assembly (chrome.runtime ONLY)
 tests/                     # background/content/naming/zip-writer/pdf-builder/
-                           # downloader suites + helpers/load-background.js
+                           # gif-encoder/archive-lib/downloader/media-kinds
+                           # suites + helpers/load-background.js
 scripts/package-release.sh # zip extension/ → releases/x-media-downloader-v<version>.zip
 releases/                  # generated zips (gitignored)
 docs/                      # WORKLIST.md, SESSION_HANDOFF.md, IMPROVEMENT_LOG.md,
@@ -183,22 +191,23 @@ Cookie headers.
 
 ---
 
-## 4. Current architecture (v3.6)
+## 4. Current architecture (v3.6.1)
 
 | File | Role |
 |---|---|
-| `manifest.json` | MV3, sidePanel, cookies/downloads/storage/scripting/**offscreen**. Content scripts: `injected.js` (MAIN, document_start) + `content.js` (isolated, document_start). Hosts: x.com / twitter.com / twimg CDN only. |
-| `background.js` | Auth, GraphQL, source-tagged queue, remote discovery, downloads, capture bag, timeline response ingestion, downloaded-id history. Quoted-post media resolved from `quoted_status_result` (one level, soft-unwrap) with owning-post attribution. v3.5: output settings bag (`getOutputSettings`), download-time path building (`rawPathForItem`), per-post archive pass (`runArchivePass`) relayed to the offscreen document with a worker data-URL fallback. v3.6: `normalizePhotoUrl` forces `name=orig`; `isGif` identity; `prepareRawDownload` (GIF→.gif via offscreen, MP4 fallback); kind rules (`archivedKinds`/`effectiveGroupFormat`) and `buildRunNotices` warnings. **No whole-batch ZIP.** |
+| `manifest.json` | MV3, sidePanel, cookies/downloads/storage/scripting/**offscreen**. Content scripts: `injected.js` (MAIN, document_start) + `content.js` (isolated, document_start). Hosts: x.com / twitter.com / twimg CDN only. Version **3.6.1**. |
+| `background.js` | Auth, GraphQL, source-tagged queue, remote discovery, downloads, capture bag, timeline response ingestion, downloaded-id history. Quoted-post media resolved from `quoted_status_result` (one level, soft-unwrap) with owning-post attribution. v3.5: output settings bag (`getOutputSettings`), download-time path building (`rawPathForItem`), per-post archive pass (`runArchivePass`) relayed to the offscreen document with a worker data-URL fallback. v3.6: `normalizePhotoUrl` forces `name=orig`; `isGif` identity; `prepareRawDownload` (GIF→.gif via offscreen, MP4 fallback); kind rules (`archivedKinds`/`effectiveGroupFormat`) and `buildRunNotices` warnings. v3.6.1: `shouldAbort` through `fetchWithRetry`/`sleepWithRateLimitCountdown` (Stop scan cancels backoff), catch-recovering storage save chains, `queueStart` resets the attempt budget, archive bytes delegated to `lib/archive.js`. **No whole-batch ZIP.** |
 | `lib/naming.js` | Shared naming engine (UMD → `XDLNaming`): `sanitizeArtifactFilename` (per-segment, from nh-dw), master-folder normalize (empty = off), format whitelist, template tokens/render/preview helpers, raw + archive path builders. |
 | `lib/zipWriter.js` | STORE-only ZIP writer (`XDLZip`) for per-post archives — local re-implementation instead of JSZip (no-npm guardrail). |
 | `lib/pdfBuilder.js` | Dependency-free PDF 1.4 writer (`XDLPdf`), ported verbatim from nh-dw `pdfBuilder.ts` (JPEG DCTDecode verbatim, byte-exact xref). |
 | `lib/gifEncoder.js` | v3.6: dependency-free streaming GIF89a encoder (`XDLGif`) — median-cut global palette, spec-timed LZW, NETSCAPE loop. Round-trip-verified by a decoder in its test suite. |
-| `offscreen.html/js` | Archive assembly + v3.6 GIF conversion: fetch post media, convert GIF clips through `<video>`+canvas (12 fps, ≤30 s/≤360 frames/≤720 px/≤40 MB) into real .gif bytes, build ZIP/CBZ/PDF blob, save via in-document `<a download>` anchor. Raw-mode GIF bytes return to the worker as base64 (data: URLs keep the master-folder subpath). Exposes ONLY `chrome.runtime` — settings arrive relayed in the job message. |
+| `lib/archive.js` | v3.6.1: shared archive plumbing (`XDLArchive`) — `fetchImageBytes`, `preparePdfImage`, `bytesToBase64`, `buildArchiveBytes` (ZIP/CBZ/PDF bytes + MIME). ONE copy used by the worker fallback AND the offscreen document (they previously duplicated ~120 lines and could drift); no chrome API, runs in both contexts and Node. |
+| `offscreen.html/js` | Archive assembly + v3.6 GIF conversion: fetch post media, convert GIF clips through `<video>`+canvas (12 fps, ≤30 s/≤360 frames/≤720 px/≤40 MB) into real .gif bytes, build ZIP/CBZ/PDF blob (via `lib/archive.js`), save via in-document `<a download>` anchor. Raw-mode GIF bytes return to the worker as base64 (data: URLs keep the master-folder subpath). Exposes ONLY `chrome.runtime` — settings arrive relayed in the job message. |
 | `injected.js` | MAIN-world XHR/fetch observer. Forwards **any** media-bearing GraphQL response (no operation allowlist), keeps a 40-entry replay buffer, and watches SPA route changes via `pushState`/`replaceState`/`popstate`. The allowlist survives only for Remote-fetch *request metadata*. |
 | `content.js` | **Always-on** scroll capture (no watch command), SPA route re-arm, DOM photo listing, rate-bounded per-post video resolve (quote-card media resolved through the outer post id), content-driven auto-scroll with in-page badge, action-bar `Download` + `Add to queue`, toasts. v3.5: items carry `text`/`displayName`/`mediaIndex`; `downloadFile` sends the owning item. v3.6: one shared `mediaEntryToItem()` builder (scroll resolver + action bar), `isGif` flag. |
 | `sidepanel.html/js/css` | Two-tab Side Panel: Scroll capture + Remote fetch. One download action, live active-tab status pill, per-row remove, skip-already-downloaded toggle, **Include quoted** switches, `Clear finished` / `Reset downloaded history` buttons. v3.5: **Output settings** card (master folder, default format, name-template checkboxes + live preview + custom-template input — the ONLY writer of the sync output settings) the dock's per-job **Save posts as** picker, v3.6 GIF/archive toggles, the `gif` badge, and the amber `queueNotices` warning box. |
 | `popup.html/js` | Side Panel launcher + capture status line. No scroll/download loop. |
-| `tests/` | `background.test.js`, `content.test.js`, plus v3.5: `naming.test.js`, `zip-writer.test.js`, `pdf-builder.test.js` (verbatim port), `downloader.test.js` (real worker in a VM: master-folder + archive pipelines), v3.6: `gif-encoder.test.js` (round-trip decoder) + `media-kinds.test.js` (quality, kind rules, warnings, mixed-post pipelines), `helpers/load-background.js`. |
+| `tests/` | `background.test.js`, `content.test.js`, plus v3.5: `naming.test.js`, `zip-writer.test.js`, `pdf-builder.test.js` (verbatim port), `downloader.test.js` (real worker in a VM: master-folder + archive pipelines), v3.6: `gif-encoder.test.js` (round-trip decoder) + `media-kinds.test.js` (quality, kind rules, warnings, mixed-post pipelines), v3.6.1: `archive-lib.test.js` (shared-engine byte parity) + 4 background regressions (abort on Stop, `stopped` classification, attempt-budget reset, storage-write recovery), `helpers/load-background.js`. |
 
 ### Design decisions that are deliberate — do not "simplify" these away
 
@@ -269,6 +278,16 @@ re-breaks a bug the user already reported:
    video enters its archive, and `buildRunNotices` announces it at
    queueStart. Do not "fix" this by rendering a GIF's first frame into a
    PDF page — the animation loss is the whole reason for the rule.
+15. **One archive engine for both contexts.** (v3.6.1.) `lib/archive.js`
+   (`XDLArchive`) is the ONLY copy of fetch-image / PDF-page-prep / base64 /
+   ZIP-PDF assembly; `background.js`'s worker fallback and `offscreen.js`
+   both call it. The previous duplicated copies could drift silently (the
+   kind of bug this session's review was looking for) — do not re-split them.
+16. **Stop scan cancels a pending rate-limit countdown.** (v3.6.1.)
+   `fetchWithRetry`/`sleepWithRateLimitCountdown` honor a `shouldAbort`
+   callback the discovery run wires to `stopRequested` + run-id staleness,
+   and an aborted retry is reported as a clean stop, never a fake error.
+   Do not "simplify" this back to a wait-the-full-wait loop.
 
 ### Removed / deprecated — do not reintroduce without a product decision
 
@@ -368,7 +387,7 @@ OFF**), `nameTemplate` (default `"{user} - {text} - {id}"`), `outputFormat`
 (default `"raw"`, whitelist raw|zip|cbz|pdf), `gifOutput` (default `"gif"`,
 else `"mp4"`), `archiveGifs` (default `true`), `archiveVideos` (default
 `false`). All are normalized on read (`normalizeOutputSettings`) so corrupt
-values degrade to defaults.
+values degrade to defaults. v3.6.1 adds no keys.
 
 ---
 
@@ -464,7 +483,7 @@ one-line quality notes that inform ranking, not detailed specs.
 ```bash
 # from repo root
 for f in extension/*.js extension/lib/*.js; do node --check "$f"; done   # every shipped script (node --check only honors one file per call)
-node --test tests/*.test.js            # 106 tests
+node --test tests/*.test.js            # 116 tests
 scripts/package-release.sh             # → releases/x-media-downloader-v<version>.zip
 ```
 
@@ -481,20 +500,22 @@ pipelines; `gif-encoder.test.js` round-trips encoded GIFs through a real
 decoder. **Extend these rather than testing by hand** — every future capture
 or output bug should land as a failing test first.
 
-CI is LIVE: the user installed `.github/workflows/extension-tests.yml` via
-the GitHub web UI on 2026-09-01 (the Arena GitHub App lacks the `workflows`
-scope to push it — see `docs/ci/README.md`; `docs/ci/extension-tests.yml`
-is the byte-identical reference copy). It runs exactly the offline set
-above plus a packaging smoke and deliberately has NO real-browser job (§7).
-Never edit the workflow from an Arena session — pushes touching it are
-rejected; give the user a paste-ready diff instead.
+CI is LIVE: `.github/workflows/extension-tests.yml` is installed and runs
+green on GitHub (installed via the web UI on 2026-09-01 — the Arena GitHub
+App has historically lacked the `workflows` scope to push it, so if a push
+touching `.github/workflows/` is rejected, keep `docs/ci/extension-tests.yml`
+updated and hand the user the paste-ready diff). `docs/ci/extension-tests.yml`
+remains the byte-identical reference copy — verify with `diff` after every
+workflow edit (both were cleaned together on 2026-09-02 for v3.6.1). It runs
+the offline set plus a packaging smoke and deliberately has NO real-browser
+job (§7).
 
 ---
 
 ## 9. Next session priorities
 
-1. **Live spot-check v3.4 + v3.5 + v3.6** — WORKLIST P0 items 12 and 14.
-   Reload `extension/` unpacked (manifest 3.6, "ask where to save" OFF),
+1. **Live spot-check v3.4 + v3.5 + v3.6 + v3.6.1** — WORKLIST P0 items 12 and 14.
+   Reload `extension/` unpacked (manifest 3.6.1, "ask where to save" OFF),
    then: the quote-card case (item 12), a 4-photo post in raw mode
    (`Downloads/XMedia/<post name>/001…004.jpg`), the empty-master-folder
    rollback, one ZIP + one CBZ + one PDF from the same post (contents,
@@ -505,9 +526,10 @@ rejected; give the user a paste-ready diff instead.
    re-download. If an archive still saves under a UUID, capture the Chrome
    version — that is the blob-filename bug the anchor mechanism dodges.
 2. **Cut the first release zip** (`scripts/package-release.sh` →
-   `releases/x-media-downloader-v3.6.zip`) and confirm it loads from the
+   `releases/x-media-downloader-v3.6.1.zip`) and confirm it loads from the
    unzipped folder. Optionally start `CHANGELOG.md`. With that plus item 1,
-   P0 is complete.
+   P0 is complete. (The v3.6.1 `ci` packaging smoke already passed —
+   `lib/archive.js` is in the zip; that CI artifact was deleted.)
 3. P1 afterwards: Side Panel diagnostics + sanitized copy-debug-report,
    explicit Include replies switch (quoted shipped in v3.4). Name templates
    shipped in v3.5; highest-bitrate video is guaranteed since v3.6.

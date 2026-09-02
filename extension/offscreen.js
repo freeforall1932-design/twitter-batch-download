@@ -43,20 +43,8 @@
     }, REVOKE_DELAY_MS);
   }
 
-  async function fetchImageBytes(url) {
-    const response = await fetch(url, { credentials: "omit" });
-    if (!response.ok) {
-      throw new Error("Image fetch failed (" + response.status + ") for " + url);
-    }
-    const buffer = await response.arrayBuffer();
-    if (!buffer || buffer.byteLength < 32) {
-      throw new Error("Image response too small for " + url);
-    }
-    return {
-      bytes: new Uint8Array(buffer),
-      contentType: response.headers.get("content-type") || null
-    };
-  }
+  // fetchImageBytes / preparePdfImage / bytesToBase64 / buildArchiveBytes
+  // live in lib/archive.js — the same code the service-worker fallback runs.
 
   // ==========================================================================
   // GIF conversion — X's "GIFs" are silent MP4 clips; a real .gif is produced
@@ -144,15 +132,6 @@
     }
   }
 
-  function bytesToBase64(bytes) {
-    let binary = "";
-    const chunkSize = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunkSize, bytes.length)));
-    }
-    return btoa(binary);
-  }
-
   // One archive entry's bytes + final name, honoring its media kind.
   //   photo → fetched verbatim (already forced to name=orig by the worker).
   //   gif   → converted to a real .gif when the job asks for it; a failed
@@ -166,41 +145,14 @@
         return { name: image.name, bytes: gifBytes, contentType: "image/gif" };
       } catch (error) {
         console.warn("[X-DL OFFSCREEN] GIF conversion failed, embedding MP4:", error);
-        const source = await fetchImageBytes(image.url);
+        const source = await XDLArchive.fetchImageBytes(image.url);
         return { name: image.name.replace(/\.gif$/i, ".mp4"), bytes: source.bytes, contentType: source.contentType };
       }
     }
-    const fetched = await fetchImageBytes(image.url);
+    const fetched = await XDLArchive.fetchImageBytes(image.url);
     return { name: image.name, bytes: fetched.bytes, contentType: fetched.contentType };
   }
 
-  // JPEGs embed verbatim (DCTDecode, dimensions from the SOF frame);
-  // PNG/WebP — and CMYK/grayscale JPEGs — re-encode via createImageBitmap +
-  // OffscreenCanvas, flattened on white (JPEG has no alpha channel:
-  // transparency must not turn black).
-  async function preparePdfImage(bytes, contentType) {
-    const info = XDLPdf.jpegInfo(bytes);
-    if (info !== null && info.components === 3 && info.width > 0 && info.height > 0) {
-      return { bytes, width: info.width, height: info.height };
-    }
-    const bitmap = await createImageBitmap(new Blob([bytes], { type: contentType || "image/jpeg" }));
-    try {
-      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-      const ctx = canvas.getContext("2d");
-      if (!ctx) throw new Error("PDF export cannot encode a page (no 2d canvas).");
-      ctx.fillStyle = "#FFFFFF";
-      ctx.fillRect(0, 0, bitmap.width, bitmap.height);
-      ctx.drawImage(bitmap, 0, 0);
-      const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.92 });
-      return {
-        bytes: new Uint8Array(await blob.arrayBuffer()),
-        width: bitmap.width,
-        height: bitmap.height
-      };
-    } finally {
-      if (typeof bitmap.close === "function") bitmap.close();
-    }
-  }
 
   // job: { format: "zip"|"cbz"|"pdf", filename: "<base>.<ext>",
   //        gifOutput: "gif"|"mp4",
@@ -216,25 +168,20 @@
     const filename = XDLNaming.sanitizeArtifactFilename(String(job.filename || ""), "post." + format);
     const gifOutput = job.gifOutput === "mp4" ? "mp4" : "gif";
 
+    if (format === "pdf") {
+      const nonPhoto = images.find((image) => image.kind && image.kind !== "photo");
+      if (nonPhoto) throw new Error("PDF archives hold photos only; the worker must degrade this post to ZIP.");
+    }
+
     const fetched = [];
     for (const image of images) {
       fetched.push(await fetchArchiveEntry(image, gifOutput));
     }
 
-    let blob;
-    if (format === "pdf") {
-      const nonPhoto = images.find((image) => image.kind && image.kind !== "photo");
-      if (nonPhoto) throw new Error("PDF archives hold photos only; the worker must degrade this post to ZIP.");
-      const pages = [];
-      for (const page of fetched) {
-        pages.push(await preparePdfImage(page.bytes, page.contentType));
-      }
-      blob = new Blob([XDLPdf.buildPdfDocument(pages)], { type: "application/pdf" });
-    } else {
-      const archive = XDLZip.buildZip(fetched.map((entry) => ({ name: entry.name, data: entry.bytes })));
-      blob = new Blob([archive], { type: format === "cbz" ? "application/vnd.comicbook+zip" : "application/zip" });
-    }
-    saveBlobViaAnchor(blob, filename);
+    // Byte-level archive work lives in lib/archive.js (shared with the
+    // service-worker fallback): fetch, PDF page prep, ZIP/blob building.
+    const assembled = await XDLArchive.buildArchiveBytes(fetched, format);
+    saveBlobViaAnchor(new Blob([assembled.bytes], { type: assembled.mime }), filename);
     return { ok: true, filename };
   }
 
@@ -250,7 +197,7 @@
       // base64 so chrome.downloads can save them as a data: URL WITH the
       // master-folder subpath (the anchor mechanism cannot carry folders).
       convertMp4ToGif(String(msg.job?.url || ""))
-        .then((bytes) => sendResponse({ ok: true, base64: bytesToBase64(bytes) }))
+        .then((bytes) => sendResponse({ ok: true, base64: XDLArchive.bytesToBase64(bytes) }))
         .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
       return true; // async response
     }

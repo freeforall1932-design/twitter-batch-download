@@ -35,7 +35,7 @@
   const listedMediaKeys = new Set();      // CDN media keys already sent
   const pendingVideoTweets = new Set();   // tweet ids seen in DOM with video, unresolved
   const resolvedVideoTweets = new Set();  // tweet ids already resolved or resolving
-  const scanStats = { photos: 0, videos: 0, posts: 0 };
+  let postsOnScreen = 0;
 
   // Auto-scroll tuning. "Fast" is genuinely fast: it does not sleep on a fixed
   // timer, it waits for X to render the next batch and moves on immediately.
@@ -507,7 +507,6 @@
       });
     });
 
-    if (items.length) scanStats.photos += items.length;
     return items;
   }
 
@@ -522,7 +521,7 @@
   function scanVisibleMedia() {
     if (!document.body) return;
     const articles = Array.from(document.querySelectorAll('article[data-testid="tweet"]'));
-    scanStats.posts = articles.length;
+    postsOnScreen = articles.length;
     const items = [];
     for (const article of articles) items.push(...makeDomQueueItems(article));
 
@@ -579,7 +578,6 @@
           });
         }
         if (items.length) {
-          scanStats.videos += items.filter((item) => item.type === "video").length;
           safeSend({ action: "queueAdd", items, source: "scroll", skipDownloaded }, (response) => {
             listedCount += response?.addedCount ?? items.length;
             statusText = `Listed ${listedCount} media item${listedCount === 1 ? "" : "s"} from this tab.`;
@@ -721,7 +719,6 @@
     const media = await getTweetMedia(info.tweetId);
     if (!media || media.error) return { error: media?.error || "no_media" };
     const handle = media.username || info.handle || "unknown";
-    const safeName = sanitizeFilename(info.tweetText || media.tweetText);
     // Quoted ("mentioned") post media carries its own attribution so the
     // download is named after the post that owns the media. No dedupe here —
     // the action-bar buttons operate on exactly one post.
@@ -737,7 +734,7 @@
     (media.photos || []).forEach((photo, index) => {
       items.push(mediaEntryToItem(photo, index, "photo", context));
     });
-    return { items, media, handle, safeName };
+    return { items };
   }
 
   async function handleSingleDownload(btn, article, label) {
@@ -955,7 +952,7 @@
       found: listedCount,
       url: window.location.href,
       route: lastRoute,
-      postsOnScreen: scanStats.posts,
+      postsOnScreen,
       pendingVideos: pendingVideoTweets.size,
       mediaFilter,
       scrollSpeed,

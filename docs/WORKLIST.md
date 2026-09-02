@@ -1,6 +1,12 @@
 # Development Worklist
 
-_Last audited: 2026-09-01 (v3.6 media-kind upgrade: GIF→real-.gif conversion, forced-orig photo quality, archive kind rules — GIF/video ZIP/CBZ-only with optional toggles — and queueStart warnings; v3.5 earlier the same day: master folder, per-post ZIP/CBZ/PDF, naming checkboxes, offline CI. See both IMPROVEMENT_LOG entries. Previous audit 2026-08-26: round-3 live pass + v3.4 quoted-post capture.)_
+_Last audited: 2026-09-02 (v3.6.1 review pass: shared `lib/archive.js` engine
+replaces duplicated worker/offscreen archive code, Stop scan cancels the
+429/503 countdown, storage save chains survive a failed write, queueStart
+gives failed items a fresh attempt budget, dead state removed, CI YAML
+cleaned in both copies. Previous audit 2026-09-01: v3.6 media-kind upgrade;
+v3.5 master folder + per-post archives + naming; 2026-08-26 round-3 live pass
++ v3.4 quoted-post capture.)_
 
 ## Product target
 
@@ -23,7 +29,7 @@ No manual API key / password / cookie paste. Self-hosted against the signed-in X
 | Per-post ZIP/CBZ/PDF output | **Done (v3.5, kind rules v3.6), needs live spot-check** | One archive per post (≤4 items), assembled in the offscreen document, saved via `<a download>` anchor (blob-filename quirk); worker data-URL fallback. v3.6: PDF is photos-only (GIF/video posts degrade PDF→ZIP); GIFs archive by default, videos opt-in; warnings at queueStart. NOT the removed whole-batch ZIP. |
 | GIF → real .gif + quality guarantees | **Done (v3.6), needs live spot-check** | `normalizePhotoUrl` forces `name=orig` on every source; videos keep highest-bitrate MP4; GIFs convert MP4→GIF89a in the offscreen document (`lib/gifEncoder.js`, bounded 30 s/360 frames/720 px) with MP4 fallback on any failure; `gifOutput` toggle. |
 | Naming-scheme checkboxes | **Done (v3.5)** | `nameTemplate` (sync, default `{user} - {text} - {id}`), checkbox UI + live preview + manual input for custom templates; id fallback, reserved-name prefix. |
-| Offline CI | **Done (v3.5)** | `docs/ci/extension-tests.yml` (install by hand as `.github/workflows/…` — see `docs/ci/README.md`): syntax + `node --test` + packaging smoke. No real-browser CI — GitHub runners cannot drive MV3 (verified in nh-dw-2.0). |
+| Offline CI | **Done (v3.5), hardened (v3.6.1)** | `.github/workflows/extension-tests.yml` + byte-identical `docs/ci/extension-tests.yml` (see `docs/ci/README.md`): read-only permissions, concurrency cancel, timeout, glob safe syntax check, packaging artifact assertion; syntax + `node --test` (116) + packaging smoke. No real-browser CI — GitHub runners cannot drive MV3 (verified in nh-dw-2.0). |
 | Per-tweet action bar | Expanded (Rank A) | `Download` **and** `Add to queue` on every media post, plus toasts. Reimplemented locally, not copied. |
 | Popup DOM auto-scroll bulk | **Removed** | The popup's competing scroll+download loop is deleted; the popup is now an Open-Side-Panel launcher with a live capture status line. |
 | ZIP export (whole-batch) | **Removed — stays removed** | The multi-GB whole-batch archive path stays deleted. v3.5's per-post archive (≤4 images, offscreen-assembled) is a different, explicitly requested feature and must not grow into batch archiving. |
@@ -34,7 +40,7 @@ No manual API key / password / cookie paste. Self-hosted against the signed-in X
 | Include replies / quoted | **Quoted done (v3.4); replies not implemented** | Quote-card ("mentioned post") media now lists by default in both tabs with an **Include quoted** switch, correct quoted-post attribution, and a `quote` badge. Replies still need their own explicit switch. |
 | Live signed-in verification | **Round 3 mostly passed; one gap fixed, needs spot-check** | Round 3 (v3.3): all functions work, no double entries, UI/UX decent for deployment — except quote-card media never listed (now fixed in v3.4 with quoted-post parsing + Include quoted switches). Re-verify the quote case plus the v3.3 items below. |
 | `document_start` null-root crash | **Fixed + regression-tested** | Reported `Cannot read properties of null (reading 'appendChild')` at `content.js:105`. That file is a pre-v3.2 build (still has `localCapture*` + the popup bulk loop). The null-`<head>` case was already covered by a `documentElement` fallback; the null-`<head>`-and-null-`<html>` case still threw and killed capture. Now deferred-and-retried, never throws. 3 regression tests. |
-| Code-review checklist (fit + missing logic + dead code) | **Run in full** | Clean except two contract commands that were handled in `background.js` and listed in the handoff but had no UI sender (`queueClearFinished`, `queueClearDownloadedHistory`). Both now wired to toolbar buttons; a structural contract test guards the class. `scrollRescan` remains a documented hook with no button (read-only, allowlisted). |
+| Code-review checklist (fit + missing logic + dead code) | **Run in full (v3.6.1)** | v3.6.1 pass found/fixed: duplicated worker↔offscreen archive plumbing (→ shared `lib/archive.js`), Stop scan not cancelling the rate-limit countdown, poisonable storage save chains, failed items re-queued without a fresh attempt budget, dead `replayedKeys`/`scanStats.photos|videos`/unused `collectTweetMedia` fields. Previous pass: two contract commands handled with no UI sender (`queueClearFinished`, `queueClearDownloadedHistory`) — now wired, guard test keeps them reachable; `scrollRescan` stays a documented hook with no button (read-only, allowlisted). |
 
 
 ## Current product opinion / direction
@@ -92,6 +98,8 @@ Use this before claiming “ready” or merging large changes:
 
 - [x] Discovery: stop on cap, no cursor, repeated cursor, empty pages, user stop, run-id staleness.
 - [x] Queue: only 1–2 concurrent; `starting` holds a slot; terminal event before next start.
+- [x] Queue: user-triggered `queueStart` resets the attempt budget for re-queued failed items (v3.6.1); save chains survive a rejected `storage.local.set`.
+- [x] Discovery: Stop scan cancels a pending rate-limit countdown/backoff (v3.6.1 `shouldAbort`), reports a clean stop, never a fake error.
 - [x] Restart: in_progress kept; complete/interrupted/missing reconciled; no duplicate downloads.
 - [x] Capture bag: cookies never stored; CSRF from cookies preferred over stale capture when refreshing.
 - [x] Single-tweet path uses `TweetResultByRestId` shape only (not TweetDetail variables).
@@ -175,6 +183,7 @@ never executed in a browser) and **item 13** (live fixtures).
 3. Clearer badges/counts: scroll vs remote, photo/video/GIF counts (v3.6 added the per-row `gif` badge), repost/original when exposed.
 4. Explicit Include replies switch (quoted media shipped in v3.4).
 5. ~~Filename templates~~ (shipped v3.5) + ~~video quality preference~~ (v3.6 always takes the highest-bitrate MP4 variant; a lower-quality *preference* is still unbuilt and likely unwanted).
+6. ~~Stop scan interrupting the rate-limit countdown~~ — **done (v3.6.1)**: `shouldAbort` is threaded through `fetchWithRetry`/`sleepWithRateLimitCountdown`, so Stop breaks a pending backoff on the next tick and reports a clean stop.
 
 ## P2 — other sources
 
@@ -213,4 +222,4 @@ never executed in a browser) and **item 13** (live fixtures).
 - Reposts off/on correct.
 - Protected / NSFW / logged-out / rate-limit messages specific.
 - Stop discovery; stop downloads; Side Panel reload retains state.
-- **106** local Node tests still green after cleanup (`node --test tests/*.test.js`: background + content + naming + zip-writer + pdf-builder + gif-encoder + downloader + media-kinds suites).
+- **116** local Node tests still green after cleanup (`node --test tests/*.test.js`: background + content + naming + zip-writer + pdf-builder + gif-encoder + archive-lib + downloader + media-kinds suites).
