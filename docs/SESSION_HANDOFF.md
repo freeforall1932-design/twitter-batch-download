@@ -1,6 +1,6 @@
 # Session Handoff — X Media Downloader
 
-**Prepared:** 2026-09-02 · **Extension version:** 3.6.1 · **Status:** v3.6.1 = the 2026-09-02 review/cleanup pass: shared `lib/archive.js` archive engine (worker + offscreen no longer carry duplicated fetch/PDF/ZIP code), Stop scan now cancels the 429/503 countdown, storage save chains survive a rejected write, `queueStart` gives failed items a fresh attempt budget, dead state removed, CI YAML cleaned in both byte-identical copies. All 116 offline tests green. Still pending live-X: the v3.4 quote-card spot-check AND the v3.5–v3.6 (now also v3.6.1) output spot-check — WORKLIST P0 items 12 + 14.
+**Prepared:** 2026-09-02 · **Extension version:** 3.6.1 · **Status:** v3.6.1 = the 2026-09-02 review/cleanup pass: shared `lib/archive.js` archive engine (worker + offscreen no longer carry duplicated fetch/PDF/ZIP code), Stop scan now cancels the 429/503 countdown, storage save chains survive a rejected write, `queueStart` gives failed items a fresh attempt budget, dead state removed, CI YAML cleaned in both byte-identical copies. All 116 offline tests green. **Same-day CI follow-up (this branch):** `actions/checkout`/`setup-node` bumped `@v4`→`@v5` in both copies (v4 declared the `node20` runtime that runner images now force onto node24 with a deprecation warning; v5+ declare `node24` — upstream is already at v7, see IMPROVEMENT_LOG), `scripts/package-release.sh` no longer exits 141 on a SIGPIPE, CI's packaging assertion made glob-safe, and `releases/x-media-downloader-v3.6.1.zip` offline-verified (manifest at root, byte-identical to `extension/`, all references resolve). No `extension/` file changed, so the manifest stays 3.6.1. Still pending live-X: the v3.4 quote-card spot-check AND the v3.5–v3.6 (now also v3.6.1) output spot-check — WORKLIST P0 items 12 + 14 — plus the one browser click to Load unpacked the unzipped release zip.
 
 ---
 
@@ -82,6 +82,11 @@ Open questions to ask the user if they are available:
 - Extension directory: `extension/` (the **Load unpacked** target)
 - Working branch for the last Arena session: `arena/01a05aab-twitter-batch-download`; this session's branch is `arena/01a05f98-twitter-batch-download`
 - Recent history:
+  - **(CI follow-up, this branch, no version bump)** — `actions/checkout` +
+    `actions/setup-node` `@v4` → `@v5` in both CI copies (clears the node20
+    deprecation warning), `scripts/package-release.sh` SIGPIPE fix (`sed`
+    instead of `head`, so it stops exiting 141), glob-safe CI artifact
+    assertion, and offline verification of the v3.6.1 release zip.
   - **(v3.6.1, this branch)** — Review/cleanup pass: shared archive engine
     (`lib/archive.js`), Stop-cancels-backoff (`shouldAbort` through
     `fetchWithRetry`), save-chain hardening (`.catch` on queue/downloaded/
@@ -506,9 +511,28 @@ App has historically lacked the `workflows` scope to push it, so if a push
 touching `.github/workflows/` is rejected, keep `docs/ci/extension-tests.yml`
 updated and hand the user the paste-ready diff). `docs/ci/extension-tests.yml`
 remains the byte-identical reference copy — verify with `diff` after every
-workflow edit (both were cleaned together on 2026-09-02 for v3.6.1). It runs
+workflow edit (both were cleaned together on 2026-09-02 for v3.6.1, and both
+were bumped together in this branch's CI follow-up; edit one and `cp` it over
+the other rather than hand-editing twice). It runs
 the offline set plus a packaging smoke and deliberately has NO real-browser
 job (§7).
+
+Two CI/packaging gotchas the 2026-09-02 follow-up fixed — do not reintroduce
+either:
+
+- `scripts/package-release.sh` runs under `set -euo pipefail`. Its closing
+  `unzip -l "$OUT" | sed -n '1,15p'` must stay a full-draining reader: with
+  `head -n 15` the pipe closes early, `unzip` dies of SIGPIPE, and the script
+  exits **141** despite having written a correct zip (reproduced 5/5).
+- The artifact assertion must stay glob-safe (`shopt -s nullglob` +
+  `test "${#zips[@]}" -gt 0`). A plain `test -f releases/*.zip` fails with
+  `binary operator expected` as soon as a second zip exists in `releases/`.
+
+Actions are pinned to `@v5` because v4 declared the `node20` runtime that
+runner images now force onto node24 with a deprecation warning. Upstream is
+already at `checkout@v7.0.1` / `setup-node@v7.0.0` (both `node24`); the bump
+was deliberately left at v5 as requested — read the IMPROVEMENT_LOG note
+before jumping majors.
 
 ---
 
@@ -525,10 +549,14 @@ job (§7).
    amber warning, opt-in video zipping with its warning, `orig`-quality
    re-download. If an archive still saves under a UUID, capture the Chrome
    version — that is the blob-filename bug the anchor mechanism dodges.
-2. **Cut the first release zip** (`scripts/package-release.sh` →
-   `releases/x-media-downloader-v3.6.1.zip`) and confirm it loads from the
-   unzipped folder. Optionally start `CHANGELOG.md`. With that plus item 1,
-   P0 is complete. (The v3.6.1 `ci` packaging smoke already passed —
+2. **Cut the first release zip** — `scripts/package-release.sh` →
+   `releases/x-media-downloader-v3.6.1.zip` is **cut and offline-verified**
+   (2026-09-02): `manifest.json` at the zip root, `diff -r` byte-identical to
+   `extension/`, and all 23 manifest-declared + runtime-resolved resources
+   present (`lib/*`, `offscreen.*`, every `importScripts`/`<script src>`
+   target). What is left of this item is **one browser click**: unzip the file
+   and Load unpacked the folder. Optionally start `CHANGELOG.md`. With that
+   plus item 1, P0 is complete. (The v3.6.1 `ci` packaging smoke also passed —
    `lib/archive.js` is in the zip; that CI artifact was deleted.)
 3. P1 afterwards: Side Panel diagnostics + sanitized copy-debug-report,
    explicit Include replies switch (quoted shipped in v3.4). Name templates

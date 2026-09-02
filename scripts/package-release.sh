@@ -34,4 +34,7 @@ rm -f "$OUT"
 (cd extension && zip -rq "../$OUT" .)
 
 echo "Wrote $OUT (version $VERSION${TAG:+, tag $TAG})"
-unzip -l "$OUT" | head -n 15
+# sed (not head) on purpose: `head` closes the pipe after 15 lines and unzip dies
+# of SIGPIPE, which `set -o pipefail` turns into a 141 exit for a script that
+# actually succeeded. sed drains the whole listing, so the exit stays honest.
+unzip -l "$OUT" | sed -n '1,15p'

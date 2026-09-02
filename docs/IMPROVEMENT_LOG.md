@@ -2,7 +2,78 @@
 
 Chronological implementation record for X Media Downloader.
 
-## 2026-09-02 — Codebase + CI review pass: shared archive engine, Stop-cancels-backoff, save-chain hardening — v3.6.1
+## 2026-09-02 — CI follow-up: actions v4→v5, two packaging exit-code bugs, release-zip verification
+
+**Branch:** `arena/01a06027-twitter-batch-download` · **Session input:** follow-up to
+the v3.6.1 run. GitHub logged a deprecation **warning** (not a failure) because
+`actions/checkout@v4` / `actions/setup-node@v4` declare the `node20` runtime and
+runner images now force node20 actions onto node24. Bump both to `@v5` in the two
+byte-identical CI copies. Separately, confirm
+`releases/x-media-downloader-v3.6.1.zip` loads when unzipped.
+
+### Changes
+
+1. **Deprecation warning cleared — `@v4` → `@v5` in both copies.**
+   Verified against the upstream `action.yml` before choosing the target:
+   `@v4` declares `runs.using: node20`; `@v5` (and v6/v7) declare `node24`, so
+   v5 is the smallest bump that removes the warning with no input changes
+   (`node-version: 22` is unchanged). Applied in
+   `.github/workflows/extension-tests.yml` and re-copied over
+   `docs/ci/extension-tests.yml` (`cp`, not hand-edit, so the byte-identical
+   guarantee is structural) — `diff` confirms identity. A short comment records
+   *why* v5, so the next bump is not guesswork.
+2. **`scripts/package-release.sh` exited 141 even though it succeeded.**
+   Its last line was `unzip -l "$OUT" | head -n 15`. The listing is 24 lines, so
+   `head` closed the pipe early, `unzip` died of SIGPIPE, and `set -o pipefail`
+   turned that into a **141 exit** — a red step/CI for a script that had already
+   written a correct zip. Reproduced deterministically (5/5 runs) before fixing.
+   Swapped `head -n 15` for `sed -n '1,15p'`, which drains the whole listing, so
+   the exit code stays honest. Now 5/5 runs exit 0. This was latent in the very
+   step the previous session added to CI ("Release zip packages cleanly") —
+   it passes on a runner only when `unzip` finishes writing before `head`
+   closes the pipe, i.e. it was a race, not correctness.
+3. **CI's packaging assertion broke on a second zip.** The step ended with
+   `test -f releases/x-media-downloader-v*.zip`; with two zips present the glob
+   expands to two operands and `test` fails with `binary operator expected`
+   (exit 2) even though the artifact exists. CI is safe today only because its
+   workspace is fresh — any local `package-release.sh` run before the workflow,
+   or a second tagged zip, would turn the step red. Replaced with the
+   glob-safe `nullglob` + count guard already used by the syntax-check step.
+4. **Release zip verified offline (WORKLIST P0, "cut the first release zip").**
+   `scripts/package-release.sh` → `releases/x-media-downloader-v3.6.1.zip`,
+   unzipped to a scratch dir: `manifest.json` sits at the zip root (no wrapper
+   folder), `diff -r` against `extension/` is byte-identical with no missing or
+   extra files, and every manifest-declared *and* runtime-resolved resource
+   resolves on disk — `background.service_worker`, both content scripts
+   (MAIN + isolated), `icons`, `action.default_popup`/`default_icon`,
+   `side_panel.default_path`, plus the files the manifest does not declare but
+   Chrome loads anyway (`offscreen.html`, `offscreen.js`, all five `lib/*`), and
+   every `importScripts`/`<script src>` target. The remaining slice of that P0
+   item is the one click only a browser can make (Load unpacked on the unzipped
+   folder); the packaging side is now proven.
+
+### Validation
+
+- `node --test tests/*.test.js` — **116 pass / 0 fail** (unchanged; no
+  extension file was touched).
+- `node --check` clean on all 11 shipped scripts; `bash -n` clean on
+  `scripts/package-release.sh`.
+- Workflow YAML parses (`yaml.safe_load`) in both copies; `diff` byte-identical.
+- The CI packaging step was executed verbatim with two zips present: exit 0.
+- Release zip: root-level manifest, `diff -r` identical, 23/23 resource checks OK.
+- **No `extension/` file changed, so the manifest stays at 3.6.1** — this is a
+  CI/packaging-only pass and is not user-visible.
+
+### Note for the next session
+
+`@v5` is what was asked for and it clears the warning, but it is already two
+majors behind: upstream is at `actions/checkout@v7.0.1` (2026-07-20) and
+`actions/setup-node@v7.0.0` (2026-07-14), both on `node24`. For this workflow's
+usage (checkout with no inputs; setup-node with only `node-version`) a jump to
+v7 is a two-line change — left at v5 deliberately, pending a user decision.
+Do not bump past a major without checking that action's release notes: v6/v7
+of these actions are where input renames live, and the docs' "no npm" guardrail
+means CI is the only automated gate this repo has.
 
 **Branch:** `arena/01a05f98-twitter-batch-download` · **Session input:** review the
 CI workflow and the whole codebase (after reading the three docs in

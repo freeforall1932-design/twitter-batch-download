@@ -36,8 +36,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      # v5+ runs on the node24 runtime; v4 was node20, which runner images now
+      # deprecate by forcing it onto node24 with a warning.
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
       - name: Syntax check every shipped script
@@ -54,4 +56,8 @@ jobs:
         run: |
           command -v zip >/dev/null 2>&1 || sudo apt-get install -y zip
           scripts/package-release.sh ci
-          test -f releases/x-media-downloader-v*.zip
+          # Glob-safe: `test -f releases/*.zip` breaks ("binary operator
+          # expected") the moment a second zip exists in the folder.
+          shopt -s nullglob
+          zips=(releases/x-media-downloader-v*.zip)
+          test "${#zips[@]}" -gt 0
