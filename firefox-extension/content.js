@@ -714,9 +714,15 @@
     if (!items || !items.length) return;
     safeSend({ action: "queueAdd", items, source: "scroll", skipDownloaded }, (response) => {
       notePassResult(response, items.length);
-      const added = response?.addedCount ?? items.length;
+      // Do not count candidates when the worker did not acknowledge them.
+      // This keeps fetch/rescan counts honest after an invalidated context.
+      const added = Number.isFinite(Number(response?.addedCount))
+        ? Math.max(0, Number(response.addedCount))
+        : 0;
       listedCount += added;
-      statusText = `Listed ${listedCount} media item${listedCount === 1 ? "" : "s"} from this tab.`;
+      if (added > 0) {
+        statusText = `Listed ${listedCount} media item${listedCount === 1 ? "" : "s"} from this tab.`;
+      }
       renderFetchDock();
     });
   }

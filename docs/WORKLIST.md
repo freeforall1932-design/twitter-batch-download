@@ -24,6 +24,8 @@ capture.)_
 
 ## Product target
 
+**Fetch/rescan audit (2026-09-03):** dedupe remains covered at tab level (id/media key), worker level (id/media key/canonical URL), and saved-download level (URL/hash). Fixed status accounting so an absent worker response is not counted as an accepted queue row.
+
 Signed-in Chrome user opens the Side Panel, uses **Scroll capture** as the default workflow while manually scrolling X, reviews listed media, selects items, and downloads with **1–2** active Chrome downloads. The secondary **Remote fetch** tab can still discover a pasted X profile / `@username` up to a local cap (default **99,999**), but it is treated as an advanced fallback because live testing showed extension-initiated profile crawling can hit rate limits sooner than normal user scrolling. Cap is an upper bound only.
 
 No manual API key / password / cookie paste. Self-hosted against the signed-in X session only — **no** third-party account, subscription, or paid/free tier.

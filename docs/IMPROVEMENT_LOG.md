@@ -1,5 +1,12 @@
 # Improvement Log
 
+## 2026-09-03 — Fetch/rescan review: do not count unacknowledged queue items
+
+Reviewed the previous session's shallow fetch, mutation harvest, deep fetch, rescan, and queue dedupe paths. The ID/media-key/source-URL dedupe layers are correctly complementary: the content tab suppresses repeated submissions, while the worker remains authoritative across DOM, GraphQL, scroll, remote fill, and rescans. One reporting bug was found: `submitDomItems()` optimistically counted all candidates when `safeSend()` returned no response, including an invalidated extension context or rejected worker message. That could make fetch/rescan status claim media was listed when it was not.
+
+Fixed in both browser ports to count only a numeric `addedCount` acknowledgement; missing responses now contribute zero. Existing accepted rows, duplicate suppression, clean-slate rescans, and downloaded-item explanations are unchanged. Syntax checks and the full **167-test** suite pass.
+
+
 ## 2026-09-03 — v3.12 archive-output retirement and original-resolution downloads
 
 A codebase review confirmed that the per-post ZIP/CBZ/PDF path added substantial worker/offscreen/archive plumbing, UI state, and warning logic for a feature no longer wanted. The download purpose is now deliberately simpler: every selected item is saved as its own file. Queue startup forces `outputFormat` to `raw`, queue processing no longer invokes the archive pass, and the UI format controls now expose only separate original-resolution files. The manifests are v3.12.0.

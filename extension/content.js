@@ -695,9 +695,17 @@
     if (!items || !items.length) return;
     safeSend({ action: "queueAdd", items, source: "scroll", skipDownloaded }, (response) => {
       notePassResult(response, items.length);
-      const added = response?.addedCount ?? items.length;
+      // A null response means the extension context was unavailable or the
+      // worker rejected the message. Do not count optimistic candidates: doing
+      // so makes the status claim rows exist when the queue never accepted
+      // them, and can make later fetch/rescan diagnostics misleading.
+      const added = Number.isFinite(Number(response?.addedCount))
+        ? Math.max(0, Number(response.addedCount))
+        : 0;
       listedCount += added;
-      statusText = `Listed ${listedCount} media item${listedCount === 1 ? "" : "s"} from this tab.`;
+      if (added > 0) {
+        statusText = `Listed ${listedCount} media item${listedCount === 1 ? "" : "s"} from this tab.`;
+      }
       renderFetchDock();
     });
   }
