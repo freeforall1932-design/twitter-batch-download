@@ -178,6 +178,11 @@ function loadContentScript(documentOptions = {}) {
   const intervals = [];
   const timeouts = [];
   const observers = [];
+  // Stands in for the worker's side of a queueAdd: the real background dedupes
+  // against the current queue and holds back already-downloaded items, so a
+  // re-send answers addedCount 0 (+ skippedDownloaded) instead of taking
+  // everything. Null = the optimistic default below.
+  let queueResponder = null;
 
   const body = documentOptions.body !== undefined ? documentOptions.body : makeElement("body");
   const head = documentOptions.head !== undefined ? documentOptions.head : makeElement("head");
@@ -232,7 +237,11 @@ function loadContentScript(documentOptions = {}) {
         sendMessage: (message, callback) => {
           sent.push(message);
           if (typeof callback === "function") {
-            callback(message.action === "queueAdd" ? { addedCount: (message.items || []).length } : { ok: true });
+            callback(message.action === "queueAdd"
+              ? (queueResponder
+                ? queueResponder(message)
+                : { addedCount: (message.items || []).length })
+              : { ok: true });
           }
         },
         onMessage: { addListener: (listener) => runtimeListeners.push(listener) }
@@ -295,6 +304,7 @@ function loadContentScript(documentOptions = {}) {
       }
     },
     timeouts,
+    setQueueResponder: (fn) => { queueResponder = fn; },
     queueAdds: () => sent.filter((message) => message.action === "queueAdd"),
     timelineCaptures: () => sent.filter((message) => message.action === "localTimelineCapture")
   };
@@ -566,8 +576,58 @@ test("a route change schedules every staged follow-up scan", () => {
   assert.equal(after - before, 3, "immediate + 700 ms + 1800 ms scans all ran");
 });
 
-test("replay requests are incremental, so repeated fetches stay cheap", () => {
+test("automatic passes keep replay incremental, so a busy tab stays cheap", () => {
   const env = loadContentScript();
+  env.posted.length = 0;
+  env.emitWindowMessage({
+    source: "XDL_INJECTED",
+    type: "xdlGraphqlResponse",
+    data: { seq: 7, operationName: "UserMedia", json: { data: {} } },
+    capturedUrl: "https://x.com/nasa"
+  });
+
+  // A route change is automatic: it must only ask for responses newer than the
+  // last one handled. (An explicit rescan deliberately asks for all of them.)
+  env.emitWindowMessage({
+    source: "XDL_INJECTED",
+    type: "xdlUrlChanged",
+    data: { previousUrl: "https://x.com/nasa", newUrl: "https://x.com/nasa/media" }
+  });
+  const replays = env.posted.filter((message) => message.type === "xdlRequestReplay");
+  assert.ok(replays.length >= 1, "the route-change pass asked for a replay");
+  assert.equal(replays[replays.length - 1].since, 7,
+    "only responses newer than the last one handled should be re-sent");
+});
+
+// ---------------------------------------------------------------------------
+// Rescan / Fetch re-list posts the user deleted from the queue
+// ---------------------------------------------------------------------------
+
+const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+test("Rescan re-lists posts the user deleted from the queue", () => {
+  const env = loadContentScript({ href: "https://x.com/nasa" });
+  env.body.appendChild(makeTweetArticle({ tweetId: "700", handle: "nasa", text: "kept", photos: ["GGG700"] }));
+  env.runIntervals();
+  assert.equal(env.queueAdds().length, 1, "the first scan listed the post");
+
+  // The user deletes the row in the Side Panel: the worker no longer has it, so
+  // it would happily take it again — but this tab remembers having sent it, and
+  // that memory is exactly what used to make Rescan look broken.
+  env.setQueueResponder((message) => ({ addedCount: (message.items || []).length }));
+  env.emitRuntimeMessage({ action: "scrollRescan" });
+
+  const adds = env.queueAdds();
+  assert.equal(adds.length, 2, "the rescan re-sent the post");
+  assert.deepEqual(
+    adds[1].items.map((item) => item.id),
+    adds[0].items.map((item) => item.id),
+    "the same items come back, so the user can pick which to keep"
+  );
+});
+
+test("Rescan re-asks for the whole replay buffer, not just what is new", () => {
+  const env = loadContentScript({ href: "https://x.com/nasa" });
   env.posted.length = 0;
   env.emitWindowMessage({
     source: "XDL_INJECTED",
@@ -578,8 +638,65 @@ test("replay requests are incremental, so repeated fetches stay cheap", () => {
 
   env.emitRuntimeMessage({ action: "scrollRescan" });
   const replays = env.posted.filter((message) => message.type === "xdlRequestReplay");
-  assert.equal(replays[replays.length - 1].since, 7,
-    "only responses newer than the last one handled should be re-sent");
+  assert.equal(replays[replays.length - 1].since, 0,
+    "X virtualizes timelines, so scrolled-away posts only exist in the buffer");
+});
+
+test("Fetch media also starts from a clean slate", () => {
+  const env = loadContentScript({ href: "https://x.com/nasa" });
+  env.body.appendChild(makeTweetArticle({ tweetId: "701", handle: "nasa", text: "again", photos: ["HHH701"] }));
+  env.runIntervals();
+  const first = env.queueAdds();
+  assert.equal(first.length, 1);
+
+  const dock = env.body.querySelector(".xdl-fetch-dock");
+  dock.querySelector('button[data-role="main"]').emit("click");
+
+  const adds = env.queueAdds();
+  assert.ok(adds.length >= 2, "delete the list, press Fetch, and the posts come back");
+  assert.ok(
+    adds.slice(1).some((add) => add.items.some((item) => item.id === first[0].items[0].id)),
+    "the previously listed item is re-sent by the fetch"
+  );
+});
+
+test("a rescan that adds nothing explains why", async () => {
+  const env = loadContentScript({ href: "https://x.com/nasa" });
+  env.body.appendChild(makeTweetArticle({ tweetId: "702", handle: "nasa", text: "done", photos: ["III702"] }));
+  env.runIntervals();
+
+  // The rows are still queued (or already downloaded), so the worker takes
+  // nothing. Silence here reads as "the button is broken".
+  env.setQueueResponder(() => ({ addedCount: 0, skippedDownloaded: 3 }));
+  const immediate = env.emitRuntimeMessage({ action: "scrollRescan" });
+  assert.equal(immediate.rescanning, true, "the panel can show a busy state");
+
+  env.runTimeouts(2);
+  await flush(); await flush(); await flush();
+
+  const status = env.emitRuntimeMessage({ action: "scrollStatus" });
+  assert.equal(status.rescanning, false, "the pass finished");
+  assert.match(status.text, /already downloaded/i,
+    "the note names the setting that held the items back");
+  assert.equal(status.lastRescan.skippedDownloaded, 3,
+    "the rescan keeps its own record, so a later automatic pass cannot erase it");
+  assert.equal(status.lastRescan.added, 0);
+});
+
+test("a rescan that re-lists everything says how many", async () => {
+  const env = loadContentScript({ href: "https://x.com/nasa" });
+  env.body.appendChild(makeTweetArticle({ tweetId: "703", handle: "nasa", text: "one", photos: ["JJJ703"] }));
+  env.body.appendChild(makeTweetArticle({ tweetId: "704", handle: "nasa", text: "two", photos: ["KKK704"] }));
+  env.runIntervals();
+  env.setQueueResponder((message) => ({ addedCount: (message.items || []).length }));
+
+  env.emitRuntimeMessage({ action: "scrollRescan" });
+  env.runTimeouts(2);
+  await flush(); await flush(); await flush();
+
+  const status = env.emitRuntimeMessage({ action: "scrollStatus" });
+  assert.match(status.text, /Rescan — 2 media items re-listed/,
+    "the count is reported so the user knows the list was rebuilt");
 });
 
 test("the in-page Fetch button starts a fetch as if the user scrolled", () => {

@@ -54,7 +54,7 @@
       </div>
       <div class="action-row spaced-row">
         <button id="startLocalScrollBtn" class="button secondary compact" title="Scroll the timeline only — no silent remote fill afterwards.">Auto-scroll only</button>
-        <button id="rescanTabBtn" class="button secondary compact" title="Re-read this tab without moving the page: replay its captured data, rescan the posts on screen, resolve video posts.">Rescan tab</button>
+        <button id="rescanTabBtn" class="button secondary compact" title="Re-list this tab without moving the page: forgets what was already sent, replays its captured data, rescans the posts on screen and resolves video posts — so rows you deleted from the list come back and you can pick again.">Rescan tab</button>
       </div>
       <div class="fetch-options">
         <label class="check-label" title="After the scroll, page the same profile silently through the Remote fetch engine to pick up media X never rendered. Those rows appear in the Remote fetch list."><input id="deepFetchRemote" type="checkbox" checked> Then fetch the rest silently</label>
@@ -169,6 +169,7 @@
     </div>
     <div class="action-row">
       <button id="downloadSelectedBtn" class="button primary" disabled>Download selected</button>
+      <button id="removeSelectedBtn" class="button secondary" disabled title="Delete the ticked rows from this list. Nothing is downloaded or un-downloaded — press Rescan tab to bring them back.">Remove selected</button>
       <button id="stopBtn" class="button secondary" disabled>Stop</button>
     </div>
     <div id="queueNotices" class="queue-notices" role="alert" style="display:none"></div>

@@ -1,6 +1,6 @@
 # Session Handoff — X Media Downloader
 
-**Prepared:** 2026-09-03 · **Extension version:** 3.7.0 · **Status:** **v3.7 = the Fetch button** (newest IMPROVEMENT_LOG entry): a shallow fetch (replay buffered GraphQL + DOM rescan + video resolve, *no page movement*) now runs by itself when a tab opens on a profile and on every SPA route change, so a new tab lists its first batch without scrolling; a floating in-page **Fetch media** dock (`.xdl-fetch-dock`, which absorbed the old auto-scroll badge) and a Side Panel **Fetch media** button run the *deep* fetch — shallow → the existing auto-scroll engine → an optional silent `discoveryStart` fill of the same profile (hybrid, the user's explicit choice; its rows land in the Remote fetch list, the two lists stay separate). The same audit fixed 8 real defects, the headline one being `safeSend()` never releasing awaiting callers on an invalidated extension context, which wedged the video resolver until the user reloaded the page. Manifest 3.6.3 → **3.7.0**, **135 offline tests** (+10), `firefox-extension/` re-synced, release zip re-cut. Previous status: Firefox port added (see below). v3.6.1 = the 2026-09-02 review/cleanup pass: shared `lib/archive.js` archive engine (worker + offscreen no longer carry duplicated fetch/PDF/ZIP code), Stop scan now cancels the 429/503 countdown, storage save chains survive a rejected write, `queueStart` gives failed items a fresh attempt budget, dead state removed, CI YAML cleaned in both byte-identical copies. All 116 offline tests green. **v3.6.2 (this branch) = naming-engine + archive-warning review pass:** `makePostBaseName` collapses separators *after* sanitizing so a stripped token can no longer leave a double empty " - " gap in the post folder (`XMedia/nasa -  - 111` → `XMedia/nasa - 111`); `buildRunNotices` now counts "mixed media" only among kinds actually packed into the archive, so a photo+raw-video run (videos not opted into archives) no longer raises a false mix warning. Manifest 3.6.1 → 3.6.2; 117 offline tests. **Same-day CI follow-up (this branch):** `actions/checkout`/`setup-node` bumped `@v4`→`@v5` in both copies (v4 declared the `node20` runtime that runner images now force onto node24 with a deprecation warning; v5+ declare `node24` — upstream is already at v7, see IMPROVEMENT_LOG), `scripts/package-release.sh` no longer exits 141 on a SIGPIPE, CI's packaging assertion made glob-safe, and `releases/x-media-downloader-v3.6.1.zip` offline-verified (manifest at root, byte-identical to `extension/`, all references resolve). No `extension/` file changed, so the manifest stays 3.6.1. Still pending live-X: the v3.4 quote-card spot-check AND the v3.5–v3.6 (now also v3.6.1) output spot-check — WORKLIST P0 items 12 + 14 — plus the one browser click to Load unpacked the unzipped release zip. **v3.6.3 queue (this session, Tasks 1–5 of `WORKLIST.md`'s active queue — naming degarble + perf):** `sanitizeArtifactFilename` strips invisible bidi/format controls; `buildFallbackFilenames` last resort is now deterministic `x-media/download_<stem>.<ext>` (no random `media_<timestamp>`); `queueChanged` broadcasts are throttled (leading + one trailing per 250 ms) so a download's byte-delta ticks don't spam the Side Panel; a single `resolveTweetMedia(item)` is the ONE media resolver for both `getTweetMedia` and `mediaItemsFromTweetObject`; `injected.js` runs an early-exit `containsMediaMarker` object walk before `JSON.stringify` and bounds its replay buffer by BOTH count (40) and total bytes (~8 MB). **125 offline tests green** (+6). Manifest **3.6.2 → 3.6.3** and `releases/x-media-downloader-v3.6.3.zip` was cut + offline-verified (manifest at root, byte-identical to `extension/`). Tasks 6–7 stay holds pending live-jank evidence. **Post-cut review pass:** a diff re-review found `resolveTweetMedia`'s photo-extension fallback returned a garbage extension (`commediaabc`) for a bare CDN URL (no `format`, no file extension) while `content.js getPhotoExtension` returned `jpg` — the two extractors could name the same photo differently. Fixed via `photoExtensionFromUrl()` mirroring `getPhotoExtension` + 1 regression. **This re-edited `background.js` after the zip was cut — re-run `scripts/package-release.sh` before shipping.**
+**Prepared:** 2026-09-03 · **Extension version:** 3.8.0 · **Status:** **v3.8 = Rescan restores deleted rows** (newest IMPROVEMENT_LOG entry): the per-tab "already listed" memory that made `Rescan tab` look broken is now cleared by explicit user actions — `forgetListedMedia()` wipes `listedMediaIds`/`listedMediaKeys`/video-resolve state *and* `lastReplaySeq`, so a rescan (or the start of a deep fetch) re-lists the posts on screen, including ones X virtualized out of the DOM that survive only in the MAIN-world replay buffer. The Side Panel gained **Remove selected** (`queueRemove` with an `ids` array — the worker already accepted it) to complete "pick which ones to delete", and `mergeQueueItems` now reports `skippedDownloaded` so an empty result always names its reason. Manifest 3.7.0 → **3.8.0**, **140 offline tests** (+5, 1 rewritten), `firefox-extension/` re-synced, release zip re-cut. Previous status: **v3.7 = the Fetch button** (newest IMPROVEMENT_LOG entry): a shallow fetch (replay buffered GraphQL + DOM rescan + video resolve, *no page movement*) now runs by itself when a tab opens on a profile and on every SPA route change, so a new tab lists its first batch without scrolling; a floating in-page **Fetch media** dock (`.xdl-fetch-dock`, which absorbed the old auto-scroll badge) and a Side Panel **Fetch media** button run the *deep* fetch — shallow → the existing auto-scroll engine → an optional silent `discoveryStart` fill of the same profile (hybrid, the user's explicit choice; its rows land in the Remote fetch list, the two lists stay separate). The same audit fixed 8 real defects, the headline one being `safeSend()` never releasing awaiting callers on an invalidated extension context, which wedged the video resolver until the user reloaded the page. Manifest 3.6.3 → **3.7.0**, **135 offline tests** (+10), `firefox-extension/` re-synced, release zip re-cut. Previous status: Firefox port added (see below). v3.6.1 = the 2026-09-02 review/cleanup pass: shared `lib/archive.js` archive engine (worker + offscreen no longer carry duplicated fetch/PDF/ZIP code), Stop scan now cancels the 429/503 countdown, storage save chains survive a rejected write, `queueStart` gives failed items a fresh attempt budget, dead state removed, CI YAML cleaned in both byte-identical copies. All 116 offline tests green. **v3.6.2 (this branch) = naming-engine + archive-warning review pass:** `makePostBaseName` collapses separators *after* sanitizing so a stripped token can no longer leave a double empty " - " gap in the post folder (`XMedia/nasa -  - 111` → `XMedia/nasa - 111`); `buildRunNotices` now counts "mixed media" only among kinds actually packed into the archive, so a photo+raw-video run (videos not opted into archives) no longer raises a false mix warning. Manifest 3.6.1 → 3.6.2; 117 offline tests. **Same-day CI follow-up (this branch):** `actions/checkout`/`setup-node` bumped `@v4`→`@v5` in both copies (v4 declared the `node20` runtime that runner images now force onto node24 with a deprecation warning; v5+ declare `node24` — upstream is already at v7, see IMPROVEMENT_LOG), `scripts/package-release.sh` no longer exits 141 on a SIGPIPE, CI's packaging assertion made glob-safe, and `releases/x-media-downloader-v3.6.1.zip` offline-verified (manifest at root, byte-identical to `extension/`, all references resolve). No `extension/` file changed, so the manifest stays 3.6.1. Still pending live-X: the v3.4 quote-card spot-check AND the v3.5–v3.6 (now also v3.6.1) output spot-check — WORKLIST P0 items 12 + 14 — plus the one browser click to Load unpacked the unzipped release zip. **v3.6.3 queue (this session, Tasks 1–5 of `WORKLIST.md`'s active queue — naming degarble + perf):** `sanitizeArtifactFilename` strips invisible bidi/format controls; `buildFallbackFilenames` last resort is now deterministic `x-media/download_<stem>.<ext>` (no random `media_<timestamp>`); `queueChanged` broadcasts are throttled (leading + one trailing per 250 ms) so a download's byte-delta ticks don't spam the Side Panel; a single `resolveTweetMedia(item)` is the ONE media resolver for both `getTweetMedia` and `mediaItemsFromTweetObject`; `injected.js` runs an early-exit `containsMediaMarker` object walk before `JSON.stringify` and bounds its replay buffer by BOTH count (40) and total bytes (~8 MB). **125 offline tests green** (+6). Manifest **3.6.2 → 3.6.3** and `releases/x-media-downloader-v3.6.3.zip` was cut + offline-verified (manifest at root, byte-identical to `extension/`). Tasks 6–7 stay holds pending live-jank evidence. **Post-cut review pass:** a diff re-review found `resolveTweetMedia`'s photo-extension fallback returned a garbage extension (`commediaabc`) for a bare CDN URL (no `format`, no file extension) while `content.js getPhotoExtension` returned `jpg` — the two extractors could name the same photo differently. Fixed via `photoExtensionFromUrl()` mirroring `getPhotoExtension` + 1 regression. **This re-edited `background.js` after the zip was cut — re-run `scripts/package-release.sh` before shipping.**
 
 ---
 
@@ -86,6 +86,14 @@ Open questions to ask the user if they are available:
 - Extension directory: `extension/` (the **Load unpacked** target)
 - Working branch for this session: `arena/01a065c5-twitter-batch-download` (branched from `main` at `e4c8cf6`, the Firefox-port merge); the prior Arena sessions used `arena/01a064df-` (Firefox port) and `arena/01a06058-twitter-batch-download`
 - Recent history:
+  - **(v3.8, this branch)** — Rescan/restore: `forgetListedMedia()` (explicit
+    actions only — automatic load/route passes stay incremental),
+    `shallowFetchPass(reason, {fresh})`, async `startRescan()` answering with
+    `rescanning: true` + a status-poll note, `rescanNote()` wording,
+    cumulative `passCounters` with per-pass deltas, `lastRescan` in the status
+    payload, `skippedDownloaded` through `mergeQueueItems` → `addQueueItems` →
+    `queueAdd`/`localTimelineCapture`, and the panel's **Remove selected**
+    button + rescan busy state. Manifest **3.8.0**, 140 tests.
   - **(v3.7, this branch)** — Fetch button + capture-robustness audit: automatic
     shallow fetch on tab open/route change, in-page `.xdl-fetch-dock`
     (Fetch/Stop/×) replacing the auto-scroll badge, deep fetch = shallow →
@@ -187,6 +195,10 @@ A user should be able to:
    page. None of it ever blocks on downloads and there is no item cap.
    Since v3.7 step 2 alone already lists the first screenful of a freshly opened
    profile — the shallow fetch is automatic, the deep fetch is always a click.
+6. Deletes rows they do not want (**×** per row, or tick + **Remove selected**),
+   and presses **Rescan tab** whenever they want them back: since v3.8 an
+   explicit rescan or fetch forgets what the tab already sent and re-lists the
+   posts on screen. Rescan *is* the undo — there is no trash or remove-history.
 6. Review the list, tick items or **Select all**, and press **Download selected**
    with **1 or 2** concurrent Chrome downloads. This is the *only* download
    action — a separate "Download all" was removed as redundant and confusing.
@@ -224,11 +236,11 @@ Cookie headers.
 
 ---
 
-## 4. Current architecture (v3.7.0)
+## 4. Current architecture (v3.8.0)
 
 | File | Role |
 |---|---|
-| `manifest.json` | MV3, sidePanel, cookies/downloads/storage/scripting/**offscreen**. Content scripts: `injected.js` (MAIN, document_start) + `content.js` (isolated, document_start). Hosts: x.com / twitter.com / twimg CDN only. Version **3.7.0**. |
+| `manifest.json` | MV3, sidePanel, cookies/downloads/storage/scripting/**offscreen**. Content scripts: `injected.js` (MAIN, document_start) + `content.js` (isolated, document_start). Hosts: x.com / twitter.com / twimg CDN only. Version **3.8.0**. |
 | `background.js` | Auth, GraphQL, source-tagged queue, remote discovery, downloads, capture bag, timeline response ingestion, downloaded-id history. Quoted-post media resolved from `quoted_status_result` (one level, soft-unwrap) with owning-post attribution. v3.5: output settings bag (`getOutputSettings`), download-time path building (`rawPathForItem`), per-post archive pass (`runArchivePass`) relayed to the offscreen document with a worker data-URL fallback. v3.6: `normalizePhotoUrl` forces `name=orig`; `isGif` identity; `prepareRawDownload` (GIF→.gif via offscreen, MP4 fallback); kind rules (`archivedKinds`/`effectiveGroupFormat`) and `buildRunNotices` warnings. v3.6.1: `shouldAbort` through `fetchWithRetry`/`sleepWithRateLimitCountdown` (Stop scan cancels backoff), catch-recovering storage save chains, `queueStart` resets the attempt budget, archive bytes delegated to `lib/archive.js`. v3.6.2: `buildRunNotices` counts "mixed media" only among kinds actually in the archive (photo+raw-video no longer warns). v3.6.3: `resolveTweetMedia(item)` is the ONE media resolver (orig photo + highest-bitrate MP4 + GIF flag + extension) used by BOTH `getTweetMedia` and `mediaItemsFromTweetObject` — they can no longer drift; `broadcastQueueChanged()` throttles `queueChanged` in both `saveQueueState` and `saveDiscoveryState`; `buildFallbackFilenames` last rung is deterministic `x-media/download_<stem>.<ext>` (no random timestamp). Post-cut review: `photoExtensionFromUrl()` mirrors `content.js getPhotoExtension` so `resolveTweetMedia` never emits a garbage extension for a bare CDN URL. **No whole-batch ZIP.** |
 | `lib/naming.js` | Shared naming engine (UMD → `XDLNaming`): `sanitizeArtifactFilename` (per-segment, from nh-dw), master-folder normalize (empty = off), format whitelist, template tokens/render/preview helpers, raw + archive path builders. v3.6.2: `makePostBaseName` re-collapses separators after sanitizing so a token whose content is stripped (e.g. text `"???"`) can't leave a double empty " - " gap.  v3.6.3: `sanitizeArtifactFilename` also strips invisible bidi/format controls (U+200B/200E/200F/202A-202E/2066-2069/FEFF) while preserving visible non-ASCII (CJK/emoji/Arabic) so mixed-script/RTL post text no longer scrambles folder names. |
 | `lib/zipWriter.js` | STORE-only ZIP writer (`XDLZip`) for per-post archives — local re-implementation instead of JSZip (no-npm guardrail). |
@@ -237,8 +249,8 @@ Cookie headers.
 | `lib/archive.js` | v3.6.1: shared archive plumbing (`XDLArchive`) — `fetchImageBytes`, `preparePdfImage`, `bytesToBase64`, `buildArchiveBytes` (ZIP/CBZ/PDF bytes + MIME). ONE copy used by the worker fallback AND the offscreen document (they previously duplicated ~120 lines and could drift); no chrome API, runs in both contexts and Node. |
 | `offscreen.html/js` | Archive assembly + v3.6 GIF conversion: fetch post media, convert GIF clips through `<video>`+canvas (12 fps, ≤30 s/≤360 frames/≤720 px/≤40 MB) into real .gif bytes, build ZIP/CBZ/PDF blob (via `lib/archive.js`), save via in-document `<a download>` anchor. Raw-mode GIF bytes return to the worker as base64 (data: URLs keep the master-folder subpath). Exposes ONLY `chrome.runtime` — settings arrive relayed in the job message. |
 | `injected.js` | MAIN-world XHR/fetch observer. Forwards **any** media-bearing GraphQL response (no operation allowlist), keeps a replay buffer bounded by BOTH count (40) and total serialized bytes (~8 MB), runs an early-exit `containsMediaMarker` object walk before any `JSON.stringify` (non-media payloads are never serialized across worlds), and watches SPA route changes via `pushState`/`replaceState`/`popstate`. The allowlist survives only for Remote-fetch *request metadata*. v3.7: every buffered entry carries a monotonic `seq`, and `xdlRequestReplay {since}` makes `replayAll(since)` send only what the isolated world has not handled yet (`xdlReplayDone` reports `{count, lastSeq}`) — a caller that sends no cursor still gets everything, so the two worlds can never be version-locked. |
-| `content.js` | **Always-on** scroll capture (no watch command), SPA route re-arm, DOM photo listing, rate-bounded per-post video resolve (quote-card media resolved through the outer post id), content-driven auto-scroll with in-page badge, action-bar `Download` + `Add to queue`, toasts. v3.5: items carry `text`/`displayName`/`mediaIndex`; `downloadFile` sends the owning item. v3.6: one shared `mediaEntryToItem()` builder (scroll resolver + action bar), `isGif` flag. v3.6.2: `getDisplayName` reads the author's display name from `[data-testid="User-Name"]` so DOM-scanned photos carry `{name}` like GraphQL items. **v3.7: the fetch engine** — `shallowFetchPass()` (replay + rescan + awaited video resolve) runs on load (`armLoadFetch()` at 900/2200/4000 ms) and on every route change; `startDeepFetch()` chains shallow → `autoScrollLoop()` → `runRemoteFill()` (sends `discoveryStart`/`discoveryGet`/`discoveryStop` for the profile in the URL); `.xdl-fetch-dock` is the single in-page widget (Fetch media ↔ Stop, phase label, ×); `stopCapture()` + per-run tokens (`autoScrollRunId`/`deepFetchRunId`) make Stop authoritative; `safeSend` always calls back and `sendMessage` is time-bounded; `scheduleScanAt()` gives staged passes that the coalescing `scheduleScan()` used to drop. |
-| `sidepanel.html/js/css` | Two-tab Side Panel: Scroll capture + Remote fetch. One download action, live active-tab status pill, per-row remove, skip-already-downloaded toggle, **Include quoted** switches, `Clear finished` / `Reset downloaded history` buttons. v3.5: **Output settings** card (master folder, default format, name-template checkboxes + live preview + custom-template input — the ONLY writer of the sync output settings) the dock's per-job **Save posts as** picker, v3.6 GIF/archive toggles, the `gif` badge, and the amber `queueNotices` warning box. **v3.7 Scroll card:** `Fetch media` (deep fetch), `Stop`, `Auto-scroll only`, `Rescan tab`, the **Then fetch the rest silently** (`deepFetchRemote`) and **Show the Fetch button on X pages** (`showFetchButton`) switches, a `Reload tab` button that appears in the status pill when the active X tab has no live content script, and a status pill that names the fetch phase. |
+| `content.js` | **Always-on** scroll capture (no watch command), SPA route re-arm, DOM photo listing, rate-bounded per-post video resolve (quote-card media resolved through the outer post id), content-driven auto-scroll with in-page badge, action-bar `Download` + `Add to queue`, toasts. v3.5: items carry `text`/`displayName`/`mediaIndex`; `downloadFile` sends the owning item. v3.6: one shared `mediaEntryToItem()` builder (scroll resolver + action bar), `isGif` flag. v3.6.2: `getDisplayName` reads the author's display name from `[data-testid="User-Name"]` so DOM-scanned photos carry `{name}` like GraphQL items. **v3.7: the fetch engine** — `shallowFetchPass()` (replay + rescan + awaited video resolve) runs on load (`armLoadFetch()` at 900/2200/4000 ms) and on every route change; `startDeepFetch()` chains shallow → `autoScrollLoop()` → `runRemoteFill()` (sends `discoveryStart`/`discoveryGet`/`discoveryStop` for the profile in the URL); `.xdl-fetch-dock` is the single in-page widget (Fetch media ↔ Stop, phase label, ×); `stopCapture()` + per-run tokens (`autoScrollRunId`/`deepFetchRunId`) make Stop authoritative; `safeSend` always calls back and `sendMessage` is time-bounded; `scheduleScanAt()` gives staged passes that the coalescing `scheduleScan()` used to drop. **v3.8:** `forgetListedMedia()` clears the dedupe sets *and* `lastReplaySeq` — called only by `startRescan()` and by `shallowFetchPass("deep", {fresh:true})`; `shallowFetchPass` reports per-pass deltas of the cumulative `passCounters`; `statusPayload` gained `rescanning`, `lastPass`, `lastRescan`. |
+| `sidepanel.html/js/css` | Two-tab Side Panel: Scroll capture + Remote fetch. One download action, live active-tab status pill, per-row remove, skip-already-downloaded toggle, **Include quoted** switches, `Clear finished` / `Reset downloaded history` buttons. v3.5: **Output settings** card (master folder, default format, name-template checkboxes + live preview + custom-template input — the ONLY writer of the sync output settings) the dock's per-job **Save posts as** picker, v3.6 GIF/archive toggles, the `gif` badge, and the amber `queueNotices` warning box. **v3.8:** `Remove selected` next to `Download selected` (confirm-guarded, sends `queueRemove {ids}`), a `Re-listing this tab` pill state, and a busy state that disables Fetch/Auto-scroll/Rescan during a rescan while leaving **Stop** disabled (nothing to cancel). **v3.7 Scroll card:** `Fetch media` (deep fetch), `Stop`, `Auto-scroll only`, `Rescan tab`, the **Then fetch the rest silently** (`deepFetchRemote`) and **Show the Fetch button on X pages** (`showFetchButton`) switches, a `Reload tab` button that appears in the status pill when the active X tab has no live content script, and a status pill that names the fetch phase. |
 | `popup.html/js` | Side Panel launcher + capture status line. No scroll/download loop. |
 | `tests/` | `background.test.js`, `content.test.js`, plus v3.5: `naming.test.js`, `zip-writer.test.js`, `pdf-builder.test.js` (verbatim port), `downloader.test.js` (real worker in a VM: master-folder + archive pipelines), v3.6: `gif-encoder.test.js` (round-trip decoder) + `media-kinds.test.js` (quality, kind rules, warnings, mixed-post pipelines), v3.6.1: `archive-lib.test.js` (shared-engine byte parity) + 4 background regressions (abort on Stop, `stopped` classification, attempt-budget reset, storage-write recovery), v3.6.3: `injected.test.js` (media-marker walk + replay-buffer bound) + 4 background/naming regressions (deterministic fallback, `queueChanged` throttle, shared `resolveTweetMedia` rules, path agreement), `helpers/load-background.js`. |
 
@@ -369,6 +381,25 @@ re-breaks a bug the user already reported:
    worlds. Entries carry `seq`, the content script remembers `lastReplaySeq`,
    and `xdlRequestReplay {since}` limits the answer. Keep the no-cursor path
    working (full replay) so the two worlds are never version-locked.
+24. **Automatic passes are incremental; explicit clicks start clean.** (v3.8.)
+    The per-tab "already listed" memory exists so a scan on every DOM mutation
+    does not re-post the whole timeline — it is a performance guard, and it must
+    stay one. `forgetListedMedia()` is therefore reachable *only* from
+    `startRescan()` and the first phase of a deep fetch. Clearing it from a load
+    or route-change pass would re-clone the entire replay buffer on every
+    mutation tick. This is also why the v3.7 incremental-replay test now drives a
+    *route change*: asserting the property through `scrollRescan` would pin the
+    wrong behaviour.
+25. **A no-op must still say why.** (v3.8.) `mergeQueueItems` returns
+    `{added, skippedDownloaded}` because "nothing came back" has two very
+    different causes — *already in your list* (fine) and *held back by Skip
+    already downloaded* (a setting the user can change) — and silence after a
+    click reads as a broken button. Per-pass numbers come from **cumulative
+    counters with start/end deltas**, never from a shared object a pass zeroes:
+    an `armLoadFetch()` timer landing inside a rescan's `await` wiped the first
+    implementation's tally and made a successful rescan report "nothing new".
+    For the same reason a rescan records its outcome in `lastRescan`, not
+    `lastPass` (which honestly means "whatever pass ran most recently").
 
 ### Removed / deprecated — do not reintroduce without a product decision
 
@@ -387,6 +418,14 @@ re-breaks a bug the user already reported:
   into `.xdl-fetch-dock` in v3.7 (decision 20).
 - A separate `scrollFetchStop` command: `scrollStop` stops both engines, and the
   contract test now fails on any content.js handler with no sender.
+- A shared per-pass tally object that each pass zeroes at its start (v3.8) —
+  overlapping passes are normal, and an automatic pass landing inside a rescan's
+  `await` made a successful rescan report "nothing new". Use the cumulative
+  `passCounters` + start/end delta, and `lastRescan` for a rescan's own outcome.
+- A permanent "already sent" memory with no way to clear it (pre-v3.8). It is a
+  performance guard, not a correctness rule — the worker dedupes on its side, so
+  re-sending is always safe. Do not reintroduce a set that outlives the user's
+  intent to re-list.
 - The `Download all in tab` button.
 - Unused `webRequest` permission; dead `useZip` / `bulkId` state.
 - `TweetDetail` fallback for single-tweet media (wrong variables/shape).
@@ -431,8 +470,17 @@ and v3.7's `deepFetchRemote` / `showFetchButton`), `scrollStart` (auto-scroll
 only), `scrollFetch` (**v3.7** deep fetch: shallow → scroll → silent fill;
 accepts the same settings bag), `scrollStop` (**one** stop for both engines),
 `scrollStatus` (v3.7 adds `fetching`, `fetchPhase`, `fetchNote`, `fetchTarget`,
-`deepFetchRemote`, `showFetchButton`, `dockHidden`, `scans`), `scrollRescan`
-(shallow pass only — now sent by the panel's **Rescan tab**).
+`deepFetchRemote`, `showFetchButton`, `dockHidden`, `scans`; v3.8 adds
+`rescanning`, `lastPass`, `lastRescan`), `scrollRescan` (shallow pass only — now
+sent by the panel's **Rescan tab**, and since v3.8 from a **clean slate**: it
+answers immediately with `rescanning: true` and the panel's 1.5 s poll picks up
+the completion note).
+
+**Side Panel → worker (v3.8):** `queueRemove` takes either `{id}` or `{ids:[…]}`
+— the array form existed in the worker all along and finally has a sender
+(**Remove selected**). Responses to `queueAdd` / `localTimelineCapture` now carry
+`skippedDownloaded` alongside `addedCount`; `mergeQueueItems` returns
+`{added, skippedDownloaded}` instead of a bare count.
 
 **Content script → worker (v3.7):** the deep fetch's silent fill sends the
 *existing* `discoveryStart` / `discoveryGet` / `discoveryStop` from a content
@@ -518,6 +566,16 @@ these browser items remain open:
   switched), a mixed photos+GIF post under PDF saves as ZIP with `002.gif`
   and shows the amber dock warning, video archiving warns and produces
   `NNN.mp4` entries, and a `name=small` photo re-downloads at `orig`.
+- **Rescan / restore (v3.8, WORKLIST P0 item 17)** — never run in a browser:
+  delete rows then press **Rescan tab** and confirm they return with a count in
+  the hint; confirm a post X has virtualized out of the DOM still comes back
+  while it is inside the replay buffer (40 entries / ~8 MB) and note where that
+  boundary actually lands; confirm a rescan with nothing deleted says
+  `nothing new … unchanged` and creates no duplicates; confirm the
+  already-downloaded wording and that unticking **Skip already downloaded** (or
+  **Reset downloaded history**) lets those rows list; confirm **Rescan** during a
+  running fetch is refused rather than racing the scroll loop; confirm **Remove
+  selected** removes exactly the ticked rows of the *active* list only.
 - **Fetch button (v3.7, WORKLIST P0 item 16)** — never run in a browser: a new
   tab opened straight onto a profile must list its first screenful with no
   scrolling and no reload; the in-page dock must walk
@@ -598,7 +656,7 @@ one-line quality notes that inform ranking, not detailed specs.
 ```bash
 # from repo root
 for f in extension/*.js extension/lib/*.js; do node --check "$f"; done   # every shipped script (node --check only honors one file per call)
-node --test tests/*.test.js            # 135 tests (+10 in v3.7)
+node --test tests/*.test.js            # 140 tests (+5 in v3.8, 1 rewritten)
 scripts/package-release.sh             # → releases/x-media-downloader-v<version>.zip
 ```
 
@@ -609,11 +667,15 @@ lifecycle, and since v3.7: the fresh-tab shallow fetch, the staged-scan count,
 incremental replay, the in-page dock's click/switch/× behaviour, the panel's
 `scrollFetch`/`scrollStop`/`scrollRescan`, and recovery from an invalidated
 extension context — that last one was verified to fail against the old
-`safeSend` before it was kept). The shim grew three backwards-compatible
+`safeSend` before it was kept — and since v3.8: rescan re-listing deleted rows,
+rescan re-asking for the whole replay buffer, Fetch starting from a clean slate,
+and the two rescan outcome notes). The shim grew three backwards-compatible
 capabilities for it: element listeners are recorded and dispatchable
 (`el.emit("click")`), `dataset` is a real proxy over `data-*` attributes, and
 `runTimeouts(rounds)` drives delayed passes; `loadContentScript({href})` can
-start on a profile URL. `tests/downloader.test.js` runs the real `background.js` (plus the
+start on a profile URL, and `setQueueResponder(fn)` lets a test stand in for the
+worker's dedupe/skip decision (`addedCount: 0` + `skippedDownloaded`) instead of
+the optimistic "takes everything" default. `tests/downloader.test.js` runs the real `background.js` (plus the
 real `lib/` files via a working `importScripts`) in a window-less VM and covers
 the whole v3.5 output pipeline — master folder on/custom/off/weird, ZIP/CBZ/PDF
 end-to-end through the data-URL fallback with byte-level archive assertions,
@@ -656,13 +718,19 @@ before jumping majors.
 
 ## 9. Next session priorities
 
-1. **Live spot-check v3.7's Fetch button first** — WORKLIST P0 item 16 (the
+1. **Live spot-check v3.8's Rescan/restore first** — WORKLIST P0 item 17. It is
+   the newest code and the fastest to judge: list a profile, delete a few rows,
+   press **Rescan tab**, watch them come back with a count. Then tick rows and
+   press **Remove selected**. If a rescan reports "nothing new" when the user
+   expected rows, the note should already say whether **Skip already downloaded**
+   is the cause.
+2. **Then live spot-check v3.7's Fetch button** — WORKLIST P0 item 16 (the
    list above). It is the newest code, it is the only part that moves the user's
    page, and it is the one thing that can be judged in under a minute: open a
    profile in a new tab, watch it list itself, press **Fetch media**, press
    **Stop**. If the silent fill trips a rate limit on a big profile, the answer
    is the **Then fetch the rest silently** switch, not removing the phase.
-2. **Then live spot-check v3.4 + v3.5 + v3.6 + v3.6.1** — WORKLIST P0 items 12 and 14.
+3. **Then live spot-check v3.4 + v3.5 + v3.6 + v3.6.1** — WORKLIST P0 items 12 and 14.
    Reload `extension/` unpacked (manifest 3.6.3, "ask where to save" OFF),
    then: the quote-card case (item 12), a 4-photo post in raw mode
    (`Downloads/XMedia/<post name>/001…004.jpg`), the empty-master-folder
@@ -673,9 +741,9 @@ before jumping majors.
    amber warning, opt-in video zipping with its warning, `orig`-quality
    re-download. If an archive still saves under a UUID, capture the Chrome
    version — that is the blob-filename bug the anchor mechanism dodges.
-3. **Cut the first release zip** — `scripts/package-release.sh` →
-   `releases/x-media-downloader-v3.7.0.zip` is **cut and offline-verified**
-   (v3.6.1/v3.6.3 before it were too)
+4. **Cut the first release zip** — `scripts/package-release.sh` →
+   `releases/x-media-downloader-v3.8.0.zip` is **cut and offline-verified**
+   (v3.6.1/v3.6.3/v3.7.0 before it were too)
    (2026-09-02): `manifest.json` at the zip root, `diff -r` byte-identical to
    `extension/`, and all 23 manifest-declared + runtime-resolved resources
    present (`lib/*`, `offscreen.*`, every `importScripts`/`<script src>`
@@ -683,17 +751,18 @@ before jumping majors.
    and Load unpacked the folder. Optionally start `CHANGELOG.md`. With that
    plus item 1, P0 is complete. (The v3.6.1 `ci` packaging smoke also passed —
    `lib/archive.js` is in the zip; that CI artifact was deleted.)
-4. P1 afterwards: Side Panel diagnostics + sanitized copy-debug-report,
+5. P1 afterwards: Side Panel diagnostics + sanitized copy-debug-report,
    explicit Include replies switch (quoted shipped in v3.4). Name templates
    shipped in v3.5; highest-bitrate video is guaranteed since v3.6.
-5. Settled decisions that stay settled: separate scroll/remote lists (do not
+6. Settled decisions that stay settled: separate scroll/remote lists (do not
    merge without a new user decision), one download action, no whole-batch
    ZIP (per-post archives only), no reply capture until it has its own
    switch, offscreen documents = chrome.runtime only, blob saves via the
    in-document anchor, PDF photos-only (GIF/video archive entries force
    ZIP), GIF failures fall back to MP4 — never a failed item, and (v3.7)
-   decisions 19–23: shallow automatic / deep on click, one in-page dock, the
+   decisions 19–25: shallow automatic / deep on click, one in-page dock, the
    silent fill reuses discovery and lands in the Remote list, run tokens on
-   every loop, incremental replays.
-6. Before finishing: update all three docs (log entry, worklist statuses,
+   every loop, incremental replays, automatic-incremental vs
+   explicit-clean-slate, and every no-op reporting its reason.
+7. Before finishing: update all three docs (log entry, worklist statuses,
    this file).

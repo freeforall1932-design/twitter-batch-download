@@ -69,6 +69,45 @@
   let postsOnScreen = 0;
   let scanCount = 0;  // DOM scans performed in this tab (status/diagnostics)
 
+  // Cumulative, never reset. A pass reports the delta across its own start and
+  // end, so two overlapping passes cannot corrupt each other — and they do
+  // overlap: a load/route-change pass can land in the middle of an explicit
+  // rescan on a busy timeline. The obvious design (one shared tally object that
+  // each pass zeroes at its start) made a rescan report "nothing new" right
+  // after it had re-listed the whole page, because the automatic pass that
+  // followed it wiped the numbers before the note was written.
+  const passCounters = { sent: 0, added: 0, skippedDownloaded: 0 };
+  let lastPassResult = { sent: 0, added: 0, skippedDownloaded: 0 };
+  // Rescans keep their own record. `lastPassResult` is whatever pass ran most
+  // recently, and an automatic load/route pass lands right after a rescan often
+  // enough that reading the rescan's outcome from it was unreliable.
+  let lastRescan = null;
+  let rescanRunning = false;
+
+  function notePassResult(response, sentCount) {
+    passCounters.sent += Number(sentCount) || 0;
+    passCounters.added += Number(response?.addedCount) || 0;
+    passCounters.skippedDownloaded += Number(response?.skippedDownloaded) || 0;
+  }
+
+  // Forget everything this tab has already listed so the next scan re-sends the
+  // posts on screen. This is what makes "delete rows from my list, then press
+  // Rescan (or Fetch)" work: the queue dedupes on its own side, so re-sending an
+  // item that is still listed is a harmless no-op while an item the user removed
+  // comes back. Clearing `lastReplaySeq` is the part that matters most — X
+  // virtualizes timelines, so posts that scrolled out of the DOM exist only in
+  // the MAIN-world replay buffer, and an incremental replay request would never
+  // re-deliver them. Automatic passes (load, route change) do NOT call this: a
+  // busy timeline would re-clone its whole buffer on every mutation tick.
+  function forgetListedMedia() {
+    listedMediaIds.clear();
+    listedMediaKeys.clear();
+    pendingVideoTweets.clear();
+    resolvedVideoTweets.clear();
+    videoResolveAttempts.clear();
+    lastReplaySeq = 0;
+  }
+
   // Auto-scroll tuning. "Fast" is genuinely fast: it does not sleep on a fixed
   // timer, it waits for X to render the next batch and moves on immediately.
   const SCROLL_CONFIG = {
@@ -115,6 +154,7 @@
         skipDownloaded,
         includeQuoted
       }, (response) => {
+        notePassResult(response, 0);
         if (response?.addedCount) {
           listedCount += response.addedCount;
           statusText = `Listed ${listedCount} media item${listedCount === 1 ? "" : "s"} from this tab.`;
@@ -655,6 +695,7 @@
 
     if (items.length) {
       safeSend({ action: "queueAdd", items, source: "scroll", skipDownloaded }, (response) => {
+        notePassResult(response, items.length);
         const added = response?.addedCount ?? items.length;
         listedCount += added;
         statusText = `Listed ${listedCount} media item${listedCount === 1 ? "" : "s"} from this tab.`;
@@ -726,6 +767,7 @@
       }
       if (items.length) {
         safeSend({ action: "queueAdd", items, source: "scroll", skipDownloaded }, (response) => {
+          notePassResult(response, items.length);
           listedCount += response?.addedCount ?? items.length;
           statusText = `Listed ${listedCount} media item${listedCount === 1 ? "" : "s"} from this tab.`;
           renderFetchDock();
@@ -983,8 +1025,13 @@
   // Everything this tab can give us without moving the page. Safe to run often:
   // the replay request is incremental (`since` the last sequence number seen),
   // the DOM scan dedupes by media key, and the video resolver is rate-bounded.
-  async function shallowFetchPass(reason = "manual") {
+  // `options.fresh` = start from a clean slate (see forgetListedMedia). Only
+  // explicit user actions pass it: Rescan tab, Fetch media, and the in-page
+  // dock's Fetch button. Load and route-change passes stay incremental.
+  async function shallowFetchPass(reason = "manual", options = {}) {
+    if (options.fresh) forgetListedMedia();
     const before = listedCount;
+    const countersAtStart = { ...passCounters };
     requestReplay();
     scanVisibleMedia();
     // The replay answer arrives through the window-message bridge, not through
@@ -992,8 +1039,53 @@
     await sleep(REPLAY_SETTLE_MS);
     await drainPendingVideoTweets();
     const gained = listedCount - before;
+    lastPassResult = {
+      sent: passCounters.sent - countersAtStart.sent,
+      added: passCounters.added - countersAtStart.added,
+      skippedDownloaded: passCounters.skippedDownloaded - countersAtStart.skippedDownloaded
+    };
     if (reason === "deep" || gained > 0) renderFetchDock();
-    return { gained, listed: listedCount, reason };
+    return { gained, listed: listedCount, reason, ...lastPassResult };
+  }
+
+  // An explicit rescan re-lists the posts this tab can see into the Side Panel
+  // queue, replacing rows the user deleted. It never moves the page and never
+  // crawls: it is the shallow pass with the tab's "already listed" memory wiped.
+  async function startRescan() {
+    if (rescanRunning) return { ok: false, reason: "A rescan is already running on this tab." };
+    rescanRunning = true;
+    let result = null;
+    try {
+      result = await shallowFetchPass("rescan", { fresh: true });
+      statusText = rescanNote(result);
+      lastRescan = {
+        added: Number(result?.added) || 0,
+        skippedDownloaded: Number(result?.skippedDownloaded) || 0,
+        listed: Number(result?.listed) || 0,
+        at: Date.now()
+      };
+    } catch (error) {
+      statusText = `Rescan failed — ${error?.message || error}`;
+    } finally {
+      rescanRunning = false;
+    }
+    renderFetchDock();
+    return { ok: true, ...(result || {}) };
+  }
+
+  function rescanNote(result) {
+    const added = Number(result?.added) || 0;
+    const skipped = Number(result?.skippedDownloaded) || 0;
+    if (added > 0) {
+      const held = skipped
+        ? ` ${skipped} more held back as already downloaded.`
+        : "";
+      return `Rescan — ${added} media item${added === 1 ? "" : "s"} re-listed into the queue.${held}`;
+    }
+    if (skipped > 0) {
+      return `Rescan — nothing re-listed: ${skipped} item${skipped === 1 ? "" : "s"} are already downloaded. Untick “Skip already downloaded” to list them again.`;
+    }
+    return "Rescan — nothing new; the items already in the queue are unchanged.";
   }
 
   // A freshly opened tab renders (and fetches) in stages over its first
@@ -1045,7 +1137,10 @@
     renderFetchDock();
     statusText = "Fetching media from this tab…";
 
-    await shallowFetchPass("deep");
+    // A fetch is an explicit action, so it starts from a clean slate: rows the
+    // user deleted from the queue come back instead of being suppressed by this
+    // tab's "already listed" memory.
+    await shallowFetchPass("deep", { fresh: true });
     if (runId !== deepFetchRunId) return { ok: false, superseded: true };
 
     if (!deepFetchStopRequested) {
@@ -1407,11 +1502,13 @@
       return;
     }
 
-    // Shallow pass only — no scrolling, no remote fill. Wired to the panel's
-    // Rescan button (it used to be a documented hook with no sender at all).
+    // Shallow pass only — no scrolling, no remote fill — but from a clean
+    // slate, so it re-lists posts the user deleted from the queue. Responds
+    // immediately (the pass can take seconds while video posts resolve); the
+    // panel's status poll picks up the completion note.
     if (msg.action === "scrollRescan") {
-      shallowFetchPass("panel");
-      sendResponse(statusPayload());
+      startRescan();
+      sendResponse({ ...statusPayload(), rescanning: true });
       return;
     }
   });
@@ -1424,6 +1521,7 @@
       // Deep-fetch state, so the panel can show the phase and keep its Fetch /
       // Stop buttons honest while the in-page dock is doing the work.
       fetching: deepFetchRunning,
+      rescanning: rescanRunning,
       fetchPhase: deepFetchPhase,
       fetchNote: deepFetchNote,
       fetchTarget: deepFetchTarget,
@@ -1431,6 +1529,11 @@
       showFetchButton: showFetchDock,
       dockHidden: fetchDockHidden,
       found: listedCount,
+      // Diagnostics: what the last shallow pass sent / the queue took / the
+      // queue held back as already downloaded, plus the last explicit rescan's
+      // own outcome (a later automatic pass must not overwrite it).
+      lastPass: { ...lastPassResult },
+      lastRescan: lastRescan ? { ...lastRescan } : null,
       url: window.location.href,
       route: lastRoute,
       postsOnScreen,

@@ -2,6 +2,129 @@
 
 Chronological implementation record for X Media Downloader.
 
+## 2026-09-03 — v3.8 Rescan restores deleted rows (+ Remove selected)
+
+**Branch:** `arena/01a065c5-twitter-batch-download` · **Manifest 3.7.0 → 3.8.0** ·
+**Tests 135 → 140**
+
+**Session input (verbatim intent):** "Can you also add rescan function it's like
+fetch but re adding the post into the list say I delete the list then I'll press
+fetch or make a new button and it will rescan the available post into my queue
+list that I can pick which one to delete manually."
+
+### Diagnosis — Rescan already existed and still could not do this
+
+v3.7 shipped a **Rescan tab** button wired to `scrollRescan`, so the button the
+user asked for was already there — but pressing it after deleting rows did
+*nothing*, which is why it read as missing. Capture keeps a per-tab memory of
+what it has already sent (`listedMediaIds`, `listedMediaKeys`,
+`resolvedVideoTweets`) so a scan that runs on every DOM mutation does not
+re-post the whole timeline each time. That memory is a **performance guard with
+no expiry**: it lived for the tab's lifetime and had no way to be cleared from
+the UI. The worker side was never the problem — `mergeQueueItems` dedupes
+against `state.items` only, so a row the user removed was always welcome back.
+The block was entirely in the content script.
+
+`lastReplaySeq` had the same shape of problem: v3.7 made replay incremental, so
+an explicit rescan only asked for responses *newer* than the last one handled.
+X virtualizes timelines — posts that scrolled out of the DOM exist **only** in
+the MAIN-world replay buffer — so an incremental rescan could not restore them
+even with the dedupe sets cleared.
+
+### What changed
+
+1. **`forgetListedMedia()` (content.js)** clears both dedupe sets, the video
+   resolve sets and attempt budget, and resets `lastReplaySeq` to 0 so the whole
+   buffer is re-delivered. Called by exactly two things: **Rescan tab** and the
+   start of a **deep fetch** (dock button or panel `Fetch media`) — the user
+   described both ("I delete the list then I'll press fetch"). Automatic passes
+   (load, route change) deliberately stay incremental; a busy timeline would
+   otherwise re-clone ~8 MB of buffered GraphQL on every mutation tick.
+   **Rule: automatic passes are incremental, explicit clicks start clean.**
+2. **`shallowFetchPass(reason, { fresh })`** carries the flag, so the same code
+   path serves both behaviours instead of a second scan implementation.
+3. **`startRescan()` + `rescanNote()`** — the rescan is async (video posts can
+   take seconds to resolve) so the handler answers immediately with
+   `rescanning: true` and the panel's existing 1.5 s status poll replaces the
+   hint with the outcome. The note always states a result, including the
+   uninteresting ones: `Rescan — 15 media items re-listed into the queue.`,
+   `Rescan — nothing new; the items already in the queue are unchanged.`, or
+   `Rescan — nothing re-listed: N items are already downloaded. Untick "Skip
+   already downloaded" to list them again.` Silence after a click is what makes
+   a working feature look broken.
+4. **`skippedDownloaded` reporting (background.js)** — `mergeQueueItems` now
+   returns `{ added, skippedDownloaded }` instead of a bare count, propagated
+   through `addQueueItems`, the `queueAdd` response and the
+   `localTimelineCapture` response. "Nothing came back" previously could not
+   distinguish *already in your list* (fine) from *held back by a setting*
+   (actionable).
+5. **`Remove selected` (Side Panel)** — the other half of "pick which one to
+   delete manually". Ticking rows only fed **Download selected** before; the new
+   button sends the existing `queueRemove` with an `ids` array (the worker
+   already accepted it — no new command, so the contract test stays green).
+   Confirm-guarded, and its copy says files on disk are untouched and Rescan
+   brings rows back.
+6. **Panel busy state** — `rescanning` disables Fetch/Auto-scroll/Rescan while a
+   pass runs but leaves **Stop** disabled: a rescan is a short read-only pass
+   with nothing to cancel, and offering a Stop that does nothing is worse than
+   not offering one. The status pill gained a `Re-listing this tab` state.
+
+### A bug the first implementation had (kept as a lesson)
+
+The first cut kept one shared `passTally` object that each pass zeroed at its
+start. It reported "nothing new" immediately after re-listing a whole page: an
+automatic load pass (`armLoadFetch()` fires at 900/2200/4000 ms) landed inside
+the rescan's `await sleep()` and wiped the numbers before the note was written.
+Overlapping passes are normal, not exotic — the fix is that the counters are
+**cumulative and never reset**, and each pass reports the delta between its own
+start and end snapshots. Same reason a rescan now records its outcome in its own
+`lastRescan` field rather than in `lastPass` (which honestly means "whatever pass
+ran most recently", and that is usually not the rescan).
+
+### Validation
+
+- `node --test tests/*.test.js` → **140 pass / 0 fail** (+5 new, 1 rewritten).
+  New: rescan re-lists deleted rows (same ids come back), rescan asks for the
+  whole replay buffer (`since: 0`), Fetch media also starts clean, a rescan that
+  adds nothing names the setting that held items back (`lastRescan` record
+  included), a rescan that restores says how many. The v3.7 incremental-replay
+  test was **rewritten** to drive a *route change* instead of a rescan — the
+  incremental property belongs to automatic passes now, and asserting it through
+  `scrollRescan` would have pinned the wrong behaviour.
+- `tests/content.test.js` shim gained `setQueueResponder(fn)` so a test can stand
+  in for the worker's dedupe/skip decision (`addedCount: 0` + `skippedDownloaded`)
+  instead of the optimistic "takes everything" default.
+- **Real-DOM smoke (throwaway, NOT committed):** the harness fake worker was
+  corrected to dedupe against its live queue (it used a permanent `seen` set, so
+  it simulated the *old* behaviour and could never have shown this bug). Running
+  the real `content.js` + `sidepanel.js` in jsdom: load lists 15 with no
+  scrolling → **Clear list** → Rescan restores all 15 with identical ids →
+  a second rescan reports "nothing new" and creates no duplicates → delete one
+  row → rescan restores exactly 1 → dock **Fetch media** after a clear re-lists
+  15 → panel renders 3 seeded rows, ticking one enables **Remove 1 selected**,
+  clicking removes exactly that row and leaves the other two. Zero runtime
+  errors.
+- `dbg2.js` re-run to confirm no regression in the v3.7 hybrid flow:
+  shallow(15) → scroll → `discoveryStart @nasa` → 24 media found →
+  `Fetch complete — 15 listed from this tab. @nasa silent fill: 24 media found →
+  Remote fetch tab.`
+- `node --check` on every shipped script in both folders; `firefox-extension/`
+  re-synced (sidepanel.js/html/css/injected.js copied — identical at HEAD;
+  content.js rebuilt as its compat prefix + shared body; background.js re-patched
+  because it carries intentional `_executeScriptCompat` swaps). Remaining diff is
+  exactly the pre-existing 55 + 17 compat lines. Both manifests **3.8.0**;
+  `releases/x-media-downloader-v3.8.0.zip` re-cut and offline-verified.
+
+### Still open (live X)
+
+- One signed-in pass: delete rows from the queue, press **Rescan tab**, confirm
+  they return on a real profile (including posts scrolled out of view, which only
+  exist in the replay buffer — the 40-entry / ~8 MB bound caps how far back that
+  reaches). Confirm **Remove selected** on a multi-selection and that a rescan
+  during a running fetch is refused cleanly rather than racing it.
+- Deliberately NOT done: no "undo remove", no trash/history of removed rows, and
+  no change to how the two lists stay separate. Rescan is the undo.
+
 ## 2026-09-03 — v3.7 Fetch button: auto shallow fetch on tab open, in-page Fetch dock, hybrid deep fetch
 
 **Branch:** `arena/01a065c5-twitter-batch-download` · **Manifest 3.6.3 → 3.7.0** ·

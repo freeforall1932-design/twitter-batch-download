@@ -13,6 +13,7 @@ Self-hosted against your signed-in X session. No third-party accounts, API keys,
 ## Features
 
 - **Always-on scroll capture** — Open any X view (home timeline, profile, `/media`, or a single post) and scroll. Media lists itself in the Side Panel. No button to press first, and it follows in-tab navigation without a reload.
+- **Rescan restores deleted rows (v3.8)** — **Rescan tab** (and **Fetch media**) forget what the tab already sent and re-list the posts on screen, so rows you deleted from the queue come back and you can pick again. Nothing moves on the page and nothing is crawled. Paired with the new **Remove selected** button: tick the rows you do not want, remove them, and rescan whenever you want them back. If items stay away the note says why — usually **Skip already downloaded**.
 - **Fetch button (v3.7)** — A floating **Fetch media** button on every X page (and in the Side Panel) fetches the whole view for you, as if you had scrolled it yourself: it first reads everything the tab already has, then drives the auto-scroll so X loads the rest, then optionally pages the same profile silently to pick up media X never rendered. A **shallow** fetch — read the tab without moving the page — now also runs by itself when you open a profile in a new tab and on every in-tab route change, so a fresh profile lists its first batch with no scrolling and no reload.
 - **Optional auto-scroll** — Let the extension scroll for you. It paces itself to how fast X renders, has no item cap, and never pauses for downloads. Available on its own (**Auto-scroll only**) or as the middle phase of **Fetch media**.
 - **Action-bar buttons on media posts** — **Download** saves immediately; **Add to queue** sends the post's media to the Side Panel list.
@@ -48,8 +49,8 @@ You must be logged in to X. The extension uses your existing session — no API 
 2. Open any X view — home timeline, a profile, a profile's `/media` tab, or a single post. Its first batch lists itself within a couple of seconds (v3.7 shallow fetch); no scrolling and no reload needed.
 3. Scroll normally. Media appears in the panel as you go. Switching views inside the same tab works without reloading.
 4. Want the whole view without scrolling? Press **Fetch media** — on the page (floating button, bottom-right) or in the Side Panel. It reads the tab, scrolls the timeline to the end at the speed you picked, then (if **Then fetch the rest silently** is on) pages the same profile through the Remote fetch engine; those extra rows land in the **Remote fetch** list. The page button turns into **Stop** while it runs, and the panel's **Stop** cancels both phases.
-5. **Rescan tab** re-reads the current view without moving the page. **Auto-scroll only** scrolls without the silent fill afterwards.
-6. Tick the items you want (or **Select all**) and press **Download selected**.
+5. **Rescan tab** re-lists the current view without moving the page — including rows you deleted earlier, which come back so you can choose again. **Auto-scroll only** scrolls without the silent fill afterwards.
+6. Tick the items you want (or **Select all**) and press **Download selected**. Tick rows you do *not* want and press **Remove selected** to delete just those from the list (files already on disk are untouched).
 
 Keep concurrent downloads at 1 or 2. **Skip already downloaded** keeps finished files out of the list.
 Turn off **Show the Fetch button on X pages** to hide the in-page button (the page's own **×** hides it for that tab only).
@@ -172,6 +173,7 @@ Bump `extension/manifest.json` → `version` when cutting a new release.
 | Operation metadata missing | Open the target profile `/media` once so live capture can warm up |
 | Protected / N/A | Private, deleted, or unavailable to your account |
 | Rate limited | Wait for the Side Panel countdown; use a slower auto-scroll speed, or switch off **Then fetch the rest silently** so a Fetch does not add a remote crawl on top of the scrolling |
+| Deleted rows will not come back | Press **Rescan tab** (or **Fetch media**): both re-list the posts on screen. If the note says items are "already downloaded", untick **Skip already downloaded** — or press **Reset downloaded history** to forget them entirely |
 | New tab lists nothing | It should list its first batch on its own within ~2 s. If not, press **Fetch media** (page or panel) — and check the panel's status pill: if it says **Reload needed**, use its **Reload tab** button |
 | Silent fill says "operation metadata" | The Remote fetch engine needs one live X request to learn the current query IDs. Open the profile's `/media` tab once (or scroll a little), then Fetch again |
 | After code update | Reload extension on `chrome://extensions`, then hard-refresh X. Tabs opened before the reload have no content script — the panel shows **Reload needed** + a **Reload tab** button |

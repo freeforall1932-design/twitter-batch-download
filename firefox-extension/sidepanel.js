@@ -6,6 +6,7 @@ let discovery = { running: false, pages: 0, found: 0, status: "Ready to discover
 let activeTab = "scroll";
 let countdownTimer = null;
 let localStatusTimer = null;
+let rescanRunning = false;
 let autoScrollRunning = false;
 let deepFetchRunning = false;
 let needsTabReload = false;
@@ -113,6 +114,12 @@ function render() {
   $("downloadSelectedBtn").textContent = selected.length
     ? `Download ${selected.length} selected`
     : "Download selected";
+  // The other half of "rescan, then pick what to delete": ticking rows can
+  // remove them, not only download them.
+  $("removeSelectedBtn").disabled = selected.length === 0;
+  $("removeSelectedBtn").textContent = selected.length
+    ? `Remove ${selected.length} selected`
+    : "Remove selected";
   $("stopBtn").disabled = !state.running;
   $("discoverBtn").disabled = discovery.running;
   $("stopDiscoveryBtn").disabled = !discovery.running;
@@ -181,10 +188,14 @@ function setTabStatus(kind, title, detail) {
 
 // Replaces the old manual "Watch current tab" button: capture is always on in
 // every X tab, so the panel only needs to report what it currently sees.
-function setLocalBusy(busy) {
-  $("fetchNowBtn").disabled = busy;
-  $("startLocalScrollBtn").disabled = busy;
-  $("rescanTabBtn").disabled = busy;
+function setLocalBusy(busy, options = {}) {
+  // A rescan is a short read-only pass, so it blocks starting anything else but
+  // has nothing to cancel: Stop stays reserved for the engines that move the
+  // page or crawl it.
+  const working = busy || Boolean(options.rescanning);
+  $("fetchNowBtn").disabled = working;
+  $("startLocalScrollBtn").disabled = working;
+  $("rescanTabBtn").disabled = working;
   $("stopLocalScrollBtn").disabled = !busy;
 }
 
@@ -212,19 +223,21 @@ async function pollLocalStatus() {
     try { host = new URL(response.url || "").pathname || "/"; } catch (_) { host = "/"; }
     autoScrollRunning = Boolean(response.running);
     deepFetchRunning = Boolean(response.fetching);
+    rescanRunning = Boolean(response.rescanning);
     const busy = autoScrollRunning || deepFetchRunning;
     setReloadTab(false);
     setTabStatus(
-      busy ? "active" : "ok",
+      busy || rescanRunning ? "active" : "ok",
       deepFetchRunning
         ? `Fetching this tab — ${FETCH_PHASES[response.fetchPhase] || "working"}`
-        : busy ? "Auto-scrolling this tab" : "Capturing this tab",
+        : busy ? "Auto-scrolling this tab"
+          : rescanRunning ? "Re-listing this tab" : "Capturing this tab",
       `${host} · ${response.postsOnScreen || 0} posts on screen${response.pendingVideos ? ` · resolving ${response.pendingVideos} video posts` : ""}`
     );
     $("localHint").textContent = response.text;
     $("localHint").classList.remove("error");
   }
-  setLocalBusy(autoScrollRunning || deepFetchRunning);
+  setLocalBusy(autoScrollRunning || deepFetchRunning, { rescanning: rescanRunning });
 }
 
 queueEl.addEventListener("change", (event) => { if (event.target.matches(".item-select")) updateSelection(event.target.dataset.id, event.target.checked); });
@@ -263,6 +276,13 @@ $("resetDownloadedBtn").addEventListener("click", async () => {
 });
 $("downloadSelectedBtn").addEventListener("click", async () => { state = await send({ action: "queueStart", mode: "selected", source: sourceForActiveTab(), format: $("jobFormat").value }); render(); });
 $("stopBtn").addEventListener("click", async () => { state = await send({ action: "queueStop" }); render(); });
+$("removeSelectedBtn").addEventListener("click", async () => {
+  const ids = selectedItems().map((item) => item.id);
+  if (!ids.length) return;
+  if (!confirm(`Remove ${ids.length} selected item${ids.length === 1 ? "" : "s"} from this list? Nothing already downloaded is deleted from disk — press Rescan tab to bring them back.`)) return;
+  state = await send({ action: "queueRemove", ids });
+  render();
+});
 
 document.querySelectorAll(".tab").forEach((button) => button.addEventListener("click", async () => {
   activeTab = button.dataset.tab;
@@ -316,9 +336,13 @@ $("startLocalScrollBtn").addEventListener("click", async () => {
 // long-documented scrollRescan command a real sender.
 $("rescanTabBtn").addEventListener("click", async () => {
   const response = await sendToActiveXTab({ action: "scrollRescan" });
-  $("localHint").textContent = response.error || response.text || "Re-read this tab.";
+  $("localHint").textContent = response.error || "Re-listing this tab…";
   $("localHint").classList.toggle("error", Boolean(response.error));
   if (response.needsRefresh) setReloadTab(true, response.tabId);
+  // The pass finishes on its own clock (video posts can take a few seconds to
+  // resolve); the 1.5 s status poll replaces the hint with its result note.
+  rescanRunning = Boolean(response.rescanning);
+  setLocalBusy(autoScrollRunning || deepFetchRunning, { rescanning: rescanRunning });
 });
 $("stopLocalScrollBtn").addEventListener("click", async () => {
   const response = await sendToActiveXTab({ action: "scrollStop" });
