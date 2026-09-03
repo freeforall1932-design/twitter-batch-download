@@ -910,6 +910,17 @@ test("buildFallbackFilenames produces a short safe, deterministic ladder", () =>
   assert.deepEqual(ladder, background.buildFallbackFilenames(input));
 });
 
+test("sanitizeFilePart strips bidi/format controls so legacy names cannot garble", () => {
+  const background = loadBackground();
+  const cleaned = background.sanitizeFilePart(
+    "Hello\u202e\u202b\u200b\u200fWorld\u2066  \u2069pics",
+    "media"
+  );
+  assert.ok(!/[\u200b\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/.test(cleaned));
+  assert.match(cleaned, /Hello/);
+  assert.match(cleaned, /World/);
+});
+
 test("queueAdd collapses the same CDN media discovered from DOM and GraphQL", async () => {
   const background = loadBackground();
   // The DOM scanner keys a photo by CDN leaf; the GraphQL parser keys the same

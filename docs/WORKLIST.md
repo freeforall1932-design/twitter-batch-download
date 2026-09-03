@@ -1,6 +1,6 @@
 # Development Worklist
 
-_Last audited: 2026-09-03 (this session = **v3.9 virtualization-proof capture**: X removes articles that scroll off-screen and capture was scan-only, so posts inserted and removed between two scans were never listed at all — measured **81 of 207 photos and 39 of 103 posts** on a fast scroll. `harvestMutationArticles()` now reads the observer's `addedNodes` **and** `removedNodes`, lifting that to 204/101 (fast) and 207/103 (normal) with **0 duplicates**; videos went **1 → 17** because a harvested video post is now queued for its per-post resolve instead of vanishing. Dedupe itself was already airtight and is now test-pinned. Prev = **v3.8 Rescan restores deleted rows**: `Rescan tab` and `Fetch media` now forget the tab's "already listed" memory and re-list the posts on screen, so rows the user deleted come back; new **Remove selected** button; `skippedDownloaded` reporting so "nothing came back" always names a reason. Prev = **v3.7 Fetch button**: shallow auto-fetch on tab open/route change, in-page Fetch dock, hybrid deep fetch (scroll → silent GraphQL fill), Side Panel Fetch/Rescan/Reload-tab controls, plus an 8-item missing-logic audit — see the newest IMPROVEMENT_LOG entry. Prev = Firefox port: separate firefox-extension/ folder MV2 sidebar_action + compat shims, README, manifest variant. Prev = v3.6.3 naming-degarble + perf queue:
+_Last audited: 2026-09-03 (this session = **v3.11 per-user folders + random-naming PENDING REVIEW**: raw downloads default to `Downloads/XMedia/<user>/<post name>/001.jpg` — master folder → one folder **per user** → per-post folder — so a user's media from the home timeline, a profile and its `/media` page all live together, and the folder doubles as visual dedupe on top of v3.10's byte + source-URL verification; `userFolders` toggle (default ON) restores the old `XMedia/<post name>/…` layout; archives (ZIP/CBZ/PDF) cannot create folders, so the username is **forced into the file name** whenever the template would omit it (`{id}` → `nasa - 111.cbz`); legacy queue rows without naming metadata still get their user folder from `item.author`. **The garbled-random-name problem is on this work list as PENDING REVIEW — NOT fixed until the user tests and confirms; root cause still unconfirmed.** Manifest 3.10.0 → 3.11.0, **167 offline tests** (+3), `firefox-extension/` re-synced, no release zip cut yet (pending user review). Previous audit (2026-09-03): **v3.10 byte-identical + source-URL duplicate verification**: new `lib/dedupe.js` (streaming SHA-256 + canonical source URL); `downloadedMediaRecordsV1` record store (`{id, mediaKey, url, urlKey, hash, size, filename, at}`); `downloadFile` checks URL first (no network), then hashes the bytes and skips same-URL / byte-identical media — the row shows `completed · duplicate` instead of saving a `(1)` copy; completion writes hash + URL + real filename (queue rows via `onChanged`/restart reconcile, direct saves via a pending-record map); canonical URL joins `id`/`mediaKey` as a third queue identity + "Skip already downloaded" record check; archive pass skips already-verified groups and records per-entry + archive digests; `verifyDuplicates` toggle added to Output settings (default ON, best-effort); legacy flat-path sanitizers strip bidi controls so names cannot garble. Manifest 3.9.0 → 3.10.0, 164 offline tests (+14), Firefox port re-synced, release zip re-cut. Prev = **v3.9 virtualization-proof capture**: X removes articles that scroll off-screen and capture was scan-only, so posts inserted and removed between two scans were never listed at all — measured **81 of 207 photos and 39 of 103 posts** on a fast scroll. `harvestMutationArticles()` now reads the observer's `addedNodes` **and** `removedNodes`, lifting that to 204/101 (fast) and 207/103 (normal) with **0 duplicates**; videos went **1 → 17** because a harvested video post is now queued for its per-post resolve instead of vanishing. Dedupe itself was already airtight and is now test-pinned. Prev = **v3.8 Rescan restores deleted rows**: `Rescan tab` and `Fetch media` now forget the tab's "already listed" memory and re-list the posts on screen, so rows the user deleted come back; new **Remove selected** button; `skippedDownloaded` reporting so "nothing came back" always names a reason. Prev = **v3.7 Fetch button**: shallow auto-fetch on tab open/route change, in-page Fetch dock, hybrid deep fetch (scroll → silent GraphQL fill), Side Panel Fetch/Rescan/Reload-tab controls, plus an 8-item missing-logic audit — see the newest IMPROVEMENT_LOG entry. Prev = Firefox port: separate firefox-extension/ folder MV2 sidebar_action + compat shims, README, manifest variant. Prev = v3.6.3 naming-degarble + perf queue:
 `sanitizeArtifactFilename` strips invisible bidi/format controls, the
 `buildFallbackFilenames` last resort is no longer random
 `media_<timestamp>` text, `queueChanged` broadcasts are throttled, one
@@ -39,13 +39,14 @@ No manual API key / password / cookie paste. Self-hosted against the signed-in X
 | Live GraphQL/header/response capture | Reworked after live testing | **No operation allowlist for responses** (that is what broke homepage capture). Allowlist retained only for Remote-fetch request metadata. Adds a 40-entry replay buffer and an SPA `pushState`/`popstate` route watcher. No cookie values in bag. |
 | Discovery error codes + RL countdown | Implemented, needs live-X | Side Panel countdown via `retryUntil`. |
 | Direct filenames + invalid-name ladder | Done | Whole-batch ZIP intentionally removed; v3.5 adds template-driven paths at download time. |
-| Master folder for raw downloads | **Done (v3.5), needs live spot-check** | `rawMasterFolder` (sync, default `XMedia`): `Downloads/XMedia/<post name>/001.jpg…`. Empty string = off → legacy flat `x-media/` names byte-for-byte. Per-segment sanitizing via `sanitizeArtifactFilename` (nh-dw port). |
+| Master folder for raw downloads | **Done (v3.5), extended (v3.11), needs live spot-check** | `rawMasterFolder` (sync, default `XMedia`): `Downloads/XMedia/<post name>/001.jpg…`. Empty string = off → legacy flat `x-media/` names byte-for-byte. Per-segment sanitizing via `sanitizeArtifactFilename` (nh-dw port). |
+| Per-user folders in the master folder | **New (v3.11), needs live spot-check** | Default ON: `XMedia/<user>/<post name>/001.jpg` — the user segment is the owning post's author (repost/quote attribution is already resolved upstream), so media from the home timeline, a profile and its `/media` page of one user land in the SAME folder (visual dedupe) on top of byte + source-URL verification. `userFolders` toggle (default ON) restores the old layout. Unknown author → no user segment (never an "unknown" bucket). Single sanitized segment — an odd handle can never create nested folders. Legacy rows without naming metadata still get their user folder from `item.author`. Archives cannot create folders (anchor/blob downloads), so `buildArchiveFilename` forces `nasa - …` into the name when the template omits `{user}`. |
 | Per-post ZIP/CBZ/PDF output | **Done (v3.5, kind rules v3.6), needs live spot-check** | One archive per post (≤4 items), assembled in the offscreen document, saved via `<a download>` anchor (blob-filename quirk); worker data-URL fallback. v3.6: PDF is photos-only (GIF/video posts degrade PDF→ZIP); GIFs archive by default, videos opt-in; warnings at queueStart. NOT the removed whole-batch ZIP. |
 | GIF → real .gif + quality guarantees | **Done (v3.6), needs live spot-check** | `normalizePhotoUrl` forces `name=orig` on every source; videos keep highest-bitrate MP4; GIFs convert MP4→GIF89a in the offscreen document (`lib/gifEncoder.js`, bounded 30 s/360 frames/720 px) with MP4 fallback on any failure; `gifOutput` toggle. |
 | Naming-scheme checkboxes | **Done (v3.5), hardening (v3.6.2)** | `nameTemplate` (sync, default `{user} - {text} - {id}`), checkbox UI + live preview + manual input for custom templates; id fallback, reserved-name prefix. v3.6.2: `makePostBaseName` collapses separators after sanitizing so a token whose content is stripped (e.g. text "???") can't leave `nasa -  - 111`. |
 | Offline CI | **Done (v3.5), hardened (v3.6.1), actions bumped (2026-09-02 follow-up)** | `.github/workflows/extension-tests.yml` + byte-identical `docs/ci/extension-tests.yml` (see `docs/ci/README.md`): read-only permissions, concurrency cancel, timeout, glob safe syntax check, packaging artifact assertion; syntax + `node --test` (150 as of v3.9 = the v3.6.3 queue's 6 + 10 Fetch-button/audit + 5 rescan/restore + 7 virtualization-harvest + 3 dedupe/queue regressions) + packaging smoke. Actions on `@v5` — v4 declared the `node20` runtime that runner images now force onto node24 with a warning; v5+ declare `node24` (upstream is at v7, see IMPROVEMENT_LOG). Both the packaging script and its CI assertion were made exit-code-honest this pass (see next row). No real-browser CI — GitHub runners cannot drive MV3 (verified in nh-dw-2.0). |
 | Virtualization-proof capture | **New (v3.9), needs live-X** | `harvestMutationArticles(mutations)` runs inside the MutationObserver callback *before* the coalesced scan and reads articles from `addedNodes` (earlier than any scan; `img.src` is already the CDN URL before decode) **and** `removedNodes` (the guaranteed last chance — X can insert and trim in the same task, so the node is never in the document when a scan runs; a detached subtree stays fully queryable). Containers walked, non-element nodes skipped. Shares `submitDomItems()` with the scan so counting/status/dock cannot drift. Cannot duplicate: `makeDomQueueItems` marks `listedMediaIds`/`listedMediaKeys` as it builds. Measured: photos 81 → 204 (fast) / 207 (normal), posts 39 → 101 / 103, **videos 1 → 17**, duplicate ids **0** in every configuration. |
-| Dedupe (all layers) | **Verified (v3.9), test-pinned** | content.js `listedMediaIds`/`listedMediaKeys` (tab memory) + per-article `seenUrls`; `mediaEntryToItem`'s dedupe context; background `mergeQueueItems` on `knownIds` **and** `knownKeys` across the whole live queue — which collapses the same photo arriving from the DOM and from GraphQL under different id shapes, and (since v3.7) from the scroll list and the remote fill. Identity is the CDN leaf, so `name=small`/`900x900`/`orig` are one row. |
+| Dedupe (all layers) | **Verified (v3.9), extended (v3.10) — download-time byte + URL verification** | content.js `listedMediaIds`/`listedMediaKeys` (tab memory) + per-article `seenUrls`; `mediaEntryToItem`'s dedupe context; background `mergeQueueItems` on `knownIds` **and** `knownKeys` across the whole live queue — which collapses the same photo arriving from the DOM and from GraphQL under different id shapes, and (since v3.7) from the scroll list and the remote fill. Identity is the CDN leaf, so `name=small`/`900x900`/`orig` are one row. **v3.10 adds the two verifications at save time:** (1) canonical source URL (`lib/dedupe.js canonicalSourceUrl`, scheme+host+path) against `downloadedMediaRecordsV1`, then (2) streamed SHA-256 of the actual bytes — same-URL or byte-identical media is skipped (`duplicate_url`/`duplicate_bytes`, row shows `completed · duplicate`) instead of re-saved under a `(1)` name; canonical URL is also a third queue identity. |
 | Rescan / restore deleted rows | **New (v3.8), needs live-X** | `forgetListedMedia()` clears `listedMediaIds`/`listedMediaKeys`/video-resolve state **and** `lastReplaySeq`, so an explicit rescan (or the start of a deep fetch) re-lists rows the user deleted — including posts X virtualized out of the DOM, which survive only in the MAIN-world replay buffer. Automatic load/route passes stay incremental (rule: *automatic = incremental, explicit click = clean slate*). `Rescan tab` answers immediately with `rescanning: true` and the panel's status poll reports the outcome; **Remove selected** (`queueRemove` with an `ids` array — the worker already accepted it) completes the pick-and-delete loop. |
 | Fetch button / deep fetch | **New (v3.7), needs live-X** | In-page `.xdl-fetch-dock` (Fetch media / Stop / ×) + Side Panel `Fetch media`. Shallow pass (replay + DOM rescan + video resolve, no page movement) runs automatically on tab open and every route change; deep fetch = shallow → existing auto-scroll engine → optional silent `discoveryStart` fill of the same profile (rows land in the Remote fetch list; profiles only, never a single post). Run tokens make Stop authoritative; `scrollStop` stops both engines. |
 | Capture robustness audit (v3.7) | **Done, regression-tested** | Fixed: `safeSend` hung awaiting callers on a dead context (wedged the video resolver until a page reload), a route change dropped its 1800 ms staged scan, one failed video resolve blacklisted that post for the tab's life (now a 2-attempt budget), Stop + restart could leave two scroll loops, every replay re-cloned the whole MAIN-world buffer (now `seq`/`since` incremental), `scrollRescan` had no sender, `window.__xdl_active` dead state, `profileHandleFromUrl` threw on a non-http origin. |
@@ -53,8 +54,8 @@ No manual API key / password / cookie paste. Self-hosted against the signed-in X
 | Popup DOM auto-scroll bulk | **Removed** | The popup's competing scroll+download loop is deleted; the popup is now an Open-Side-Panel launcher with a live capture status line. |
 | ZIP export (whole-batch) | **Removed — stays removed** | The multi-GB whole-batch archive path stays deleted. v3.5's per-post archive (≤4 images, offscreen-assembled) is a different, explicitly requested feature and must not grow into batch archiving. |
 | Third-party tier/license | Absent | Do not add. |
-| Skip already-downloaded (Rank S "Ignore saved") | Done | `downloadedMediaIdsV1` stores completed item ids only. Toggle in the toolbar; resettable. |
-| Cross-source dedupe | Done | Every item carries a CDN-derived `mediaKey`, so DOM-found and GraphQL-found copies of one photo collapse into a single row. |
+| Skip already-downloaded (Rank S "Ignore saved") | Done, extended (v3.10) | `downloadedMediaIdsV1` (legacy ids) is kept in sync with `downloadedMediaRecordsV1` (`{id, mediaKey, url, urlKey, hash, size, filename, at}`), so a re-listed item is held back by id, mediaKey, canonical source URL **or** byte hash. Toggle in the toolbar; resettable — Reset clears both stores. |
+| Cross-source dedupe | Done, extended (v3.10) | Every item carries a CDN-derived `mediaKey`, so DOM-found and GraphQL-found copies of one photo collapse into a single row; the canonical source URL is now a second key (`mergeQueueItems` `knownUrls`), and the saved-byte SHA-256 catches content that arrives under different URLs entirely. |
 | Bookmarks / likes full scan | Not implemented | |
 | Include replies / quoted | **Quoted done (v3.4); replies not implemented** | Quote-card ("mentioned post") media now lists by default in both tabs with an **Include quoted** switch, correct quoted-post attribution, and a `quote` badge. Replies still need their own explicit switch. |
 | Live signed-in verification | **Round 3 mostly passed; one gap fixed, needs spot-check** | Round 3 (v3.3): all functions work, no double entries, UI/UX decent for deployment — except quote-card media never listed (now fixed in v3.4 with quoted-post parsing + Include quoted switches). Re-verify the quote case plus the v3.3 items below. |
@@ -408,6 +409,60 @@ signed-in run of the v3.5–v3.6.2 output + naming path (WORKLIST P0 items 12 /
 `features`/`fieldToggles`/`variables` and confirm
 `core.user_results.result.legacy.name` is the live display-name field.
 
+## P0 — v3.11 per-user folders + random-naming PENDING REVIEW (new, 2026-09-03)
+
+User request (this session, fifth brief): (1) the random/garbled file-name
+problem goes on the work list as **pending review** — do NOT claim it fixed
+until the user tests the output and confirms; (2) the extension's own master
+folder should contain one folder **per user** the media is sourced from —
+`XMedia/<user>/<post name>/001.ext` — so all of a user's batch-archived media
+lives together; (3) when a folder is impossible (archives), the username must
+at least appear in the file name; (4) it doubles as dedupe — different sources
+(home timeline, profile, `/media`) of the same user land in the same folder —
+on top of the v3.10 byte + URL verification; (5) record all of it here and in
+SESSION_HANDOFF / IMPROVEMENT_LOG for the next session to review.
+
+### Random file name / garbled name — ⚠ PENDING REVIEW (do not close until the user confirms)
+
+Status: **UNVERIFIED.** v3.6.3 removed the random `media_<base36>` fallback
+(deterministic ladder now) and both sanitizers strip invisible bidi/format
+controls; v3.10 prevents re-save duplicates via byte + URL verification. None
+of that has ever been observed fixing the original live report — offline tests
+cannot reproduce it, so the root cause stays **unconfirmed**.
+
+- [~] Root cause: still unconfirmed. Remaining suspects: Chrome `uniquify`
+      `(1)`-suffix behavior, a template/user-typed value, or a live X post
+      shape that feeds a weird `text` into `makePostBaseName`.
+- [ ] **User test:** download a real batch in Chrome (Load unpacked) and
+      confirm file/folder names carry the post text with no garbled random
+      word+number text.
+- [ ] If it still garbles: capture the queue row + real saved filename, and
+      trace `makePostBaseName` → `buildFallbackFilenames` →
+      `conflictAction:"uniquify"` (the remaining suspect for the
+      "random word and number" symptom).
+- [x] Random-name *fallback* gone (v3.6.3) — NOT the same as the user's issue
+      being fixed; keep [~]/[ ] above open until the live test confirms.
+
+### Per-user folders (v3.11 — implemented, committed, needs live spot-check)
+
+- [x] Layout: raw downloads default to `XMedia/<user>/<post name>/NNN.ext`
+      (master → per-user → per-post). Example: `XMedia/nasa/nasa - Hello world - 111/001.jpg`.
+- [x] `userFolders` toggle in Output settings (default ON). OFF restores
+      `XMedia/<post name>/NNN.ext`.
+- [x] Archive filenames: username forced when the template omits `{user}`
+      (`{id}` → `nasa - 111.cbz`); `{user} - …` stays as-is (no double user).
+- [x] Cross-source dedupe: home timeline / profile / `/media` media of one
+      user share one folder, on top of v3.10 byte+URL verification.
+- [x] Legacy queue rows without naming metadata use `item.author` for the
+      user folder; no author → no user segment (no "unknown" bucket).
+- [ ] Live spot-check (P0 item 12/14 style): same user's media from two pages
+      lands in ONE folder; different users get different folders; archive
+      names carry the username; toggle OFF gives the old layout.
+- [ ] `firefox-extension/` re-synced (naming/background/sidepanel/html) —
+      live about:debugging spot-check still pending from the Firefox port task.
+- [ ] Release zip: NOT cut yet (v3.10.0 zip is stale). Cut + offline-verify
+      after the user confirms the layout — `scripts/package-release.sh`.
+
 ## P1 — inclusion and review UX
 
 1. Diagnostics panel: active X tab URL, watching status, last captured operation names, capture warm/cold, queue counts, and sanitized copy-debug-report.
@@ -452,6 +507,7 @@ Tasks:
 - [ ] Test `chrome.downloads` with master folder subpaths (Firefox supports subfolders) — pending live about:debugging
 - [ ] Add `docs/ci` test for Firefox manifest parse — pending
 - [x] Document install: `about:debugging` → Load Temporary Add-on → select `firefox-extension/` — done in firefox-extension/README.md with why separate folder table, install steps, known limitations, next steps
+- [x] Re-sync v3.11 per-user folders into the Firefox port (`lib/naming.js`, `background.js`, `sidepanel.js`, `sidepanel.html`; manifest → 3.11.0) — `content.js` keeps its intentional MAIN-world injection shim (do not blind-sync it).
 
 
 ## P3 — robustness
@@ -484,7 +540,7 @@ Tasks:
 - Reposts off/on correct.
 - Protected / NSFW / logged-out / rate-limit messages specific.
 - Stop discovery; stop downloads; Side Panel reload retains state.
-- **150** local Node tests still green after cleanup (`node --test tests/*.test.js`: background + content + naming + zip-writer + pdf-builder + gif-encoder + archive-lib + downloader + media-kinds + injected suites).
+- **167** local Node tests still green after cleanup (`node --test tests/*.test.js`: background + content + naming + zip-writer + pdf-builder + gif-encoder + archive-lib + downloader + media-kinds + injected + dedupe + dedupe-pipeline suites).
 - Both CI copies parse as YAML and stay byte-identical (`diff .github/workflows/extension-tests.yml docs/ci/extension-tests.yml`); a workflow edit must be re-applied to BOTH.
 - `scripts/package-release.sh` exits **0** (was a deterministic 141 SIGPIPE) and the CI packaging step passes verbatim even with more than one zip in `releases/`.
 - The release zip unzips to a structurally loadable folder: manifest at root, contents identical to `extension/`, every manifest + runtime reference resolvable.

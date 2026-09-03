@@ -2,6 +2,194 @@
 
 Chronological implementation record for X Media Downloader.
 
+## 2026-09-03 — v3.11 per-user folders in the master folder + random-naming flagged PENDING REVIEW
+
+**Branch:** `arena/01a0667d-twitter-batch-download` · **Manifest 3.10.0 → 3.11.0** ·
+**Tests 164 → 167** (+3) · **Committed, NOT pushed/PR'd — pending the user's
+review of the output** (per the session instruction that the random-naming
+result stays pending review).
+
+**Session input (verbatim intent):** the extension's own master folder
+(`XMedia`) should contain **one folder per user** the media is sourced from —
+`XMedia/<user>/<post name>/001.ext` — so all of a user's batch-archived media
+lives together; media from different sources (home timeline, profile, `/media`
+page) of the same user lands in the same folder (which doubles as dedupe);
+when a folder is impossible (ZIP/CBZ/PDF archives) the username must at least
+appear in the file name; and the **random/"garbled" file name problem goes on
+the work list as PENDING REVIEW — NOT fixed until the user tests and
+confirms**.
+
+### Part 0 — random file names: PENDING REVIEW, root cause UNCONFIRMED
+
+What v3.6.3/v3.10 already did (deterministic fallback ladder, bidi/format
+control strip, byte+URL save-time verification) is **not** being claimed as
+the fix — offline tests cannot reproduce the live symptom, so the root cause
+remains unconfirmed. The user's instruction is explicit: it goes on the work
+list as **pending review** and may only be closed after a real-browser test
+confirms the names are clean. Remaining suspect if it still garbles:
+`conflictAction:"uniquify"` (Chrome's `(1)`-suffix) plus whatever live post
+shape feeds `makePostBaseName`. See `docs/WORKLIST.md` → P0 → "Random file
+name / garbled name — ⚠ PENDING REVIEW".
+
+### Part 1 — per-user folders (new default layout)
+
+`lib/naming.js`:
+
+- `DEFAULT_USER_FOLDERS = true`.
+- `userFolderName(fields)` — strips a leading `@`, trims, sanitizes to ONE
+  segment (an odd/malicious handle can never create nested folders); empty
+  handle → `""`, and the builders fall back to the master-folder-root layout
+  instead of an "unknown" bucket.
+- `baseNamesUser(base, user)` — case-insensitive exact or `"user "` prefix
+  match, so a `{user}`-template base (`nasa - Hello world - 111`) is never
+  doubled to `nasa - nasa - …` by the forced prefix.
+- `buildRawMediaPath` now builds `<master>/<user>/<base>/NNN.ext`
+  (`XMedia/nasa/nasa - Hello world - 111/001.jpg`) unless
+  `userFolders === false` (restores `XMedia/<base>/NNN.ext`); `rawMasterFolder: ""`
+  still returns the legacy flat filename untouched.
+- `buildArchiveFilename` forces the username into the name whenever the
+  template would omit `{user}`: `{id}` → `nasa - 111.cbz`, while
+  `{user} - …` stays as-is. Archives are saved by an anchor click whose
+  `download` attribute cannot carry folders, so the *name* is the only
+  differentiator — this is the user's "when folders are impossible" rule.
+
+`background.js`:
+
+- `OUTPUT_SETTINGS_DEFAULTS.userFolders = true`, normalization
+  `merged.userFolders = merged.userFolders !== false`.
+- `rawPathForItem`: legacy rows (no naming metadata) read the author directly
+  from `item.author` (NOT `namingFieldsForItem`, which would have invented an
+  "unknown" bucket); user segment omitted when `userFolders:false` or no
+  author.
+- Archive naming call passes `userFolders` through.
+
+`sidepanel.js` / `sidepanel.html` (both ports):
+
+- New **One folder per user (XMedia/<user>/…)** checkbox in Output settings,
+  default checked, persisted to `storage.sync.userFolders`, live preview
+  shows `Downloads/XMedia/nasa/<post>/001.jpg` (archive preview shows the
+  forced username too).
+
+### Part 2 — "doubles as dedupe"
+
+The same user's media found on the home timeline, a profile and its `/media`
+page now shares ONE folder (per-user segment = owning post's author, and
+repost/quote attribution is already resolved upstream), so even a repeat
+listing of the same media becomes visibly the same path — on top of the
+v3.10 byte + source-URL verification, which is unchanged.
+
+### Tests + validation
+
+- `tests/naming.test.js` — rewritten expectations for the per-user layout;
+  new `userFolderName` and default-ON / toggle-OFF / no-author cases; archive
+  username-forcing (`{id}` → `nasa - 111.cbz`) + `userFolders:false` restore.
+- `tests/downloader.test.js` — per-user path for real worker runs; new test:
+  media from two DIFFERENT users lands in separate user folders; new test:
+  `userFolders:false` restores the pre-v3.11 master layout.
+- `tests/media-kinds.test.js` — path assertions updated.
+- Legacy flat-path expectations for `rawMasterFolder: ""` kept byte-for-byte.
+- Full suite: **167 pass / 0 fail**.
+- `firefox-extension/` re-synced (`lib/naming.js`, `background.js`,
+  `sidepanel.js`, `sidepanel.html`; `content.js` keeps its intentional
+  MAIN-world injection shim).
+
+### Still open (deliberate)
+
+- **Random-name issue: pending review — do not close until the user tests.**
+- Live spot-check of the per-user layout (WORKLIST P0 v3.11 section) and the
+  Firefox about:debugging master-folder-subpath check.
+- No release zip cut for v3.11 yet (`releases/x-media-downloader-v3.10.0-ci.zip`
+  is stale); cut + offline-verify after the user confirms the layout.
+
+## 2026-09-03 — v3.10 byte-identical + source-URL duplicate verification (no more double saves under renamed files)
+
+**Branch:** `arena/01a0667d-twitter-batch-download` · **Manifest 3.9.0 → 3.10.0** ·
+**Tests 150 → 164** (+8 dedupe-pipeline, +5 dedupe unit, +1 naming — net +14 in the
+offline suite)
+
+**Session input (verbatim intent):** "The file naming still resulted in garbled
+random word and number text and then if that were to happen duplicate would
+occur due to different name but byte identical from same post url address
+happen can you also look into implementing that 2 verification like byte
+identical and url source to avoid duplications."
+
+Two things were asked: (1) the file-name fallback must never produce random
+"garbled word + number" text again, and (2) before saving a file, verify it
+against what was already downloaded by **byte content** and by **source URL**
+so a byte-identical file that ends up under a different name (Chrome uniquify,
+fallback rungs, size variants, CDN mirrors) is never saved a second time.
+
+### Part 1 — naming: already deterministic, closed the two remaining leak paths
+
+The v3.6.3 pass already removed the random `media_<timestamp>` fallback
+(`buildFallbackFilenames` now uses a deterministic `x-media/download_<stem>`
+ladder). This pass closed the two paths that could still scramble a name:
+
+- `background.js sanitizeFilePart` and `content.js sanitizeFilename` (the
+  legacy flat `x-media/…` naming used when the master folder is OFF) now strip
+  the same invisible bidi/format controls `lib/naming.js` strips
+  (U+200B/200E/200F/202A-202E/2066-2069/FEFF), so mirror/RTL post text cannot
+  render as scrambled characters in the file name.
+- Duplicates are now *prevented* rather than uniquified away, so Chrome's
+  `(1)` / `(2)` suffixes (the "random word and number" aftermath of a re-save)
+  no longer appear for the same media.
+
+### Part 2 — the two verifications (`lib/dedupe.js`)
+
+New shared `lib/dedupe.js` (UMD → `XDLDedupe`, loaded by background.js /
+offscreen.html / tests — no npm, no crypto.subtle dependency):
+
+| Check | Identity | Catches |
+|---|---|---|
+| **Source URL** | `canonicalSourceUrl()` = scheme + host + path (delivery params `name`/`format`/`v` stripped, host case + default ports normalized) | the same media address arriving with different query strings, or re-listed after the queue was cleared |
+| **Byte-identical** | Streaming SHA-256 of the actual bytes (incremental `Sha256`, chunked via `response.body.getReader()`, 512 MB bound — large videos are never held in memory) | different URLs / mirrors / size variants carrying byte-identical content |
+
+**Record store** — the legacy `downloadedMediaIdsV1` (ids only) is kept and
+stays in sync; a new `downloadedMediaRecordsV1` holds
+`{ id, mediaKey, url, urlKey, hash, size, filename, at }` with in-memory
+indexes by URL key, hash and mediaKey (capped 20 k, pruned like the old list).
+**Reset downloaded history** clears both stores.
+
+**Where the checks run:**
+
+- `mergeQueueItems` — the canonical URL is a third identity alongside `id` and
+  `mediaKey`, so two rows carrying the same media address collapse at list
+  time even when the old items lack a `mediaKey`; the same URL key is also
+  checked against the downloaded-record store (`alreadyDownloadedUrls`) for
+  "Skip already downloaded".
+- `downloadFile` — before `chrome.downloads.download`, the source URL is
+  checked first (zero network), then the bytes are streamed and SHA-256'd; a
+  hash hit (persisted or in-flight `pendingDigests`) skips the download with
+  `{ skipped: true, reason: "duplicate_url" | "duplicate_bytes" }` and marks
+  the queue row `completed · duplicate`. A verification failure (offline,
+  huge/CORS-blocked fetch) degrades to the historical direct download — dedupe
+  is best-effort and never loses a file.
+- Completion — `chrome.downloads.onChanged` (queue rows) and a pending-record
+  map (direct one-click saves, which have no queue item) write the SHA-256 +
+  canonical URL + real saved filename into the record store, so the NEXT time
+  the same media is listed it is caught by URL or bytes even after clearing
+  the list.
+- Archive pass — before assembling, if every media item of a post is already
+  verified, the whole ZIP/CBZ/PDF group is skipped (no re-save). On success,
+  each entry's digest AND the assembled archive's digest are recorded
+  (offscreen and worker fallback both return them).
+
+**Output settings** — new `verifyDuplicates` toggle (default ON) in the Side
+Panel Output settings card ("Skip duplicates (byte compare + source URL)");
+the queue pass, direct saves and the archive pre-check all respect it.
+
+**Live-X caveats:** the digest path fetches the media URL once before the
+download (streamed, so memory-safe) — a deliberate second network pass that
+only buys the byte check; `verifyDuplicates` can be switched off. Real-browser
+verification still pending (WORKLIST P0 items 12/14).
+
+**Deliverables:** `extension/lib/dedupe.js` + `firefox-extension/lib/dedupe.js`
+(byte-identical), background/offscreen/content/sidepanel changes mirrored to
+the Firefox port, `offscreen.html` loads `lib/dedupe.js`, manifest
+3.9.0 → 3.10.0 in both ports, regression + pipeline tests
+(`tests/dedupe.test.js`, `tests/dedupe-pipeline.test.js`, +2 in
+`tests/background.test.js`), release zip re-cut.
+
 ## 2026-09-03 — v3.9 virtualization-proof capture (posts that leave the DOM are no longer lost)
 
 **Branch:** `arena/01a065c5-twitter-batch-download` · **Manifest 3.8.0 → 3.9.0** ·

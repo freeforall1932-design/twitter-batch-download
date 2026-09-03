@@ -7,6 +7,8 @@
 // SPA route changes (profile → /media → post) and background tabs silently
 // captured nothing until a full reload. Listing now starts at document_start
 // and re-arms on every SPA route change.
+// ==========================================================================
+
 // Firefox port: MAIN world script injected via <script> tag (Firefox MV2 has
 // no world: MAIN manifest support). Chrome version uses manifest world: MAIN.
 // ==========================================================================
@@ -447,6 +449,9 @@
   function sanitizeFilename(text) {
     return String(text || "")
       .replace(/https?:\/\/\S+/g, "")
+      // Invisible bidi/format controls scramble mixed-script and RTL names
+      // (same strip as lib/naming.js) — never let them reach the file name.
+      .replace(/[\u200b\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "")
       .replace(/[<>:"/\\|?*\x00-\x1f]/g, "")
       .replace(/@\w+/g, "")
       .replace(/#(\w+)/g, "$1")
@@ -1363,11 +1368,18 @@
     }
 
     let success = 0;
+    let duplicates = 0;
     for (let i = 0; i < collected.items.length; i++) {
       const item = collected.items[i];
       btn.innerHTML = `${DOWNLOAD_SVG} ${i + 1}/${collected.items.length}…`;
       const result = await downloadFile(item.url, item.filename, item);
+      // v3.10: a byte-identical / same-source-URL duplicate is NOT an error —
+      // the file already exists on disk, so count it as saved and explain why.
       if (result?.success) success++;
+      if (result?.skipped) {
+        duplicates++;
+        if (duplicates === 1) showToast(result.note || "Already saved — duplicate skipped.", "");
+      }
     }
 
     btn.classList.remove("xdl-loading");

@@ -15,7 +15,7 @@ if (typeof chrome === 'undefined' && typeof browser !== 'undefined') {
 // loaded via manifest background.scripts. Guard.
 try {
   if (typeof importScripts === 'function') {
-    importScripts("lib/naming.js", "lib/zipWriter.js", "lib/pdfBuilder.js", "lib/archive.js");
+    importScripts("lib/naming.js", "lib/dedupe.js", "lib/zipWriter.js", "lib/pdfBuilder.js", "lib/archive.js");
   }
 } catch (error) {
   console.error("[X-DL BG] Failed to load lib/ scripts:", error);
@@ -38,12 +38,6 @@ async function _executeScriptCompat(tabId, func) {
   throw new Error("No executeScript API available");
 }
 
-// Shared output engine: naming/template/sanitize (lib/naming.js), STORE-only
-// ZIP writer (lib/zipWriter.js), dependency-free PDF 1.4 writer
-// (lib/pdfBuilder.js), and the fetch/PDF-page/archive-bytes helpers
-// (lib/archive.js, shared with the offscreen document). The same files load
-// there and in Node tests. Guarded so a packaging mistake degrades to raw
-// downloads instead of killing the whole worker at parse time.
 
 // --- Auth cache ---
 let bearerToken = null;
@@ -488,10 +482,18 @@ const OUTPUT_SETTINGS_DEFAULTS = {
   rawMasterFolder: "XMedia", // "" (empty) = master folder OFF → old flat layout
   nameTemplate: "{user} - {text} - {id}",
   outputFormat: "raw",
+  // v3.11 — per-user folders:
+  //   ON  → XMedia/<user>/<post name>/001.jpg (the user = the owning post's
+  //         author, so media from the home timeline, a profile and the
+  //         /media page of the SAME user collapse into one folder).
+  //   OFF → XMedia/<post name>/001.jpg (pre-v3.11 layout).
+  userFolders: true,
   // v3.6 — media-kind handling:
   gifOutput: "gif",     // "gif" = convert X's silent MP4 "GIFs" to real .gif files; "mp4" = keep the source clip
   archiveGifs: true,    // GIFs join per-post archives like photos (ZIP/CBZ only — never PDF)
-  archiveVideos: false  // videos stay raw MP4s unless explicitly opted into ZIP/CBZ archives
+  archiveVideos: false, // videos stay raw MP4s unless explicitly opted into ZIP/CBZ archives
+  // v3.10 — duplicate verification:
+  verifyDuplicates: true // byte-identical + source-URL checks before a file is saved again
 };
 
 function normalizeGifOutput(value) {
@@ -505,6 +507,8 @@ function normalizeOutputSettings(stored) {
   merged.gifOutput = normalizeGifOutput(merged.gifOutput);
   merged.archiveGifs = merged.archiveGifs !== false;
   merged.archiveVideos = merged.archiveVideos === true;
+  merged.verifyDuplicates = merged.verifyDuplicates !== false;
+  merged.userFolders = merged.userFolders !== false;
   return merged;
 }
 
@@ -569,11 +573,17 @@ function rawPathForItem(item, settings, extOverride) {
   const master = naming.normalizeRawMasterFolder(settings?.rawMasterFolder);
   if (master === "") return swapExt(item.filename);
   if (item.mediaIndex === undefined || item.mediaIndex === null) {
+    // Legacy rows carry no naming metadata but DO carry the owning post's
+    // author, so the per-user folder (when enabled) can still be honored.
+    // The author is read directly (not through namingFieldsForItem, which
+    // would inject an "unknown" bucket for rows that never had one).
     const legacyLeaf = String(swapExt(item.filename) || "media.bin").split("/").pop();
-    return naming.sanitizeArtifactFilename(`${master}/${legacyLeaf}`, `XMedia/${legacyLeaf}`);
+    const rawUser = settings?.userFolders === false ? "" : String(item.author || "").replace(/^@/, "").trim();
+    const root = rawUser ? `${master}/${naming.userFolderName({ user: rawUser })}` : master;
+    return naming.sanitizeArtifactFilename(`${root}/${legacyLeaf}`, `XMedia/${legacyLeaf}`);
   }
   return naming.buildRawMediaPath(
-    { rawMasterFolder: master, nameTemplate: settings?.nameTemplate },
+    { rawMasterFolder: master, nameTemplate: settings?.nameTemplate, userFolders: settings?.userFolders },
     namingFieldsForItem(item),
     item.mediaIndex,
     extOverride || extensionForItem(item),
@@ -923,7 +933,121 @@ function chromeDownloadOnce(url, filename) {
   });
 }
 
-async function downloadFile(url, filename) {
+// Best-effort SHA-256 + size of a media URL, streamed so a large video is
+// never held in memory. Failures return a thrown error which callers must
+// catch — byte verification must never block a download.
+const MAX_DIGEST_BYTES = 512 * 1024 * 1024;
+
+async function computeMediaDigest(url) {
+  const dedupe = globalThis.XDLDedupe;
+  if (!dedupe || !url) throw new Error("Byte verification is unavailable.");
+  const response = await fetch(url, { credentials: "omit" });
+  if (!response.ok) {
+    throw new Error("Media digest fetch failed (" + response.status + ") for " + url);
+  }
+  const body = response.body;
+  if (body && typeof body.getReader === "function") {
+    const reader = body.getReader();
+    const hasher = new dedupe.Sha256();
+    let size = 0;
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        if (chunk.value && chunk.value.byteLength > 0) {
+          hasher.update(chunk.value);
+          size += chunk.value.byteLength;
+          if (size > MAX_DIGEST_BYTES) {
+            throw new Error("Media exceeds the byte-verification size bound.");
+          }
+        }
+      }
+    } finally {
+      try { reader.releaseLock(); } catch (_) { /* stream already closed */ }
+    }
+    return { hash: hasher.digestHex(), size };
+  }
+  // No stream (older Chromium / test mocks): one-shot arrayBuffer path.
+  const buffer = await response.arrayBuffer();
+  if (!buffer || buffer.byteLength < 32) {
+    throw new Error("Media digest response was empty for " + url);
+  }
+  const bytes = new Uint8Array(buffer);
+  return { hash: dedupe.hashBytes(bytes), size: bytes.byteLength };
+}
+
+async function downloadFile(url, filename, options = {}) {
+  // v3.10: verify `url` against the downloaded-history store BEFORE Chrome
+  // starts another copy. Two checks, in priority order:
+  //   1. source URL  — canonical scheme+host+path (the same media address).
+  //   2. byte hash    — SHA-256 of the media; catches byte-identical content
+  //                     served from a DIFFERENT URL (size variants, mirrors).
+  // A verification failure (network hiccup, huge file) falls back to the
+  // historical direct-download behavior — dedupe is best-effort, never a
+  // reason to lose a download.
+  const item = options.item || null;
+  const dedupe = globalThis.XDLDedupe;
+  const verify = options.verifyBytes !== false && Boolean(dedupe);
+  // Identity belongs to the SOURCE media (item.url), not to a transformed
+  // payload URL (e.g. a data: URL carrying GIF-converted bytes). The digest
+  // below still covers the exact bytes being saved.
+  const sourceUrl = item?.url || url;
+  let sourceUrlKey = null;
+  let digest = null;
+  let duplicate = null;
+  let duplicateReason = null;
+
+  if (verify && url) {
+    sourceUrlKey = dedupe.canonicalSourceUrl(sourceUrl);
+    if (sourceUrlKey) {
+      const urlMatch = await findDownloadedBySourceUrl(sourceUrl);
+      if (urlMatch) {
+        duplicate = urlMatch;
+        duplicateReason = "duplicate_url";
+        // Only a FINISHED download (non-pending) actually exists on disk; a
+        // pending match belongs to a download still in flight, so nothing is
+        // persisted yet — the first download's completion writes the record.
+        if (!urlMatch.pending) {
+          await rememberDownloadedRecord(downloadedRecordFor(item, sourceUrl, sourceUrlKey, null, null, urlMatch));
+        }
+        return {
+          success: true,
+          skipped: true,
+          reason: duplicateReason,
+          duplicate,
+          note: dedupe.duplicateNote(duplicateReason, urlMatch),
+          sourceUrlKey,
+          digest: null,
+          filename
+        };
+      }
+      try {
+        digest = await computeMediaDigest(url);
+        const hashMatch = await findDownloadedByHashValue(digest.hash);
+        if (hashMatch) {
+          duplicate = hashMatch;
+          duplicateReason = "duplicate_bytes";
+          if (!hashMatch.pending) {
+            await rememberDownloadedRecord(downloadedRecordFor(item, sourceUrl, sourceUrlKey, digest.hash, digest.size, hashMatch));
+          }
+          return {
+            success: true,
+            skipped: true,
+            reason: duplicateReason,
+            duplicate,
+            note: dedupe.duplicateNote(duplicateReason, hashMatch),
+            sourceUrlKey,
+            digest,
+            filename
+          };
+        }
+        reservePendingDigest(sourceUrlKey, digest);
+      } catch (error) {
+        console.warn("[X-DL BG] Byte verification unavailable, downloading anyway:", error?.message || error);
+      }
+    }
+  }
+
   // Rank S retries Invalid filename with progressively safer paths so a long
   // post-text snippet cannot brick an otherwise valid CDN URL.
   const candidates = buildFallbackFilenames(filename);
@@ -931,23 +1055,36 @@ async function downloadFile(url, filename) {
   for (const candidate of candidates) {
     const result = await chromeDownloadOnce(url, candidate);
     if (result.success) {
+      // Direct (one-click) downloads: hold the digest until Chrome reports the
+      // file completed, then it joins the verification history. Queue items
+      // are excluded — their completion is reconciled through the queue item
+      // (status + onChanged), so attaching a second record would shadow it.
+      if (item && options.trackCompletion !== false && (digest?.hash || sourceUrlKey)) {
+        pendingDownloadRecords.set(
+          result.downloadId,
+          downloadedRecordFor(item, sourceUrl, sourceUrlKey, digest?.hash, digest?.size, null)
+        );
+        if (pendingDownloadRecords.size > PENDING_RECORDS_MAX) {
+          pendingDownloadRecords.delete(pendingDownloadRecords.keys().next().value);
+        }
+      }
       if (candidate !== candidates[0]) {
         console.log("[X-DL BG] Download started with fallback filename:", candidate, "id:", result.downloadId);
       } else {
         console.log("[X-DL BG] Download started:", candidate, "id:", result.downloadId);
       }
-      return result;
+      return { success: true, downloadId: result.downloadId, filename, digest, sourceUrlKey };
     }
     lastError = result.error || lastError;
     const invalid = /invalid filename|invalid file path|path is invalid/i.test(lastError);
     if (!invalid) {
       console.error("[X-DL BG] Download error:", lastError);
-      return { success: false, error: lastError };
+      return { success: false, error: lastError, digest, sourceUrlKey };
     }
     console.warn("[X-DL BG] Invalid filename, retrying with safer path:", candidate, "→", lastError);
   }
   console.error("[X-DL BG] Download error after fallbacks:", lastError);
-  return { success: false, error: lastError };
+  return { success: false, error: lastError, digest, sourceUrlKey };
 }
 
 // ==========================================================================
@@ -998,16 +1135,75 @@ function broadcastQueueChanged() {
 // Remembers queue item ids that finished successfully so the same media is not
 // re-listed after the user clears the visible history. Ids only — no URLs,
 // no tokens, no post content.
+// v3.10 extends this to a RICH record store (downloadedMediaRecordsV1) so the
+// two duplicate verifications can be answered:
+//   - same source URL  → urlKey (canonical scheme+host+path)
+//   - byte-identical   → SHA-256 of the actual media bytes
+// The legacy id list stays in sync (same id values) so every older code path
+// and the "Reset downloaded history" button keep working unchanged.
 const DOWNLOADED_STORAGE_KEY = "downloadedMediaIdsV1";
+const DOWNLOADED_RECORDS_KEY = "downloadedMediaRecordsV1";
 const DOWNLOADED_HISTORY_MAX = 20000;
+const PENDING_DIGEST_TTL_MS = 10 * 60 * 1000;
 let downloadedIds = null;
+let downloadedRecords = null;
 let downloadedSaving = Promise.resolve();
+let downloadedByUrl = null;   // urlKey → record (source-URL verification)
+let downloadedByHash = null;  // hash → record (byte-identical verification)
+let downloadedByMediaKey = null;
+// Digests computed for downloads that are still in flight. A second item with
+// the same bytes/URL arriving in the SAME run skips before the first one's
+// record is persisted, so two concurrent queue slots cannot both save it.
+let pendingDigests = new Map(); // urlKey → { hash, size, at }
+// Direct (non-queue) downloads have no queue item to carry the digest, so the
+// record sits here keyed by downloadId until chrome.downloads.onChanged says
+// the file completed.
+let pendingDownloadRecords = new Map(); // downloadId → record seed
+const PENDING_RECORDS_MAX = 500;
+
+function isDownloadedRecord(record) {
+  return Boolean(
+    record && typeof record === "object" &&
+    (record.id || record.mediaKey || record.urlKey || record.hash)
+  );
+}
+
+function rebuildDownloadedIndexes() {
+  downloadedByUrl = new Map();
+  downloadedByHash = new Map();
+  downloadedByMediaKey = new Map();
+  for (const record of downloadedRecords || []) {
+    if (record.urlKey && !downloadedByUrl.has(record.urlKey)) downloadedByUrl.set(record.urlKey, record);
+    if (record.hash && !downloadedByHash.has(record.hash)) downloadedByHash.set(record.hash, record);
+    if (record.mediaKey && !downloadedByMediaKey.has(record.mediaKey)) downloadedByMediaKey.set(record.mediaKey, record);
+  }
+}
+
+async function getDownloadedRecords() {
+  if (downloadedRecords) return downloadedRecords;
+  const [recordStore, legacyStore] = await Promise.all([
+    chrome.storage.local.get(DOWNLOADED_RECORDS_KEY),
+    chrome.storage.local.get(DOWNLOADED_STORAGE_KEY)
+  ]);
+  const list = Array.isArray(recordStore[DOWNLOADED_RECORDS_KEY]) ? recordStore[DOWNLOADED_RECORDS_KEY] : [];
+  downloadedRecords = list.filter(isDownloadedRecord);
+  rebuildDownloadedIndexes();
+  // Legacy histories (ids saved by older versions) are still honoured without
+  // needing a migration: they are folded into the id set on first use.
+  const legacyIds = Array.isArray(legacyStore[DOWNLOADED_STORAGE_KEY]) ? legacyStore[DOWNLOADED_STORAGE_KEY] : [];
+  if (!downloadedIds) {
+    downloadedIds = new Set(legacyIds.filter((id) => typeof id === "string" && id));
+    for (const record of downloadedRecords) {
+      if (record.id) downloadedIds.add(record.id);
+      if (Array.isArray(record.ids)) record.ids.forEach((id) => downloadedIds.add(String(id)));
+    }
+  }
+  return downloadedRecords;
+}
 
 async function getDownloadedIds() {
   if (downloadedIds) return downloadedIds;
-  const stored = await chrome.storage.local.get(DOWNLOADED_STORAGE_KEY);
-  const list = Array.isArray(stored?.[DOWNLOADED_STORAGE_KEY]) ? stored[DOWNLOADED_STORAGE_KEY] : [];
-  downloadedIds = new Set(list.filter((id) => typeof id === "string" && id));
+  await getDownloadedRecords();
   return downloadedIds;
 }
 
@@ -1025,12 +1221,197 @@ async function saveDownloadedIds() {
   await downloadedSaving;
 }
 
+async function saveDownloadedRecords() {
+  if (!downloadedRecords) return;
+  const list = downloadedRecords;
+  const trimmed = list.length > DOWNLOADED_HISTORY_MAX ? list.slice(list.length - DOWNLOADED_HISTORY_MAX) : list;
+  if (trimmed.length !== list.length) {
+    downloadedRecords = trimmed;
+    rebuildDownloadedIndexes();
+  }
+  const ids = [];
+  for (const record of downloadedRecords) {
+    if (record.id) ids.push(record.id);
+    if (Array.isArray(record.ids)) record.ids.forEach((id) => ids.push(String(id)));
+  }
+  downloadedSaving = downloadedSaving
+    .then(() => chrome.storage.local.set({
+      [DOWNLOADED_RECORDS_KEY]: downloadedRecords,
+      [DOWNLOADED_STORAGE_KEY]: ids.slice(0, DOWNLOADED_HISTORY_MAX)
+    }))
+    .catch(() => {});
+  await downloadedSaving;
+}
+
 async function rememberDownloadedId(id) {
   if (!id) return;
   const history = await getDownloadedIds();
   if (history.has(id)) return;
   history.add(id);
   await saveDownloadedIds();
+}
+
+// Normalize an incoming record; computes urlKey from url when missing.
+function normalizeDownloadedRecord(input) {
+  if (!input || typeof input !== "object") return null;
+  const dedupe = globalThis.XDLDedupe;
+  const url = String(input.url || "");
+  const urlKey = String(
+    input.urlKey ||
+    (url ? (dedupe ? dedupe.canonicalSourceUrl(url) : url) : "")
+  );
+  const hash = String(input.hash || "");
+  if (!input.id && !input.mediaKey && !urlKey && !hash) return null;
+  return {
+    id: String(input.id || ""),
+    mediaKey: String(input.mediaKey || ""),
+    url,
+    urlKey,
+    hash,
+    size: Number(input.size) || 0,
+    filename: String(input.filename || ""),
+    at: Number(input.at) || Date.now()
+  };
+}
+
+function findDownloadedRecordByUrl(urlKey) {
+  return urlKey ? (downloadedByUrl?.get(urlKey) || null) : null;
+}
+function findDownloadedRecordByHash(hash) {
+  return hash ? (downloadedByHash?.get(hash) || null) : null;
+}
+function findDownloadedRecordByMediaKey(mediaKey) {
+  return mediaKey ? (downloadedByMediaKey?.get(mediaKey) || null) : null;
+}
+function findDownloadedRecordById(id) {
+  if (!id || !downloadedRecords) return null;
+  const value = String(id);
+  return downloadedRecords.find(
+    (record) => record.id === value || (Array.isArray(record.ids) && record.ids.includes(value))
+  ) || null;
+}
+
+async function findDownloadedBySourceUrl(url) {
+  if (!url) return null;
+  await getDownloadedRecords();
+  const dedupe = globalThis.XDLDedupe;
+  const urlKey = dedupe ? dedupe.canonicalSourceUrl(url) : String(url);
+  const record = findDownloadedRecordByUrl(urlKey);
+  if (record) return record;
+  const pending = pendingDigests.get(urlKey);
+  return pending ? { ...pending, pending: true } : null;
+}
+
+async function findDownloadedByHashValue(hash) {
+  if (!hash) return null;
+  await getDownloadedRecords();
+  const record = findDownloadedRecordByHash(hash);
+  if (record) return record;
+  const now = Date.now();
+  for (const [urlKey, entry] of pendingDigests) {
+    if (now - entry.at > PENDING_DIGEST_TTL_MS) pendingDigests.delete(urlKey);
+    else if (entry.hash === hash) return { ...entry, pending: true, urlKey };
+  }
+  return null;
+}
+
+function reservePendingDigest(urlKey, digest) {
+  if (!urlKey || !digest?.hash) return;
+  const now = Date.now();
+  for (const [key, entry] of pendingDigests) {
+    if (now - entry.at > PENDING_DIGEST_TTL_MS) pendingDigests.delete(key);
+  }
+  pendingDigests.set(urlKey, { hash: digest.hash, size: digest.size || 0, at: now });
+}
+
+// Record builder shared by queue items and direct per-post downloads.
+function downloadedRecordFor(item, url, urlKey, hash, size, match) {
+  return normalizeDownloadedRecord({
+    id: String(item?.id || match?.id || ""),
+    mediaKey: String(item?.mediaKey || match?.mediaKey || ""),
+    url: url || item?.url || match?.url || "",
+    urlKey: urlKey || match?.urlKey || "",
+    hash: hash || match?.hash || "",
+    size: size || match?.size || 0,
+    filename: String(item?.filename || match?.filename || ""),
+    at: Date.now()
+  });
+}
+
+// Merge `input` into the downloaded-history store (dedupe by id/url/hash).
+async function rememberDownloadedRecord(input) {
+  const record = normalizeDownloadedRecord(input);
+  if (!record) return null;
+  await getDownloadedRecords();
+  const existing =
+    findDownloadedRecordByUrl(record.urlKey) ||
+    findDownloadedRecordByHash(record.hash) ||
+    findDownloadedRecordById(record.id) ||
+    findDownloadedRecordByMediaKey(record.mediaKey);
+  const merged = globalThis.XDLDedupe
+    ? globalThis.XDLDedupe.mergeRecords(existing, record)
+    : { ...(existing || {}), ...record, at: Date.now() };
+  const identity = (candidate) => String(candidate?.id || "");
+  downloadedRecords = downloadedRecords.filter(
+    (candidate) =>
+      candidate !== existing &&
+      (!merged.id || identity(candidate) !== identity(merged)) &&
+      candidate?.urlKey !== merged.urlKey &&
+      candidate?.hash !== merged.hash
+  );
+  downloadedRecords.push(merged);
+  rebuildDownloadedIndexes();
+  const history = await getDownloadedIds();
+  if (merged.id) history.add(merged.id);
+  if (Array.isArray(merged.ids)) merged.ids.forEach((id) => history.add(String(id)));
+  await saveDownloadedRecords();
+  return merged;
+}
+
+// One completed item → remembered record (called from onChanged, restart
+// reconciliation, and the archive pass).
+async function rememberCompletedDownload(item, downloadId) {
+  if (!item) return null;
+  let filename = "";
+  if (downloadId !== undefined && downloadId !== null) {
+    const matches = await searchDownloads({ id: downloadId });
+    filename = matches.find((match) => match.id === downloadId)?.filename || "";
+  }
+  const dedupe = globalThis.XDLDedupe;
+  const url = String(item.url || "");
+  const urlKey = item.sourceUrlKey || (dedupe ? dedupe.canonicalSourceUrl(url) : url);
+  const record = await rememberDownloadedRecord({
+    id: item.id,
+    mediaKey: item.mediaKey,
+    url,
+    urlKey,
+    hash: item.digest?.hash,
+    size: item.digest?.size,
+    filename: filename || item.filename || "",
+    at: Date.now()
+  });
+  await rememberDownloadedId(item.id);
+  return record;
+}
+
+async function getDownloadedUrlKeys() {
+  const records = await getDownloadedRecords();
+  const keys = new Set();
+  for (const record of records) if (record.urlKey) keys.add(record.urlKey);
+  return keys;
+}
+
+async function findDownloadedForItem(item) {
+  if (!item) return null;
+  await getDownloadedRecords();
+  const dedupe = globalThis.XDLDedupe;
+  const urlKey = item.sourceUrlKey || (dedupe && item.url ? dedupe.canonicalSourceUrl(item.url) : "");
+  return (
+    findDownloadedRecordByUrl(urlKey) ||
+    findDownloadedRecordByMediaKey(item.mediaKey) ||
+    findDownloadedRecordById(item.id) ||
+    null
+  );
 }
 
 function searchDownloads(query) {
@@ -1096,6 +1477,7 @@ async function reconcileQueueAfterRestart(state) {
         normalized.downloadId = null;
         normalized.error = null;
         normalized.bytesReceived = normalized.totalBytes || normalized.bytesReceived;
+        await rememberCompletedDownload(normalized, download.id);
         changed = true;
       } else if (download.state === "interrupted") {
         normalized.downloadId = null;
@@ -1219,10 +1601,30 @@ async function runQueuePass() {
     item.attempts = (item.attempts || 0) + 1;
     await saveQueueState();
     const prepared = await prepareRawDownload(item, settings);
-    const result = await downloadFile(prepared.url, prepared.filename);
-    if (result.success) {
+    const result = await downloadFile(prepared.url, prepared.filename, {
+      verifyBytes: settings.verifyDuplicates,
+      item,
+      trackCompletion: false // queue items are reconciled by the onChanged handler below
+    });
+    if (result.skipped) {
+      // Byte-identical or same-source-URL duplicate: no new file is created,
+      // but the row counts as done and joins the downloaded-history (with the
+      // URL/hash attached) so it never comes back while "Skip already
+      // downloaded" is on.
+      item.status = "completed";
+      item.error = null;
+      item.note = result.note || "Already saved — duplicate skipped.";
+      item.duplicateReason = result.reason || "";
+      item.duplicateOf = result.duplicate?.filename || result.duplicate?.url || result.duplicate?.mediaKey || "";
+      item.digest = result.digest || item.digest || null;
+      item.sourceUrlKey = result.sourceUrlKey || item.sourceUrlKey || null;
+      await rememberDownloadedId(item.id);
+    } else if (result.success) {
       item.status = "downloading";
       item.downloadId = result.downloadId;
+      item.digest = result.digest || item.digest || null;
+      item.sourceUrlKey = result.sourceUrlKey || item.sourceUrlKey || null;
+      item.error = null;
     } else if ((item.attempts || 0) < MAX_DOWNLOAD_ATTEMPTS && !state.stopped) {
       item.status = "queued";
       item.error = `${result.error || "Could not start download"}; retrying (${(item.attempts || 0) + 1}/${MAX_DOWNLOAD_ATTEMPTS})`;
@@ -1319,16 +1721,38 @@ async function convertGifViaOffscreen(url) {
 async function buildArchiveInWorker(job) {
   const archive = globalThis.XDLArchive;
   if (!archive) throw new Error("Archive engine unavailable.");
+  const dedupe = globalThis.XDLDedupe;
   const format = globalThis.XDLNaming.normalizeOutputFormat(job.format);
   const fetched = [];
   for (const image of job.images) {
     const name = image.kind === "gif" ? image.name.replace(/\.gif$/i, ".mp4") : image.name;
-    fetched.push({ name, ...(await archive.fetchImageBytes(image.url)) });
+    const fetchedImage = await archive.fetchImageBytes(image.url);
+    // v3.10 — per-entry digests so a re-run assembles nothing when every
+    // item of the post is already byte-verified.
+    fetched.push({
+      name,
+      bytes: fetchedImage.bytes,
+      contentType: fetchedImage.contentType,
+      url: image.url,
+      hash: dedupe ? dedupe.hashBytes(fetchedImage.bytes) : "",
+      size: fetchedImage.bytes.byteLength
+    });
   }
   const assembled = await archive.buildArchiveBytes(fetched, format);
-  const result = await downloadFile(`data:${assembled.mime};base64,${archive.bytesToBase64(assembled.bytes)}`, job.filename);
+  // The data: URL is the archive payload itself; byte verification already ran
+  // at the archive level (hash below), so skip the per-URL check here.
+  const result = await downloadFile(
+    `data:${assembled.mime};base64,${archive.bytesToBase64(assembled.bytes)}`,
+    job.filename,
+    { verifyBytes: false }
+  );
   if (!result.success) throw new Error(result.error || "Unable to start archive download");
-  return { ok: true };
+  return {
+    ok: true,
+    hash: dedupe ? dedupe.hashBytes(assembled.bytes) : "",
+    size: assembled.bytes.byteLength,
+    entries: fetched.map((entry) => ({ url: entry.url, hash: entry.hash, size: entry.size }))
+  };
 }
 
 // Queued archive-eligible media grouped per owning post, in post order
@@ -1382,7 +1806,11 @@ async function runArchivePass() {
     const groupFormat = effectiveGroupFormat(group, format);
     const lead = group[0];
     const fields = namingFieldsForItem(lead);
-    const filename = naming.buildArchiveFilename({ nameTemplate: settings.nameTemplate }, fields, groupFormat);
+    const filename = naming.buildArchiveFilename(
+      { nameTemplate: settings.nameTemplate, userFolders: settings.userFolders },
+      fields,
+      groupFormat
+    );
     const job = {
       format: groupFormat,
       filename,
@@ -1393,6 +1821,29 @@ async function runArchivePass() {
         name: `${naming.pageNumber(item.mediaIndex ?? position)}.${archiveEntryExtension(item, settings)}`
       }))
     };
+
+    // v3.10 — byte/source verification BEFORE assembling anything: if every
+    // media item of this post is already in the downloaded-history store, the
+    // archive would be byte-identical too — skip it instead of re-saving it
+    // under a uniquified "(1)" name.
+    if (settings.verifyDuplicates) {
+      const known = [];
+      for (const item of group) known.push(await findDownloadedForItem(item));
+      if (known.every(Boolean)) {
+        group.forEach((item) => {
+          item.status = "completed";
+          item.error = null;
+          item.downloadId = null;
+          item.note = "Skipped — every media item of this post is already saved (byte/source verified).";
+          item.duplicateReason = "archive_duplicate";
+          item.duplicateOf = known.find(Boolean)?.filename || "";
+        });
+        await rememberDownloadedId(lead.id);
+        await saveQueueState();
+        continue;
+      }
+    }
+
     group.forEach((item) => {
       item.status = "starting";
       item.attempts = (item.attempts || 0) + 1;
@@ -1407,11 +1858,31 @@ async function runArchivePass() {
     }
 
     if (result?.ok) {
-      for (const item of group) {
+      for (let i = 0; i < group.length; i++) {
+        const item = group[i];
+        const entry = result.entries?.[i] || {};
+        // Per-item records first, so a later identical run skips this group
+        // entirely (pre-assembly check above) instead of re-assembling it.
+        await rememberDownloadedRecord(downloadedRecordFor(item, item.url, null, entry.hash, entry.size));
         item.status = "completed";
         item.error = null;
         item.downloadId = null;
+        item.digest = entry.hash ? { hash: entry.hash, size: entry.size } : null;
         await rememberDownloadedId(item.id);
+      }
+      // Archive-level record (schema + deterministic ZIP timestamps make the
+      // bytes reproducible), for future byte verification of re-downloads.
+      if (result.hash) {
+        await rememberDownloadedRecord({
+          id: "archive:" + (lead.tweetId || lead.id || filename),
+          mediaKey: "archive:" + (lead.tweetId || lead.id || filename),
+          url: filename,
+          urlKey: "archive:" + filename,
+          hash: result.hash,
+          size: result.size,
+          filename,
+          at: Date.now()
+        });
       }
     } else {
       group.forEach((item) => {
@@ -1461,6 +1932,18 @@ if (chrome.runtime.onInstalled) {
 }
 
 chrome.downloads.onChanged.addListener(async (delta) => {
+  // v3.10: direct (one-click) downloads are not queue items; their digest
+  // waits here until the file finishes, then joins the verification history.
+  const pendingRecord = pendingDownloadRecords.get(delta.id);
+  if (pendingRecord) {
+    if (delta.state?.current === "complete") {
+      pendingDownloadRecords.delete(delta.id);
+      await rememberDownloadedRecord(pendingRecord);
+    } else if (delta.state?.current === "interrupted") {
+      pendingDownloadRecords.delete(delta.id);
+    }
+    return;
+  }
   const state = await getQueueState();
   const item = state.items.find((candidate) => candidate.downloadId === delta.id);
   if (!item) return;
@@ -1475,7 +1958,7 @@ chrome.downloads.onChanged.addListener(async (delta) => {
     item.status = "completed";
     item.error = null;
     item.bytesReceived = item.totalBytes || item.bytesReceived;
-    await rememberDownloadedId(item.id);
+    await rememberCompletedDownload(item, delta.id);
   } else if ((item.attempts || 0) < MAX_DOWNLOAD_ATTEMPTS && !state.stopped) {
     // Keep the queue at its configured 1–2 active items; retry occupies a new
     // slot only after Chrome has confirmed the old attempt has ended.
@@ -1490,13 +1973,22 @@ chrome.downloads.onChanged.addListener(async (delta) => {
   processQueue();
 });
 
+function sourceUrlKeyFor(item) {
+  const dedupe = globalThis.XDLDedupe;
+  return dedupe && item?.url ? dedupe.canonicalSourceUrl(item.url) : "";
+}
+
 function mergeQueueItems(state, candidates, orderedFrontIds = null, options = {}) {
   const knownIds = new Set(state.items.map((item) => item.id));
   // A photo can reach the queue twice with different ids: once from the
   // rendered DOM and once from the GraphQL payload for the same post. Collapse
   // on the CDN media key so the user never sees the same file listed twice.
   const knownKeys = new Set(state.items.map((item) => item.mediaKey).filter(Boolean));
+  // v3.10 — source-URL identity too: two different id shapes can still carry
+  // the SAME media address (e.g. older items with no mediaKey).
+  const knownUrls = new Set(state.items.map(sourceUrlKeyFor).filter(Boolean));
   const alreadyDownloaded = options.alreadyDownloaded || null;
+  const alreadyDownloadedUrls = options.alreadyDownloadedUrls || null;
   const additions = [];
   // Counted separately from `added` so a rescan can tell the user WHY nothing
   // came back: "already downloaded" is a setting they can change, "already in
@@ -1505,13 +1997,20 @@ function mergeQueueItems(state, candidates, orderedFrontIds = null, options = {}
   for (const candidate of candidates || []) {
     if (!candidate?.id || !candidate.url || knownIds.has(candidate.id)) continue;
     const mediaKey = candidate.mediaKey || null;
+    const urlKey = sourceUrlKeyFor(candidate);
     if (mediaKey && knownKeys.has(mediaKey)) continue;
+    if (urlKey && knownUrls.has(urlKey)) continue;
     if (alreadyDownloaded && (alreadyDownloaded.has(candidate.id) || (mediaKey && alreadyDownloaded.has(mediaKey)))) {
+      skippedDownloaded += 1;
+      continue;
+    }
+    if (alreadyDownloadedUrls && urlKey && alreadyDownloadedUrls.has(urlKey)) {
       skippedDownloaded += 1;
       continue;
     }
     knownIds.add(candidate.id);
     if (mediaKey) knownKeys.add(mediaKey);
+    if (urlKey) knownUrls.add(urlKey);
     additions.push({ ...candidate, selected: false, status: "discovered", downloadId: null, attempts: 0, bytesReceived: 0, totalBytes: 0 });
   }
 
@@ -1549,7 +2048,11 @@ async function addQueueItems(items, options = {}) {
     ? Boolean(options.skipDownloaded)
     : state.skipDownloaded !== false;
   const alreadyDownloaded = skipDownloaded ? await getDownloadedIds() : null;
-  const merged = mergeQueueItems(state, normalizedItems, options.orderedFrontIds || null, { alreadyDownloaded });
+  const alreadyDownloadedUrls = skipDownloaded ? await getDownloadedUrlKeys() : null;
+  const merged = mergeQueueItems(state, normalizedItems, options.orderedFrontIds || null, {
+    alreadyDownloaded,
+    alreadyDownloadedUrls
+  });
   await saveQueueState();
   return { state: publicQueueState(), addedCount: merged.added, skippedDownloaded: merged.skippedDownloaded };
 }
@@ -1583,7 +2086,11 @@ async function handleQueueMessage(msg) {
     state.items = state.items.filter((item) => !ids.has(item.id));
   } else if (msg.action === "queueClearDownloadedHistory") {
     downloadedIds = new Set();
+    downloadedRecords = [];
     await saveDownloadedIds();
+    await saveDownloadedRecords();
+    pendingDigests.clear();
+    rebuildDownloadedIndexes();
   } else if (msg.action === "queueClearAll") {
     state.items = msg.source
       ? state.items.filter((item) => (item.source || "remote") !== msg.source)
@@ -2012,6 +2519,9 @@ function extractTimelineInstructions(page) {
 function sanitizeFilePart(value, fallback) {
   const cleaned = String(value || "")
     .replace(/https?:\/\/\S+/g, "")
+    // Invisible bidi/format control characters (same strip lib/naming.js
+    // applies) so legacy flat paths cannot render as scrambled text either.
+    .replace(/[\u200b\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "")
     // Chrome disallows more common Windows path characters in filenames.
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, "")
     .replace(/\s+/g, " ")
@@ -2440,15 +2950,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // a bare filename (older callers) keeps the legacy flat path.
   if (msg.action === "downloadFile") {
     (async () => {
+      const settings = await getOutputSettings();
       if (msg.item) {
-        const settings = await getOutputSettings();
         const prepared = await prepareRawDownload(
           { ...msg.item, url: msg.item.url || msg.url, filename: msg.item.filename || msg.filename },
           settings
         );
-        return downloadFile(prepared.url, prepared.filename);
+        // v3.10: byte + source-URL verification also guards one-click saves.
+        return downloadFile(prepared.url, prepared.filename, {
+          verifyBytes: settings.verifyDuplicates,
+          item: msg.item
+        });
       }
-      return downloadFile(msg.url, msg.filename);
+      return downloadFile(msg.url, msg.filename, { verifyBytes: settings.verifyDuplicates });
     })().then(sendResponse);
     return true;
   }

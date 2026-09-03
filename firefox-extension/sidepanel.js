@@ -162,7 +162,9 @@ function render() {
     const repost = item.isRepost ? `<span class="type-badge repost">repost</span>` : "";
     const quote = item.isQuote ? `<span class="type-badge quote" title="Media from a post quoted inside another post.">quote</span>` : "";
     const link = item.tweetId ? `<a class="item-link" href="https://x.com/i/status/${escapeHtml(item.tweetId)}" target="_blank" rel="noreferrer" title="Open post">↗</a>` : "";
-    return `<article class="queue-item"><input class="item-select" data-id="${escapeHtml(item.id)}" type="checkbox" ${item.selected ? "checked" : ""} aria-label="Select media"><div>${thumbnail}</div><div class="item-info"><div class="item-title">${escapeHtml(item.author || "X post")}${link}</div><div class="item-meta">${escapeHtml(item.date || "Captured while scrolling")}</div><span class="type-badge">${escapeHtml(item.type || "media")}</span>${gif}${repost}${quote}</div><div class="item-right"><span class="item-status ${escapeHtml(item.status || "discovered")}" title="${escapeHtml(item.error || "")}">${escapeHtml(item.status || "discovered")}${progress}${retry}</span><button class="item-remove" data-remove="${escapeHtml(item.id)}" title="Remove from list" aria-label="Remove from list">×</button></div></article>`;
+    const duplicate = item.duplicateReason ? " · duplicate" : "";
+    const statusTitle = item.note || item.error || item.status || "";
+    return `<article class="queue-item"><input class="item-select" data-id="${escapeHtml(item.id)}" type="checkbox" ${item.selected ? "checked" : ""} aria-label="Select media"><div>${thumbnail}</div><div class="item-info"><div class="item-title">${escapeHtml(item.author || "X post")}${link}</div><div class="item-meta">${escapeHtml(item.date || "Captured while scrolling")}</div><span class="type-badge">${escapeHtml(item.type || "media")}</span>${gif}${repost}${quote}</div><div class="item-right"><span class="item-status ${escapeHtml(item.status || "discovered")}" title="${escapeHtml(statusTitle)}">${escapeHtml(item.status || "discovered")}${progress}${retry}${duplicate}</span><button class="item-remove" data-remove="${escapeHtml(item.id)}" title="Remove from list" aria-label="Remove from list">×</button></div></article>`;
   }).join("");
 }
 
@@ -426,20 +428,31 @@ const PREVIEW_FIELDS = {
   date: "2026-09-01T09:15:00.000Z"
 };
 
-const outputSettingsState = { rawMasterFolder: XDLNaming.DEFAULT_RAW_MASTER_FOLDER, nameTemplate: XDLNaming.DEFAULT_NAME_TEMPLATE, outputFormat: "raw" };
+const outputSettingsState = {
+  rawMasterFolder: XDLNaming.DEFAULT_RAW_MASTER_FOLDER,
+  nameTemplate: XDLNaming.DEFAULT_NAME_TEMPLATE,
+  outputFormat: "raw",
+  userFolders: XDLNaming.DEFAULT_USER_FOLDERS
+};
 
 function renderNamePreview() {
   const master = XDLNaming.normalizeRawMasterFolder(outputSettingsState.rawMasterFolder);
   const template = outputSettingsState.nameTemplate;
   const format = XDLNaming.normalizeOutputFormat(outputSettingsState.outputFormat);
   const base = XDLNaming.makePostBaseName(template, PREVIEW_FIELDS);
+  const user = outputSettingsState.userFolders === false ? "" : XDLNaming.userFolderName(PREVIEW_FIELDS);
+  const root = master !== "" && user ? `${master}/${user}` : master;
   let example;
   if (format === "raw") {
     example = master !== ""
-      ? `Downloads/${master}/${base}/001.jpg`
+      ? `Downloads/${root}/${base}/001.jpg`
       : `Downloads/x-media/nasa_Sunrise over the Pacific…_${PREVIEW_FIELDS.id}_1.jpg (old flat layout)`;
   } else {
-    example = `Downloads/${XDLNaming.buildArchiveFilename({ nameTemplate: template }, PREVIEW_FIELDS, format)}`;
+    example = `Downloads/${XDLNaming.buildArchiveFilename(
+      { nameTemplate: template, userFolders: outputSettingsState.userFolders },
+      PREVIEW_FIELDS,
+      format
+    )}`;
   }
   $("namePreview").textContent = `Example file name: ${example}`;
 }
@@ -507,11 +520,12 @@ function buildTemplateChecks(storedTemplate) {
 }
 
 chrome.storage.sync.get(
-  { rawMasterFolder: XDLNaming.DEFAULT_RAW_MASTER_FOLDER, nameTemplate: XDLNaming.DEFAULT_NAME_TEMPLATE, outputFormat: "raw", gifOutput: "gif", archiveGifs: true, archiveVideos: false },
+  { rawMasterFolder: XDLNaming.DEFAULT_RAW_MASTER_FOLDER, nameTemplate: XDLNaming.DEFAULT_NAME_TEMPLATE, outputFormat: "raw", userFolders: true, gifOutput: "gif", archiveGifs: true, archiveVideos: false, verifyDuplicates: true },
   (stored) => {
     outputSettingsState.rawMasterFolder = String(stored.rawMasterFolder);
     outputSettingsState.nameTemplate = String(stored.nameTemplate);
     outputSettingsState.outputFormat = XDLNaming.normalizeOutputFormat(stored.outputFormat);
+    outputSettingsState.userFolders = stored.userFolders !== false;
 
     // Master folder: saved verbatim on change — the EMPTY string is
     // meaningful ("no master folder, old flat layout"), so this field must
@@ -541,6 +555,22 @@ chrome.storage.sync.get(
     archiveVideosBox.checked = stored.archiveVideos === true;
     archiveVideosBox.addEventListener("change", () => {
       chrome.storage.sync.set({ archiveVideos: archiveVideosBox.checked });
+    });
+    const verifyDuplicatesBox = $("verifyDuplicates");
+    verifyDuplicatesBox.checked = stored.verifyDuplicates !== false;
+    verifyDuplicatesBox.addEventListener("change", () => {
+      chrome.storage.sync.set({ verifyDuplicates: verifyDuplicatesBox.checked });
+    });
+    // v3.11 — per-user folders inside the master folder. The user segment is
+    // the owning post's author, so media found on the home timeline, a
+    // profile page and the /media page of the same user all share one folder
+    // (visual dedupe) on top of the byte/source-URL verification.
+    const userFoldersBox = $("userFolders");
+    userFoldersBox.checked = outputSettingsState.userFolders;
+    userFoldersBox.addEventListener("change", () => {
+      outputSettingsState.userFolders = userFoldersBox.checked;
+      chrome.storage.sync.set({ userFolders: userFoldersBox.checked });
+      renderNamePreview();
     });
 
     // Stored default format (settings card) + per-job picker (dock). The
