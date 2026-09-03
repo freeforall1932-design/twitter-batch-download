@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>X Media Downloader — archive assembly</title>
+</head>
+<body>
+  <!-- Offscreen document: assembles ZIP/CBZ/PDF archives, converts X's MP4
+       "GIF" clips into real .gif files (canvas + GIF89a encoder), and saves
+       blobs via an object URL + anchor click. It exists because MV3 service
+       workers have no URL.createObjectURL, <video> or canvas. Only
+       chrome.runtime is available here — chrome.storage / chrome.downloads
+       calls would crash the download. -->
+  <script src="lib/naming.js"></script>
+  <script src="lib/zipWriter.js"></script>
+  <script src="lib/pdfBuilder.js"></script>
+  <script src="lib/gifEncoder.js"></script>
+  <script src="lib/archive.js"></script>
+  <script src="offscreen.js"></script>
+</body>
+</html>

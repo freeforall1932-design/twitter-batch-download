@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>X Media Downloader</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <p class="eyebrow">X MEDIA DOWNLOADER</p>
+      <h1>Media queue</h1>
+    </div>
+    <span id="engineStatus" class="status-pill idle">Ready</span>
+  </header>
+
+  <main>
+    <nav class="tabs" aria-label="Download modes">
+      <button id="scrollTabBtn" class="tab selected" data-tab="scroll">Scroll capture</button>
+      <button id="remoteTabBtn" class="tab" data-tab="remote">Remote fetch</button>
+    </nav>
+
+    <section id="scrollPanel" class="source-card tab-panel" aria-label="Scroll capture source">
+      <div id="tabStatus" class="tab-status">
+        <span id="tabStatusDot" class="dot"></span>
+        <div class="tab-status-text">
+          <strong id="tabStatusTitle">Checking active tab…</strong>
+          <span id="tabStatusDetail">Open an X tab to start listing media.</span>
+        </div>
+      </div>
+
+      <div class="source-options">
+        <label>Capture
+          <select id="localCaptureFilter">
+            <option value="all">Photos + videos</option>
+            <option value="photo">Photos only</option>
+            <option value="video">Videos only</option>
+          </select>
+        </label>
+        <label>Speed
+          <select id="localScrollSpeed">
+            <option value="slow">Slow</option>
+            <option value="medium">Medium</option>
+            <option value="fast" selected>Fast</option>
+          </select>
+        </label>
+        <label class="check-label" title="Also list media from posts shown in a quote card on the posts you scroll."><input id="scrollIncludeQuoted" type="checkbox" checked> Include quoted</label>
+      </div>
+
+      <div class="action-row">
+        <button id="startLocalScrollBtn" class="button primary">Start auto-scroll</button>
+        <button id="stopLocalScrollBtn" class="button secondary" disabled>Stop</button>
+      </div>
+      <p id="localHint" class="hint">Media lists automatically as you scroll. Auto-scroll just scrolls for you — it never waits on downloads.</p>
+    </section>
+
+    <section id="remotePanel" class="source-card tab-panel hidden" aria-label="Remote discovery source">
+      <label for="targetInput">Advanced remote profile/media fetch</label>
+      <div class="target-row">
+        <input id="targetInput" type="text" placeholder="@username or https://x.com/user/media" autocomplete="off">
+        <button id="clearTargetBtn" class="icon-button" title="Clear target" aria-label="Clear target">×</button>
+        <button id="useCurrentBtn" class="icon-button" title="Use current X tab" aria-label="Use current X tab">⌁</button>
+      </div>
+      <div class="source-options">
+        <label class="check-label"><input id="includeRetweets" type="checkbox"> Include reposts</label>
+        <label class="check-label" title="Also list media from posts quoted by the target's posts."><input id="includeQuoted" type="checkbox" checked> Include quoted</label>
+        <label>Limit <input id="discoveryLimit" class="limit-input" type="number" min="1" max="99999" value="99999"></label>
+      </div>
+      <div class="action-row">
+        <button id="discoverBtn" class="button primary">Remote discover</button>
+        <button id="stopDiscoveryBtn" class="button secondary" disabled>Stop scan</button>
+      </div>
+      <p id="discoveryHint" class="hint">Remote fetch can hit X rate limits. Use Scroll capture first when possible.</p>
+    </section>
+
+    <section class="summary" aria-label="Queue summary">
+      <div><strong id="discoveredCount">0</strong><span>listed</span></div>
+      <div><strong id="selectedCount">0</strong><span>selected</span></div>
+      <div><strong id="completedCount">0</strong><span>completed</span></div>
+    </section>
+
+    <section class="toolbar" aria-label="Selection controls">
+      <label class="check-label"><input id="selectAll" type="checkbox"> Select all</label>
+      <select id="mediaFilter" aria-label="Filter queue">
+        <option value="all">All media</option>
+        <option value="video">Videos</option>
+        <option value="photo">Photos</option>
+      </select>
+    </section>
+
+    <section class="toolbar secondary-toolbar" aria-label="Queue maintenance">
+      <label class="check-label" title="Media you have already downloaded is not listed again."><input id="skipDownloaded" type="checkbox" checked> Skip already downloaded</label>
+      <button id="retryFailedBtn" class="text-button">Retry failed</button>
+      <button id="clearFinishedBtn" class="text-button" title="Remove completed and failed rows, keep the rest.">Clear finished</button>
+      <button id="resetDownloadedBtn" class="text-button" title="Forget which media you already downloaded, so skipped items list again.">Reset downloaded history</button>
+      <button id="clearHistoryBtn" class="text-button danger">Clear list</button>
+    </section>
+
+    <details id="outputSettings" class="source-card output-settings">
+      <summary>Output settings — folders, file names, formats</summary>
+
+      <label class="settings-label" for="rawMasterFolder">Master folder for saved files</label>
+      <input id="rawMasterFolder" type="text" placeholder="Empty = save loose files like before" autocomplete="off">
+      <p class="hint">Files save as <code>Downloads/&lt;folder&gt;/&lt;post name&gt;/001.jpg</code>. Leave <strong>empty</strong> to switch the folder off and go back to the old flat <code>x-media/</code> layout. Slashes nest deeper (e.g. <code>XMedia/raw</code>).</p>
+
+      <label class="settings-label" for="defaultFormat">Default format for posts with media</label>
+      <select id="defaultFormat">
+        <option value="raw">Separate files (raw)</option>
+        <option value="zip">One ZIP per post</option>
+        <option value="cbz">One CBZ per post</option>
+        <option value="pdf">One PDF per post</option>
+      </select>
+      <p class="hint">ZIP/CBZ/PDF bundle a post's media (up to 4 items) into one file named after the post. PDF holds photos only — a post whose archive includes a GIF or video is saved as ZIP instead.</p>
+
+      <label class="settings-label" for="gifOutput">GIF posts save as</label>
+      <select id="gifOutput">
+        <option value="gif">Real .gif files (converted, keeps animation)</option>
+        <option value="mp4">Original MP4 clips (as X serves them)</option>
+      </select>
+      <p class="hint">X delivers GIFs as small silent MP4 clips. "Real .gif" converts them back — full quality frames, looping forever.</p>
+
+      <label class="check-label settings-check"><input id="archiveGifs" type="checkbox"> Include GIFs in post archives (ZIP/CBZ only, never PDF)</label>
+      <label class="check-label settings-check"><input id="archiveVideos" type="checkbox"> Include videos in post archives (ZIP/CBZ only — archives can get large)</label>
+      <p class="hint">Off = GIFs/videos always save as separate files, even when photos of the same post are archived.</p>
+
+      <label class="settings-label">Post name is built from</label>
+      <div id="nameTemplateChecks" class="template-checks"></div>
+      <div id="nameTemplateAdvanced" class="template-advanced" style="display:none">
+        <input id="nameTemplateInput" type="text" autocomplete="off" spellcheck="false">
+        <p class="hint">Custom template detected — tokens: <code>{user}</code> <code>{name}</code> <code>{text}</code> <code>{id}</code> <code>{date}</code>. Clear it to get the checkboxes back.</p>
+      </div>
+      <p id="namePreview" class="hint name-preview"></p>
+    </details>
+
+    <section id="queue" class="queue" aria-live="polite">
+      <div class="empty-state">
+        <div class="empty-icon">↓</div>
+        <h2>No media listed yet</h2>
+        <p>Scroll an X page to list media here, or use Remote fetch as an advanced fallback.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="download-dock">
+    <div class="concurrency-control">
+      <span>Downloads at once</span>
+      <div class="segmented" role="group" aria-label="Concurrent downloads">
+        <button data-concurrency="1">1</button>
+        <button data-concurrency="2" class="selected">2</button>
+      </div>
+    </div>
+    <div class="concurrency-control">
+      <span>Save posts as</span>
+      <select id="jobFormat" aria-label="Format for this download" title="Applies to this download only — set the default in Output settings.">
+        <option value="raw">Separate files</option>
+        <option value="zip">ZIP per post</option>
+        <option value="cbz">CBZ per post</option>
+        <option value="pdf">PDF per post</option>
+      </select>
+    </div>
+    <div class="action-row">
+      <button id="downloadSelectedBtn" class="button primary" disabled>Download selected</button>
+      <button id="stopBtn" class="button secondary" disabled>Stop</button>
+    </div>
+    <div id="queueNotices" class="queue-notices" role="alert" style="display:none"></div>
+    <p id="downloadNotice" class="download-notice">Tick items, or use Select all, then download. Downloads keep running while you scroll.</p>
+  </footer>
+  <script src="lib/naming.js"></script>
+  <script src="sidepanel.js"></script>
+</body>
+</html>

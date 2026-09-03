@@ -2,6 +2,60 @@
 
 Chronological implementation record for X Media Downloader.
 
+## 2026-09-03 — Firefox port — separate folder, feasibility analysis, MV2 manifest
+
+**Branch:** `arena/01a064df-twitter-batch-download` · **Session input:** create separate folder for Firefox extension, port chrome extension folder into Firefox compatible, check codebase if possible and what would be needed, after reading 3 documents, add task into work list first.
+
+### Documents read
+
+- `docs/SESSION_HANDOFF.md` page 1 says extension version 3.6.3, MV3, sidePanel, offscreen, background service_worker, no build, always-on capture, SPA route watcher + replay buffer, per-post ZIP/CBZ/PDF via offscreen anchor, GIF → real .gif via offscreen canvas.
+- `docs/WORKLIST.md` page P3 says Firefox MV3; avatar/banner; content-type extension detection — listed as robustness item, not yet implemented.
+- `docs/IMPROVEMENT_LOG.md` newest entry says naming-degarble + perf queue tasks 1-5 done, 125 tests green, manifest 3.6.3.
+
+### Codebase analysis method
+
+1. Listed `extension/` files: manifest.json, background.js (103k), content.js (37k), injected.js (12k), offscreen.html/js, popup, sidepanel, lib/* (naming, zipWriter, pdfBuilder, gifEncoder, archive).
+2. Parsed manifest.json: manifest_version 3, permissions sidePanel/offscreen/scripting/cookies/downloads/storage/activeTab, host_permissions x.com/twitter.com/twimg, background.service_worker, content_scripts world MAIN for injected.js + isolated for content.js, side_panel default_path.
+3. Grepped chrome.* usage: `chrome.downloads`, `chrome.storage.local/sync`, `chrome.cookies`, `chrome.tabs.query`, `chrome.scripting.executeScript`, `chrome.offscreen.createDocument/hasDocument`, `chrome.runtime.sendMessage/onMessage`, `chrome.sidePanel.open`, `chrome.downloads.onChanged/search`.
+4. Checked Firefox WebExtensions compatibility via web_search: Firefox MV3 supports service_worker but sidePanel is Chrome-only (Firefox uses sidebar_action), offscreen is Chrome-only (Firefox background has DOM), world MAIN not supported in MV2, scripting API limited, browser.* namespace preferred.
+
+### Result — feasibility
+
+- Port is possible. 80% code shared. 20% adaptation required.
+- Blockers in Chrome-only APIs:
+  - `sidePanel` → `sidebar_action` in MV2
+  - `offscreen` → background page fallback already exists (buildArchiveInWorker uses lib/archive.js + data: URL) — usable in Firefox, but GIF conversion degrades to MP4
+  - `world: MAIN` → inject via <script> tag with runtime.getURL
+  - `chrome.scripting.executeScript` → wrapper _executeScriptCompat() using scripting if present else tabs.executeScript
+  - `chrome.sidePanel.open()` → `browser.sidebarAction.open()` with fallback
+  - `host_permissions` separate → merged into permissions for MV2
+  - `action` → `browser_action` for MV2
+
+### Changes made
+
+1. Added P0 Firefox port section to `docs/WORKLIST.md` with feasibility table, required adaptations, and task checklist (create folder, manifest variant, background adapt, injection, sidebar open, test, CI, docs).
+2. Created `firefox-extension/` folder via `cp -r extension firefox-extension`.
+3. Wrote `firefox-extension/manifest.json` MV2 variant: manifest_version 2, browser_specific_settings gecko id x-media-downloader@example.com strict_min_version 109.0, permissions includes hosts, background scripts array lib/* + background.js, browser_action + sidebar_action pointing to sidepanel.html, content_scripts only content.js, web_accessible_resources injected.js + lib/*.
+4. Edited `firefox-extension/content.js`: prepended Firefox MAIN-world injection shim that creates <script src=runtime.getURL('injected.js')> when browser namespace or Firefox UA detected, avoids double injection via dataset flag.
+5. Edited `firefox-extension/popup.js`: added _api = browser||chrome, sidebarAction.open() first, sidePanel.open() second, window.close fallback; also changed tabs.query/sendMessage to use _api where needed.
+6. Edited `firefox-extension/background.js`: added compatibility shim at top — _extApi = browser||chrome, alias chrome=browser if chrome undefined, guarded importScripts (only if function exists), _executeScriptCompat wrapper handling both MV3 scripting and MV2 tabs.executeScript; replaced two scripting.executeScript call sites with wrapper; ensureOffscreenDocument already returns false when offscreen undefined, so archive path uses worker fallback.
+7. Added `firefox-extension/README.md` documenting why separate folder, what changed table, Firefox install steps (about:debugging Load Temporary Add-on), known limitations (GIF conversion MP4 fallback, data URL archive), next steps to full parity (background canvas GIF decode, blob filename handling, web-ext lint).
+
+### Validation
+
+- `ls -la firefox-extension` — folder exists, 10 files + lib/
+- `node --check firefox-extension/*.js firefox-extension/lib/*.js` — syntax clean (Chrome + Firefox)
+- `node --test tests/*.test.js` — 125 pass / 0 fail (extension/ unchanged)
+- Manifest parse: Chrome MV3 valid, Firefox MV2 valid, no sidePanel/offscreen in Firefox manifest
+- Worklist task added and ticked as created, not yet fully tested live
+
+### Still open
+
+- Live Firefox test: about:debugging load, scroll capture on x.com, sidebar queue, download selected with master folder, ZIP/CBZ/PDF via data URL fallback
+- GIF conversion in Firefox background: implement <video>+canvas decode in background page (has DOM in MV2) using lib/gifEncoder.js, mirroring offscreen.js logic
+- Remove offscreen.html/js from Firefox folder after GIF conversion parity, or keep for reference
+- Add web-ext lint step to CI for firefox-extension/
+
 ## 2026-09-02 — Naming-degarble + perf queue — v3.6.3 (Tasks 1–5 of the live queue)
 
 **Branch:** `arena/01a06058-twitter-batch-download` · **Session input:** the user
