@@ -37,6 +37,7 @@
   const TEMPLATE_TOKENS = ["user", "name", "text", "id", "date"];
   const DEFAULT_NAME_TEMPLATE = "{user} - {text} - {id}";
   const DEFAULT_RAW_MASTER_FOLDER = "XMedia";
+  const DEFAULT_USER_FOLDERS = true;
   const OUTPUT_FORMATS = ["raw", "zip", "cbz", "pdf"];
 
   // Windows device names that cannot be used as file/folder names even with
@@ -221,9 +222,37 @@
     return String(safe).padStart(3, "0");
   }
 
+  // One clean folder segment for the user the media is sourced FROM (the
+  // owning post's author — reposts/quotes are already attributed to their
+  // real owner upstream). Empty when no handle is known; the build functions
+  // then fall back to the master-folder-root layout rather than an "unknown"
+  // bucket. Must be a SINGLE segment: a malicious/odd handle can never create
+  // nested folders.
+  function userFolderName(fields) {
+    const user = String(fields?.user || "").replace(/^@/, "").trim();
+    if (!user) return "";
+    return sanitizeArtifactFilename(user, "").split("/").join(" ");
+  }
+
+  // True when `base` already names the user (template contains {user} first):
+  // avoids "nasa - nasa - …" when the username is prefixed automatically.
+  function baseNamesUser(base, user) {
+    if (!user || !base) return false;
+    const lowerBase = base.toLowerCase();
+    const lowerUser = user.toLowerCase();
+    return lowerBase === lowerUser || lowerBase.startsWith(lowerUser + " ");
+  }
+
   // Raw (loose file) download path for one media item of a post.
-  //   Master folder ON  → <Master>/<base name>/001.jpg  (folders auto-created
-  //                       by chrome.downloads when "ask where to save" is off)
+  //   Master folder ON, user folders ON (default)
+  //      → <Master>/<user>/<base name>/001.jpg
+  //     The per-user segment is the owning post's author, so media sourced
+  //     from different pages (home timeline, profile, /media, single post)
+  //     lands in the SAME user folder — the folder itself doubles as a visual
+  //     dedupe: same user + same post name + same byte-verified media = one
+  //     path, one file.
+  //   Master folder ON, user folders OFF
+  //      → <Master>/<base name>/001.jpg  (pre-v3.11 layout)
   //   Master folder OFF → the historical flat layout, byte-for-byte: the
   //                       caller passes legacyFilename (x-media/…), which is
   //                       returned unchanged so emptying the box restores the
@@ -236,18 +265,28 @@
     const base = makePostBaseName(settings ? settings.nameTemplate : undefined, fields);
     const ext = String(extension || "bin").replace(/[^a-z0-9]/gi, "").toLowerCase() || "bin";
     const leaf = pageNumber(index) + "." + ext;
+    const user = settings && settings.userFolders === false ? "" : userFolderName(fields);
+    const root = user ? master + "/" + user : master;
     return sanitizeArtifactFilename(
-      master + "/" + base + "/" + leaf,
-      DEFAULT_RAW_MASTER_FOLDER + "/" + (String(fields && fields.id ? fields.id : "post")) + "/" + leaf
+      root + "/" + base + "/" + leaf,
+      DEFAULT_RAW_MASTER_FOLDER + "/" + (user ? user + "/" : "") + (String(fields && fields.id ? fields.id : "post")) + "/" + leaf
     );
   }
 
   // Archive (zip/cbz/pdf) file name for one post: "<base name>.<format>".
   // Blob archives are saved by an in-document anchor click (see
   // offscreen.js), whose download attribute cannot carry folders — archives
-  // therefore always land at the download-directory root.
+  // therefore always land at the download-directory root. Because a folder
+  // per user is impossible for archives, the username is FORCED into the
+  // file name when the user's template would omit it (e.g. a "{text} - {id}"
+  // template gets "nasa - text - id.zip"), so files from different users can
+  // always be told apart.
   function buildArchiveFilename(settings, fields, format) {
-    const base = makePostBaseName(settings ? settings.nameTemplate : undefined, fields);
+    let base = makePostBaseName(settings ? settings.nameTemplate : undefined, fields);
+    const user = settings && settings.userFolders === false ? "" : userFolderName(fields);
+    if (user && !baseNamesUser(base, user)) {
+      base = user + " - " + base;
+    }
     const ext = normalizeOutputFormat(format);
     return sanitizeArtifactFilename(base + "." + (ext === "raw" ? "zip" : ext), "post." + ext);
   }
@@ -256,6 +295,7 @@
     TEMPLATE_TOKENS,
     DEFAULT_NAME_TEMPLATE,
     DEFAULT_RAW_MASTER_FOLDER,
+    DEFAULT_USER_FOLDERS,
     OUTPUT_FORMATS,
     sanitizeArtifactFilename,
     normalizeRawMasterFolder,
@@ -268,6 +308,7 @@
     renderNameTemplate,
     makePostBaseName,
     pageNumber,
+    userFolderName,
     buildRawMediaPath,
     buildArchiveFilename
   };

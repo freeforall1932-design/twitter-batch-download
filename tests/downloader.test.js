@@ -81,8 +81,8 @@ test("raw mode: default master folder groups a post as XMedia/<name>/001…", as
   await startQueue(background, "raw");
 
   assert.deepEqual(calls.map((call) => call.filename), [
-    "XMedia/nasa - Hello world - 111/001.jpg",
-    "XMedia/nasa - Hello world - 111/002.jpg"
+    "XMedia/nasa/nasa - Hello world - 111/001.jpg",
+    "XMedia/nasa/nasa - Hello world - 111/002.jpg"
   ]);
   // Raw mode downloads the CDN URL directly — nothing is fetched in-worker.
   assert.deepEqual(calls.map((call) => call.url), [
@@ -99,8 +99,8 @@ test("raw mode: a custom master folder is honored and slashes nest deeper", asyn
   });
   await startQueue(background, "raw");
   assert.deepEqual(calls.map((call) => call.filename), [
-    "Stash/raw/nasa - Hello world - 111/001.jpg",
-    "Stash/raw/nasa - Hello world - 111/002.jpg"
+    "Stash/raw/nasa/nasa - Hello world - 111/001.jpg",
+    "Stash/raw/nasa/nasa - Hello world - 111/002.jpg"
   ]);
 });
 
@@ -125,8 +125,8 @@ test("raw mode: a weird user-typed master folder is sanitized per segment", asyn
   });
   await startQueue(background, "raw");
   assert.deepEqual(calls.map((call) => call.filename), [
-    "MyFolder/nasa - Hello world - 111/001.jpg",
-    "MyFolder/nasa - Hello world - 111/002.jpg"
+    "MyFolder/nasa/nasa - Hello world - 111/001.jpg",
+    "MyFolder/nasa/nasa - Hello world - 111/002.jpg"
   ]);
 });
 
@@ -137,7 +137,7 @@ test("naming scheme: the stored template drives raw folder names; degenerate nam
     syncStored: { nameTemplate: "{user} - {id}" }
   });
   await startQueue(background, "raw");
-  assert.equal(calls[0].filename, "XMedia/nasa - 111/001.jpg");
+  assert.equal(calls[0].filename, "XMedia/nasa/nasa - 111/001.jpg");
 
   // A post whose fields render to nothing must still produce a folder name.
   const fallbackCalls = [];
@@ -149,7 +149,43 @@ test("naming scheme: the stored template drives raw folder names; degenerate nam
   await fallback.handleQueueMessage({ action: "queueSelectVisible", filter: "all", selected: true });
   await fallback.handleQueueMessage({ action: "queueStart", mode: "selected", format: "raw" });
   await fallback.processQueue();
-  assert.equal(fallbackCalls[0].filename, "XMedia/111/001.jpg");
+  assert.equal(fallbackCalls[0].filename, "XMedia/nasa/111/001.jpg");
+});
+
+test("raw mode: media from different users lands in separate per-user folders", async () => {
+  const calls = [];
+  const background = loadBackground({ download: capturingDownload(calls) });
+  await background.handleQueueMessage({
+    action: "queueAdd",
+    items: [
+      photoItems(1, { id: "1-a", tweetId: "1", author: "@nasa", mediaIndex: 0 })[0],
+      {
+        ...photoItems(1, { id: "2-b", tweetId: "2", author: "@spacex", mediaIndex: 0 })[0],
+        url: "https://pbs.twimg.com/media/other.jpg?format=jpg&name=orig"
+      }
+    ]
+  });
+  await background.handleQueueMessage({ action: "queueSelectVisible", filter: "all", selected: true });
+  await background.handleQueueMessage({ action: "queueStart", mode: "selected", format: "raw" });
+  await background.processQueue();
+
+  assert.deepEqual(calls.map((call) => call.filename).sort(), [
+    "XMedia/nasa/nasa - Hello world - 1/001.jpg",
+    "XMedia/spacex/spacex - Hello world - 2/001.jpg"
+  ]);
+});
+
+test("raw mode: userFolders:false restores the pre-v3.11 master layout", async () => {
+  const calls = [];
+  const background = loadBackground({
+    download: capturingDownload(calls),
+    syncStored: { userFolders: false }
+  });
+  await startQueue(background, "raw");
+  assert.deepEqual(calls.map((call) => call.filename), [
+    "XMedia/nasa - Hello world - 111/001.jpg",
+    "XMedia/nasa - Hello world - 111/002.jpg"
+  ]);
 });
 
 test("zip per post: one data-URL archive named <base>.zip with 001/002 entries in post order, items completed", async () => {
@@ -236,7 +272,7 @@ test("archive formats: videos still download raw; the stored default applies whe
 
   const filenames = calls.map((call) => call.filename).sort();
   assert.deepEqual(filenames, [
-    "XMedia/nasa - Hello world - 111/003.mp4",
+    "XMedia/nasa/nasa - Hello world - 111/003.mp4",
     "nasa - Hello world - 111.zip"
   ]);
   const state = await background.handleQueueMessage({ action: "queueGet" });
@@ -249,8 +285,8 @@ test("archive formats: an unknown/corrupt format value degrades to raw", async (
   const background = loadBackground({ download: capturingDownload(calls) });
   await startQueue(background, "tarball");
   assert.deepEqual(calls.map((call) => call.filename), [
-    "XMedia/nasa - Hello world - 111/001.jpg",
-    "XMedia/nasa - Hello world - 111/002.jpg"
+    "XMedia/nasa/nasa - Hello world - 111/001.jpg",
+    "XMedia/nasa/nasa - Hello world - 111/002.jpg"
   ]);
 });
 
@@ -298,7 +334,7 @@ test("single-post downloadFile message honors master folder + template when item
   const background = loadBackground({ download: capturingDownload([]) });
   const [item] = photoItems(1);
   const withMeta = background.rawPathForItem(item, { rawMasterFolder: "XMedia", nameTemplate: "{user} - {text} - {id}" });
-  assert.equal(withMeta, "XMedia/nasa - Hello world - 111/001.jpg");
+  assert.equal(withMeta, "XMedia/nasa/nasa - Hello world - 111/001.jpg");
   // Without metadata (legacy persisted item), the stored filename survives
   // under the master folder instead of guessing.
   const legacy = background.rawPathForItem(

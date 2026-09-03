@@ -223,7 +223,7 @@ test("archiveGifs off: the GIF leaves the archive and downloads raw while photos
   const zipCall = calls.find((call) => call.url.startsWith("data:application/zip"));
   // No offscreen document in this harness → GIF conversion degrades to MP4.
   assert.equal(rawCall.url, "https://video.twimg.com/tweet_video/gif0.mp4");
-  assert.equal(rawCall.filename, "XMedia/nasa - Hello world - 111/002.mp4");
+  assert.equal(rawCall.filename, "XMedia/nasa/nasa - Hello world - 111/002.mp4");
   assert.equal(zipCall.filename, "nasa - Hello world - 111.zip");
 });
 
@@ -259,7 +259,7 @@ test("raw GIF with a live offscreen document converts to .gif and keeps the mast
 
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, `data:image/gif;base64,${gifBase64}`);
-  assert.equal(calls[0].filename, "XMedia/nasa - Hello world - 111/002.gif");
+  assert.equal(calls[0].filename, "XMedia/nasa/nasa - Hello world - 111/002.gif");
 });
 
 test("raw GIF with gifOutput=mp4 keeps the original clip untouched", async () => {
@@ -270,7 +270,7 @@ test("raw GIF with gifOutput=mp4 keeps the original clip untouched", async () =>
   });
   await runQueue(background, [gifItem()], "raw");
   assert.equal(calls[0].url, "https://video.twimg.com/tweet_video/gif0.mp4");
-  assert.equal(calls[0].filename, "XMedia/nasa - Hello world - 111/002.mp4");
+  assert.equal(calls[0].filename, "XMedia/nasa/nasa - Hello world - 111/002.mp4");
 });
 
 test("offscreen archive job carries kinds + gifOutput so the document can convert GIF entries", async () => {

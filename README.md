@@ -24,7 +24,7 @@ Self-hosted against your signed-in X session. No third-party accounts, API keys,
 - **Include reposts** — Optional during profile discovery.
 - **Include quoted** — Media inside a quoted post's card (the "mentioned post" box with thumbnail and text) lists too, attributed to the quoted post's author, with a `quote` badge. On by default; switchable per tab.
 - **Rate-limit handling** — Throttle + exponential backoff; Side Panel shows a retry countdown on 429/503.
-- **Master folder + per-post folders (v3.5)** — Raw downloads save as `Downloads/XMedia/<post name>/001.jpg…` (folders auto-created). The master folder is configurable in the Side Panel's **Output settings**; empty it to restore the old flat `Downloads/x-media/{username}_{post text}_{tweetId}_{index}.{ext}` layout exactly. Slashes nest deeper (`XMedia/raw`).
+- **Master folder + per-user + per-post folders (v3.5 layout, v3.11 per-user)** — Raw downloads save as `Downloads/XMedia/<user>/<post name>/001.jpg…` — one folder **per user** the media is sourced from (the owning post's author), so media seen on the home timeline, a profile and its `/media` page of the same user all land in the same folder (it doubles as visual dedupe on top of the byte + source-URL checks). The master folder is configurable in the Side Panel's **Output settings**; **One folder per user** (`userFolders`) can be switched off to restore `Downloads/XMedia/<post name>/001.jpg…`, and emptying the master folder restores the old flat `Downloads/x-media/{username}_{post text}_{tweetId}_{index}.{ext}` layout exactly. Slashes nest deeper (`XMedia/raw`). Archives cannot create folders, so ZIP/CBZ/PDF names always carry the username (`nasa - 111.cbz`).
 - **One file per post (v3.5, media-kind rules v3.6)** — Optional **ZIP / CBZ / PDF** output: a post's media (up to 4 items) bundles into a single `<post name>.zip|cbz|pdf` with entries `001…004` in post order. PDF pages embed original JPEGs losslessly (PNG/WebP re-encoded via canvas). **PDF holds photos only** — a post whose archive includes a GIF or video is saved as ZIP instead. GIFs join archives by default (as real `.gif` entries); videos only when explicitly opted in — both toggles live in Output settings, and the run warns up front when a video post is being zipped or a post mixes photos/GIFs/videos. This is a per-post archive of at most four items — the old multi-GB whole-batch ZIP stays removed.
 - **Naming scheme checkboxes (v3.5)** — The post name is built from tokens (`{user}`, `{name}`, `{text}`, `{id}`, `{date}`; default `{user} - {text} - {id}`) picked with checkboxes and a live example preview; hand-typed custom templates keep working through a manual input. Degenerate names fall back to the post id; Windows-reserved names are prefixed.
 - **Live session capture** — MAIN-world observer learns current GraphQL operation IDs and safe request headers from the open X tab.
@@ -135,7 +135,7 @@ never loaded by the browser.
 
 ```bash
 for f in extension/*.js extension/lib/*.js; do node --check "$f"; done
-node --test tests/*.test.js   # 164 tests (offline: fixtures + window-less VM pipelines)
+node --test tests/*.test.js   # 167 tests (offline: fixtures + window-less VM pipelines)
 node --test tests/downloader.test.js
 ```
 

@@ -122,21 +122,42 @@ test("makePostBaseName: single segment, reserved names, id fallback", () => {
   );
   assert.equal(
     naming.buildRawMediaPath({}, { user: "nasa", text: "???", id: "111" }, 0, "jpg", "legacy"),
-    "XMedia/nasa - 111/001.jpg"
+    "XMedia/nasa/nasa - 111/001.jpg"
   );
 });
 
-test("buildRawMediaPath: master folder on/off/nested/sanitized", () => {
+test("userFolderName: single sanitized segment from the owning post's author", () => {
+  assert.equal(naming.userFolderName({ user: "@nasa" }), "nasa");
+  assert.equal(naming.userFolderName({}), "");
+  assert.equal(naming.userFolderName({ user: "" }), "");
+  // Odd handles cannot create nested folders or reserved names.
+  assert.equal(naming.userFolderName({ user: "a/b\\c" }), "a bc");
+  assert.equal(naming.userFolderName({ user: "CON" }), "CON");
+});
+
+test("buildRawMediaPath: per-user folder ON by default, OFF restores old layout", () => {
   const fields = { user: "nasa", text: "Hello world", id: "111" };
-  // Default master folder.
+  // Default: XMedia/<user>/<post name>/NNN.ext — the extension's own folder
+  // holds one folder per sourced user, and the post name keeps the comment
+  // (post text) via the template.
   assert.equal(
     naming.buildRawMediaPath({}, fields, 0, "jpg", "x-media/legacy_1.jpg"),
-    "XMedia/nasa - Hello world - 111/001.jpg"
+    "XMedia/nasa/nasa - Hello world - 111/001.jpg"
   );
-  // Custom name; slashes nest deeper.
+  // Custom master; slashes nest deeper; the user folder nests under it.
   assert.equal(
     naming.buildRawMediaPath({ rawMasterFolder: "Stash/raw" }, fields, 3, "png", "x-media/legacy_4.png"),
-    "Stash/raw/nasa - Hello world - 111/004.png"
+    "Stash/raw/nasa/nasa - Hello world - 111/004.png"
+  );
+  // userFolders:false → pre-v3.11 layout at the master-folder root.
+  assert.equal(
+    naming.buildRawMediaPath({ userFolders: false }, fields, 1, "jpg", "x-media/legacy_2.jpg"),
+    "XMedia/nasa - Hello world - 111/002.jpg"
+  );
+  // No author known → no user segment, not an "unknown" bucket.
+  assert.equal(
+    naming.buildRawMediaPath({}, { text: "Hello", id: "1" }, 0, "jpg", "legacy"),
+    "XMedia/Hello - 1/001.jpg"
   );
   // EMPTY STRING = OFF: the legacy flat filename comes back verbatim.
   assert.equal(
@@ -146,13 +167,18 @@ test("buildRawMediaPath: master folder on/off/nested/sanitized", () => {
   // Weird user-typed folder names sanitize per segment.
   assert.equal(
     naming.buildRawMediaPath({ rawMasterFolder: 'My:Folder* ' }, fields, 1, "jpg", "x-media/legacy_2.jpg"),
-    "MyFolder/nasa - Hello world - 111/002.jpg"
+    "MyFolder/nasa/nasa - Hello world - 111/002.jpg"
   );
 });
 
-test("buildArchiveFilename: templated base + whitelisted extension", () => {
+test("buildArchiveFilename: templated base + username forced when the template omits it", () => {
   const fields = { user: "nasa", text: "Hello world", id: "111" };
+  // Default template already starts with {user} → no double username.
   assert.equal(naming.buildArchiveFilename({}, fields, "zip"), "nasa - Hello world - 111.zip");
-  assert.equal(naming.buildArchiveFilename({ nameTemplate: "{id}" }, fields, "cbz"), "111.cbz");
-  assert.equal(naming.buildArchiveFilename({ nameTemplate: "{text}" }, { text: "???", id: "42" }, "pdf"), "42.pdf");
+  // Archives cannot create folders (anchor download), so the username is
+  // forced into the name whenever the template would leave it out.
+  assert.equal(naming.buildArchiveFilename({ nameTemplate: "{id}" }, fields, "cbz"), "nasa - 111.cbz");
+  assert.equal(naming.buildArchiveFilename({ nameTemplate: "{text}" }, { user: "nasa", text: "???", id: "42" }, "pdf"), "nasa - 42.pdf");
+  // userFolders:false keeps the template-only name.
+  assert.equal(naming.buildArchiveFilename({ nameTemplate: "{id}", userFolders: false }, fields, "cbz"), "111.cbz");
 });

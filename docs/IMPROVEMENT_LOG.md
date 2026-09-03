@@ -2,6 +2,105 @@
 
 Chronological implementation record for X Media Downloader.
 
+## 2026-09-03 — v3.11 per-user folders in the master folder + random-naming flagged PENDING REVIEW
+
+**Branch:** `arena/01a0667d-twitter-batch-download` · **Manifest 3.10.0 → 3.11.0** ·
+**Tests 164 → 167** (+3) · **Committed, NOT pushed/PR'd — pending the user's
+review of the output** (per the session instruction that the random-naming
+result stays pending review).
+
+**Session input (verbatim intent):** the extension's own master folder
+(`XMedia`) should contain **one folder per user** the media is sourced from —
+`XMedia/<user>/<post name>/001.ext` — so all of a user's batch-archived media
+lives together; media from different sources (home timeline, profile, `/media`
+page) of the same user lands in the same folder (which doubles as dedupe);
+when a folder is impossible (ZIP/CBZ/PDF archives) the username must at least
+appear in the file name; and the **random/"garbled" file name problem goes on
+the work list as PENDING REVIEW — NOT fixed until the user tests and
+confirms**.
+
+### Part 0 — random file names: PENDING REVIEW, root cause UNCONFIRMED
+
+What v3.6.3/v3.10 already did (deterministic fallback ladder, bidi/format
+control strip, byte+URL save-time verification) is **not** being claimed as
+the fix — offline tests cannot reproduce the live symptom, so the root cause
+remains unconfirmed. The user's instruction is explicit: it goes on the work
+list as **pending review** and may only be closed after a real-browser test
+confirms the names are clean. Remaining suspect if it still garbles:
+`conflictAction:"uniquify"` (Chrome's `(1)`-suffix) plus whatever live post
+shape feeds `makePostBaseName`. See `docs/WORKLIST.md` → P0 → "Random file
+name / garbled name — ⚠ PENDING REVIEW".
+
+### Part 1 — per-user folders (new default layout)
+
+`lib/naming.js`:
+
+- `DEFAULT_USER_FOLDERS = true`.
+- `userFolderName(fields)` — strips a leading `@`, trims, sanitizes to ONE
+  segment (an odd/malicious handle can never create nested folders); empty
+  handle → `""`, and the builders fall back to the master-folder-root layout
+  instead of an "unknown" bucket.
+- `baseNamesUser(base, user)` — case-insensitive exact or `"user "` prefix
+  match, so a `{user}`-template base (`nasa - Hello world - 111`) is never
+  doubled to `nasa - nasa - …` by the forced prefix.
+- `buildRawMediaPath` now builds `<master>/<user>/<base>/NNN.ext`
+  (`XMedia/nasa/nasa - Hello world - 111/001.jpg`) unless
+  `userFolders === false` (restores `XMedia/<base>/NNN.ext`); `rawMasterFolder: ""`
+  still returns the legacy flat filename untouched.
+- `buildArchiveFilename` forces the username into the name whenever the
+  template would omit `{user}`: `{id}` → `nasa - 111.cbz`, while
+  `{user} - …` stays as-is. Archives are saved by an anchor click whose
+  `download` attribute cannot carry folders, so the *name* is the only
+  differentiator — this is the user's "when folders are impossible" rule.
+
+`background.js`:
+
+- `OUTPUT_SETTINGS_DEFAULTS.userFolders = true`, normalization
+  `merged.userFolders = merged.userFolders !== false`.
+- `rawPathForItem`: legacy rows (no naming metadata) read the author directly
+  from `item.author` (NOT `namingFieldsForItem`, which would have invented an
+  "unknown" bucket); user segment omitted when `userFolders:false` or no
+  author.
+- Archive naming call passes `userFolders` through.
+
+`sidepanel.js` / `sidepanel.html` (both ports):
+
+- New **One folder per user (XMedia/<user>/…)** checkbox in Output settings,
+  default checked, persisted to `storage.sync.userFolders`, live preview
+  shows `Downloads/XMedia/nasa/<post>/001.jpg` (archive preview shows the
+  forced username too).
+
+### Part 2 — "doubles as dedupe"
+
+The same user's media found on the home timeline, a profile and its `/media`
+page now shares ONE folder (per-user segment = owning post's author, and
+repost/quote attribution is already resolved upstream), so even a repeat
+listing of the same media becomes visibly the same path — on top of the
+v3.10 byte + source-URL verification, which is unchanged.
+
+### Tests + validation
+
+- `tests/naming.test.js` — rewritten expectations for the per-user layout;
+  new `userFolderName` and default-ON / toggle-OFF / no-author cases; archive
+  username-forcing (`{id}` → `nasa - 111.cbz`) + `userFolders:false` restore.
+- `tests/downloader.test.js` — per-user path for real worker runs; new test:
+  media from two DIFFERENT users lands in separate user folders; new test:
+  `userFolders:false` restores the pre-v3.11 master layout.
+- `tests/media-kinds.test.js` — path assertions updated.
+- Legacy flat-path expectations for `rawMasterFolder: ""` kept byte-for-byte.
+- Full suite: **167 pass / 0 fail**.
+- `firefox-extension/` re-synced (`lib/naming.js`, `background.js`,
+  `sidepanel.js`, `sidepanel.html`; `content.js` keeps its intentional
+  MAIN-world injection shim).
+
+### Still open (deliberate)
+
+- **Random-name issue: pending review — do not close until the user tests.**
+- Live spot-check of the per-user layout (WORKLIST P0 v3.11 section) and the
+  Firefox about:debugging master-folder-subpath check.
+- No release zip cut for v3.11 yet (`releases/x-media-downloader-v3.10.0-ci.zip`
+  is stale); cut + offline-verify after the user confirms the layout.
+
 ## 2026-09-03 — v3.10 byte-identical + source-URL duplicate verification (no more double saves under renamed files)
 
 **Branch:** `arena/01a0667d-twitter-batch-download` · **Manifest 3.9.0 → 3.10.0** ·

@@ -2,6 +2,12 @@
 
 This folder is Firefox-compatible port of `../extension/` Chrome MV3 extension.
 
+**v3.11 (2026-09-03):** synced — per-user folders
+(`XMedia/<user>/<post name>/001.jpg`, default ON), the `userFolders` toggle in
+Output settings, and username-forced archive names. Same pending items as
+Chrome: no live run yet, and the release zip is not cut until the user
+confirms the layout.
+
 ## Why separate folder
 
 - Chrome uses: manifest_version 3, `sidePanel`, `offscreen`, `background.service_worker`, `world: MAIN` content script, `chrome.scripting`.

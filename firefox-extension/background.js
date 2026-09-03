@@ -482,6 +482,12 @@ const OUTPUT_SETTINGS_DEFAULTS = {
   rawMasterFolder: "XMedia", // "" (empty) = master folder OFF → old flat layout
   nameTemplate: "{user} - {text} - {id}",
   outputFormat: "raw",
+  // v3.11 — per-user folders:
+  //   ON  → XMedia/<user>/<post name>/001.jpg (the user = the owning post's
+  //         author, so media from the home timeline, a profile and the
+  //         /media page of the SAME user collapse into one folder).
+  //   OFF → XMedia/<post name>/001.jpg (pre-v3.11 layout).
+  userFolders: true,
   // v3.6 — media-kind handling:
   gifOutput: "gif",     // "gif" = convert X's silent MP4 "GIFs" to real .gif files; "mp4" = keep the source clip
   archiveGifs: true,    // GIFs join per-post archives like photos (ZIP/CBZ only — never PDF)
@@ -502,6 +508,7 @@ function normalizeOutputSettings(stored) {
   merged.archiveGifs = merged.archiveGifs !== false;
   merged.archiveVideos = merged.archiveVideos === true;
   merged.verifyDuplicates = merged.verifyDuplicates !== false;
+  merged.userFolders = merged.userFolders !== false;
   return merged;
 }
 
@@ -566,11 +573,17 @@ function rawPathForItem(item, settings, extOverride) {
   const master = naming.normalizeRawMasterFolder(settings?.rawMasterFolder);
   if (master === "") return swapExt(item.filename);
   if (item.mediaIndex === undefined || item.mediaIndex === null) {
+    // Legacy rows carry no naming metadata but DO carry the owning post's
+    // author, so the per-user folder (when enabled) can still be honored.
+    // The author is read directly (not through namingFieldsForItem, which
+    // would inject an "unknown" bucket for rows that never had one).
     const legacyLeaf = String(swapExt(item.filename) || "media.bin").split("/").pop();
-    return naming.sanitizeArtifactFilename(`${master}/${legacyLeaf}`, `XMedia/${legacyLeaf}`);
+    const rawUser = settings?.userFolders === false ? "" : String(item.author || "").replace(/^@/, "").trim();
+    const root = rawUser ? `${master}/${naming.userFolderName({ user: rawUser })}` : master;
+    return naming.sanitizeArtifactFilename(`${root}/${legacyLeaf}`, `XMedia/${legacyLeaf}`);
   }
   return naming.buildRawMediaPath(
-    { rawMasterFolder: master, nameTemplate: settings?.nameTemplate },
+    { rawMasterFolder: master, nameTemplate: settings?.nameTemplate, userFolders: settings?.userFolders },
     namingFieldsForItem(item),
     item.mediaIndex,
     extOverride || extensionForItem(item),
@@ -1793,7 +1806,11 @@ async function runArchivePass() {
     const groupFormat = effectiveGroupFormat(group, format);
     const lead = group[0];
     const fields = namingFieldsForItem(lead);
-    const filename = naming.buildArchiveFilename({ nameTemplate: settings.nameTemplate }, fields, groupFormat);
+    const filename = naming.buildArchiveFilename(
+      { nameTemplate: settings.nameTemplate, userFolders: settings.userFolders },
+      fields,
+      groupFormat
+    );
     const job = {
       format: groupFormat,
       filename,

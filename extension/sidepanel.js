@@ -428,20 +428,31 @@ const PREVIEW_FIELDS = {
   date: "2026-09-01T09:15:00.000Z"
 };
 
-const outputSettingsState = { rawMasterFolder: XDLNaming.DEFAULT_RAW_MASTER_FOLDER, nameTemplate: XDLNaming.DEFAULT_NAME_TEMPLATE, outputFormat: "raw" };
+const outputSettingsState = {
+  rawMasterFolder: XDLNaming.DEFAULT_RAW_MASTER_FOLDER,
+  nameTemplate: XDLNaming.DEFAULT_NAME_TEMPLATE,
+  outputFormat: "raw",
+  userFolders: XDLNaming.DEFAULT_USER_FOLDERS
+};
 
 function renderNamePreview() {
   const master = XDLNaming.normalizeRawMasterFolder(outputSettingsState.rawMasterFolder);
   const template = outputSettingsState.nameTemplate;
   const format = XDLNaming.normalizeOutputFormat(outputSettingsState.outputFormat);
   const base = XDLNaming.makePostBaseName(template, PREVIEW_FIELDS);
+  const user = outputSettingsState.userFolders === false ? "" : XDLNaming.userFolderName(PREVIEW_FIELDS);
+  const root = master !== "" && user ? `${master}/${user}` : master;
   let example;
   if (format === "raw") {
     example = master !== ""
-      ? `Downloads/${master}/${base}/001.jpg`
+      ? `Downloads/${root}/${base}/001.jpg`
       : `Downloads/x-media/nasa_Sunrise over the Pacific…_${PREVIEW_FIELDS.id}_1.jpg (old flat layout)`;
   } else {
-    example = `Downloads/${XDLNaming.buildArchiveFilename({ nameTemplate: template }, PREVIEW_FIELDS, format)}`;
+    example = `Downloads/${XDLNaming.buildArchiveFilename(
+      { nameTemplate: template, userFolders: outputSettingsState.userFolders },
+      PREVIEW_FIELDS,
+      format
+    )}`;
   }
   $("namePreview").textContent = `Example file name: ${example}`;
 }
@@ -509,11 +520,12 @@ function buildTemplateChecks(storedTemplate) {
 }
 
 chrome.storage.sync.get(
-  { rawMasterFolder: XDLNaming.DEFAULT_RAW_MASTER_FOLDER, nameTemplate: XDLNaming.DEFAULT_NAME_TEMPLATE, outputFormat: "raw", gifOutput: "gif", archiveGifs: true, archiveVideos: false, verifyDuplicates: true },
+  { rawMasterFolder: XDLNaming.DEFAULT_RAW_MASTER_FOLDER, nameTemplate: XDLNaming.DEFAULT_NAME_TEMPLATE, outputFormat: "raw", userFolders: true, gifOutput: "gif", archiveGifs: true, archiveVideos: false, verifyDuplicates: true },
   (stored) => {
     outputSettingsState.rawMasterFolder = String(stored.rawMasterFolder);
     outputSettingsState.nameTemplate = String(stored.nameTemplate);
     outputSettingsState.outputFormat = XDLNaming.normalizeOutputFormat(stored.outputFormat);
+    outputSettingsState.userFolders = stored.userFolders !== false;
 
     // Master folder: saved verbatim on change — the EMPTY string is
     // meaningful ("no master folder, old flat layout"), so this field must
@@ -548,6 +560,17 @@ chrome.storage.sync.get(
     verifyDuplicatesBox.checked = stored.verifyDuplicates !== false;
     verifyDuplicatesBox.addEventListener("change", () => {
       chrome.storage.sync.set({ verifyDuplicates: verifyDuplicatesBox.checked });
+    });
+    // v3.11 — per-user folders inside the master folder. The user segment is
+    // the owning post's author, so media found on the home timeline, a
+    // profile page and the /media page of the same user all share one folder
+    // (visual dedupe) on top of the byte/source-URL verification.
+    const userFoldersBox = $("userFolders");
+    userFoldersBox.checked = outputSettingsState.userFolders;
+    userFoldersBox.addEventListener("change", () => {
+      outputSettingsState.userFolders = userFoldersBox.checked;
+      chrome.storage.sync.set({ userFolders: userFoldersBox.checked });
+      renderNamePreview();
     });
 
     // Stored default format (settings card) + per-job picker (dock). The

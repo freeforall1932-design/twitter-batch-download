@@ -130,6 +130,7 @@
 
       <label class="check-label settings-check"><input id="archiveGifs" type="checkbox"> Include GIFs in post archives (ZIP/CBZ only, never PDF)</label>
       <label class="check-label settings-check"><input id="archiveVideos" type="checkbox"> Include videos in post archives (ZIP/CBZ only — archives can get large)</label>
+      <label class="check-label settings-check" title="Save raw downloads as XMedia/<user>/<post name>/001.jpg… — one folder per user the media is sourced from, so a user's whole media archive lives together and media seen on the home timeline, a profile and its /media page lands in the SAME folder (the folder doubles as a visual dedupe; byte + source-URL verification still runs). Archives cannot create folders, so the username is forced into the archive file name instead."><input id="userFolders" type="checkbox" checked> One folder per user (XMedia/&lt;user&gt;/…)</label>
       <label class="check-label settings-check" title="Before saving, check the media's source URL and SHA-256 content hash against already-downloaded files. Byte-identical or same-URL media is skipped instead of saved again under a new name."><input id="verifyDuplicates" type="checkbox" checked> Skip duplicates (byte compare + source URL)</label>
       <p class="hint">Off = GIFs/videos always save as separate files, even when photos of the same post are archived.</p>
 
