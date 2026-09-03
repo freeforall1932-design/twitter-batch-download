@@ -1,6 +1,6 @@
 # Development Worklist
 
-_Last audited: 2026-09-03 (this session = Firefox port: separate firefox-extension/ folder MV2 sidebar_action + compat shims, README, manifest variant. Prev = v3.6.3 naming-degarble + perf queue:
+_Last audited: 2026-09-03 (this session = **v3.7 Fetch button**: shallow auto-fetch on tab open/route change, in-page Fetch dock, hybrid deep fetch (scroll → silent GraphQL fill), Side Panel Fetch/Rescan/Reload-tab controls, plus an 8-item missing-logic audit — see the newest IMPROVEMENT_LOG entry. Prev = Firefox port: separate firefox-extension/ folder MV2 sidebar_action + compat shims, README, manifest variant. Prev = v3.6.3 naming-degarble + perf queue:
 `sanitizeArtifactFilename` strips invisible bidi/format controls, the
 `buildFallbackFilenames` last resort is no longer random
 `media_<timestamp>` text, `queueChanged` broadcasts are throttled, one
@@ -33,7 +33,7 @@ No manual API key / password / cookie paste. Self-hosted against the signed-in X
 | Area | Status | Notes |
 |---|---|---|
 | Manifest V3 / no build | Done | Plain JS under this folder. |
-| Side Panel two-tab queue | Reworked after live testing | Capture is **always on** in every X tab — no watch command. One download action (`Select all` + `Download selected`); `Download all in tab` removed as redundant. Per-row remove, post deep-link, live active-tab status pill. |
+| Side Panel two-tab queue | Reworked after live testing | Capture is **always on** in every X tab — no watch command. One download action (`Select all` + `Download selected`); `Download all in tab` removed as redundant. Per-row remove, post deep-link, live active-tab status pill. v3.7 Scroll card: `Fetch media` / `Stop` / `Auto-scroll only` / `Rescan tab`, the **Then fetch the rest silently** + **Show the Fetch button on X pages** switches, and a `Reload tab` button in the status pill for tabs that predate the extension. |
 | Persistent queue + restart reconcile | Done | `batchDownloadQueueV1`; starting/downloading recovery via `chrome.downloads.search`. |
 | Profile discovery | Implemented, needs live-X | Capture-first op IDs + bundle scrape fallback; timeline_v2/legacy; empty-page stop. |
 | Live GraphQL/header/response capture | Reworked after live testing | **No operation allowlist for responses** (that is what broke homepage capture). Allowlist retained only for Remote-fetch request metadata. Adds a 40-entry replay buffer and an SPA `pushState`/`popstate` route watcher. No cookie values in bag. |
@@ -43,7 +43,9 @@ No manual API key / password / cookie paste. Self-hosted against the signed-in X
 | Per-post ZIP/CBZ/PDF output | **Done (v3.5, kind rules v3.6), needs live spot-check** | One archive per post (≤4 items), assembled in the offscreen document, saved via `<a download>` anchor (blob-filename quirk); worker data-URL fallback. v3.6: PDF is photos-only (GIF/video posts degrade PDF→ZIP); GIFs archive by default, videos opt-in; warnings at queueStart. NOT the removed whole-batch ZIP. |
 | GIF → real .gif + quality guarantees | **Done (v3.6), needs live spot-check** | `normalizePhotoUrl` forces `name=orig` on every source; videos keep highest-bitrate MP4; GIFs convert MP4→GIF89a in the offscreen document (`lib/gifEncoder.js`, bounded 30 s/360 frames/720 px) with MP4 fallback on any failure; `gifOutput` toggle. |
 | Naming-scheme checkboxes | **Done (v3.5), hardening (v3.6.2)** | `nameTemplate` (sync, default `{user} - {text} - {id}`), checkbox UI + live preview + manual input for custom templates; id fallback, reserved-name prefix. v3.6.2: `makePostBaseName` collapses separators after sanitizing so a token whose content is stripped (e.g. text "???") can't leave `nasa -  - 111`. |
-| Offline CI | **Done (v3.5), hardened (v3.6.1), actions bumped (2026-09-02 follow-up)** | `.github/workflows/extension-tests.yml` + byte-identical `docs/ci/extension-tests.yml` (see `docs/ci/README.md`): read-only permissions, concurrency cancel, timeout, glob safe syntax check, packaging artifact assertion; syntax + `node --test` (125 as of the v3.6.3 naming-degarble queue: Tasks 1–5 landed 5 new regression tests + 1 review-pass photo-extension test) + packaging smoke. Actions on `@v5` — v4 declared the `node20` runtime that runner images now force onto node24 with a warning; v5+ declare `node24` (upstream is at v7, see IMPROVEMENT_LOG). Both the packaging script and its CI assertion were made exit-code-honest this pass (see next row). No real-browser CI — GitHub runners cannot drive MV3 (verified in nh-dw-2.0). |
+| Offline CI | **Done (v3.5), hardened (v3.6.1), actions bumped (2026-09-02 follow-up)** | `.github/workflows/extension-tests.yml` + byte-identical `docs/ci/extension-tests.yml` (see `docs/ci/README.md`): read-only permissions, concurrency cancel, timeout, glob safe syntax check, packaging artifact assertion; syntax + `node --test` (135 as of v3.7 = the v3.6.3 queue's 6 + 10 Fetch-button/audit regressions) + packaging smoke. Actions on `@v5` — v4 declared the `node20` runtime that runner images now force onto node24 with a warning; v5+ declare `node24` (upstream is at v7, see IMPROVEMENT_LOG). Both the packaging script and its CI assertion were made exit-code-honest this pass (see next row). No real-browser CI — GitHub runners cannot drive MV3 (verified in nh-dw-2.0). |
+| Fetch button / deep fetch | **New (v3.7), needs live-X** | In-page `.xdl-fetch-dock` (Fetch media / Stop / ×) + Side Panel `Fetch media`. Shallow pass (replay + DOM rescan + video resolve, no page movement) runs automatically on tab open and every route change; deep fetch = shallow → existing auto-scroll engine → optional silent `discoveryStart` fill of the same profile (rows land in the Remote fetch list; profiles only, never a single post). Run tokens make Stop authoritative; `scrollStop` stops both engines. |
+| Capture robustness audit (v3.7) | **Done, regression-tested** | Fixed: `safeSend` hung awaiting callers on a dead context (wedged the video resolver until a page reload), a route change dropped its 1800 ms staged scan, one failed video resolve blacklisted that post for the tab's life (now a 2-attempt budget), Stop + restart could leave two scroll loops, every replay re-cloned the whole MAIN-world buffer (now `seq`/`since` incremental), `scrollRescan` had no sender, `window.__xdl_active` dead state, `profileHandleFromUrl` threw on a non-http origin. |
 | Per-tweet action bar | Expanded (Rank A) | `Download` **and** `Add to queue` on every media post, plus toasts. Reimplemented locally, not copied. |
 | Popup DOM auto-scroll bulk | **Removed** | The popup's competing scroll+download loop is deleted; the popup is now an Open-Side-Panel launcher with a live capture status line. |
 | ZIP export (whole-batch) | **Removed — stays removed** | The multi-GB whole-batch archive path stays deleted. v3.5's per-post archive (≤4 images, offscreen-assembled) is a different, explicitly requested feature and must not grow into batch archiving. |
@@ -121,11 +123,29 @@ Use this before claiming “ready” or merging large changes:
       and quote rows carry `isQuote` + quoted-post attribution; reposts honor
       Include reposts. Replies remain excluded.
 - [x] Filename sanitization + invalid-filename fallback ladder still works.
+- [x] v3.7: every `chrome.runtime.sendMessage` caller is released even when the
+      extension context is invalidated (`safeSend` always calls back;
+      `withTimeout` bounds the round trip) — no awaiting path can wedge.
+- [x] v3.7: long-running loops (auto-scroll, deep fetch, silent fill) are
+      run-token guarded, so Stop + immediate restart cannot double-run and a
+      superseded run never writes shared state.
+- [x] v3.7: the deep fetch's silent fill is cancelled by Stop (`discoveryStop`
+      sent from `stopCapture`, not only from the abandoned poll loop).
+- [x] v3.7: staged scan passes are uncoalesced (`scheduleScanAt`) — the
+      coalescing `scheduleScan` stays for the MutationObserver only.
+- [x] v3.7: MAIN→isolated replay is incremental (`seq` / `since`) and stays
+      backwards compatible with a caller that sends no cursor.
 
 ### Deprecated / dead code to keep out
 
 - Legacy runtime commands and batch-ZIP session state: `downloadZip`, `fetchAsArrayBuffer`, `getVideoUrl`, `downloadVideo`, `zipBuffers`, `useZip`, `bulkId`, and the old `lib/zip-writer.js` batch archiver. (The v3.5 `lib/zipWriter.js`/`XDLZip` STORE writer is per-post only and is NOT this.)
 - `webRequest` permission without a real listener.
+- The auto-scroll-only in-page badge (`.xdl-autoscroll-badge`,
+  `showAutoScrollBadge`/`updateAutoScrollBadge`/`hideAutoScrollBadge`) — v3.7
+  folded it into the single `.xdl-fetch-dock` widget. Do not re-add a second
+  floating badge; two widgets fighting over the same corner is why it merged.
+- A separate `scrollFetchStop` command — `scrollStop` stops both engines, and an
+  extra handler with no sender now fails the contract test.
 - Hardcoded third-party query IDs as the only discovery path (capture + scrape is OK; single stale ID as sole source is not).
 
 ## P0 — repo layout & release packaging (try-it-out path)
@@ -204,6 +224,30 @@ never executed in a browser) and **item 13** (live fixtures).
       names its folder `nasa - <id>` (no `-  -` gap), and that a photo-only
       ZIP run never shows the "mix" warning while a photo+GIF run still does.
 
+16. **Open (v3.7, never run in a browser)** — Fetch button pass on a real
+    signed-in profile:
+    - Open `https://x.com/<handle>` in a **new tab with the Side Panel closed**:
+      the first screenful must list on its own within ~2–4 s (shallow fetch),
+      and the floating **Fetch media** dock must sit bottom-right without
+      covering X's own nav.
+    - Press **Fetch media**: the dock label must walk
+      `Reading this view` → `Scrolling the timeline` → `Silently fetching @handle`,
+      the button must read **Stop**, and the listed count must climb.
+    - **Stop** mid-scroll and again mid-fill: the page must stop moving at once,
+      the Remote fetch tab must report a clean stop (no fake error), and a second
+      **Fetch media** right after must start exactly one loop.
+    - Silent-fill rows must appear in the **Remote fetch** list only (the two
+      lists stay separate), deduped against what the scroll already listed.
+    - Untick **Then fetch the rest silently** → the fetch ends after the scroll.
+      Untick **Show the Fetch button on X pages** → the dock disappears, but a
+      *running* fetch must still show its Stop. The dock's **×** hides it for
+      that tab and the panel switch brings it back.
+    - On a single post (`/handle/status/id`) and on `/home` the fill must skip
+      with its note, not error.
+    - Reload the extension at `chrome://extensions` with an X tab already open:
+      the panel must offer **Reload tab**, and after reloading, video posts must
+      resolve again (the old wedge is fixed).
+
 **Live GraphQL reference needed for item 15 / 14 (a sanitized capture, no
 credentials):** the display-name field on the GraphQL path is
 `core.user_results.result.legacy.name` (already used by `background.js` for
@@ -265,7 +309,7 @@ control strip in `sanitizeArtifactFilename`, and the deterministic fallback in
 `queueChanged`, one `resolveTweetMedia` media resolver, bounded `injected.js`
 replay + marker walk). Tasks **6–7 stay holds** — do not implement them until a
 big-queue session provides live jank evidence, or a decision to split
-`background.js` regardless. Full suite: **125 pass / 0 fail**. Manifest bumped
+`background.js` regardless. Full suite: **125 pass / 0 fail** (v3.6.3) → **135 pass / 0 fail** (v3.7). Manifest bumped
 **3.6.2 → 3.6.3** and `releases/x-media-downloader-v3.6.3.zip` was cut +
 offline-verified (manifest at root, byte-identical to `extension/`).
 
@@ -361,7 +405,7 @@ Tasks:
 - Reposts off/on correct.
 - Protected / NSFW / logged-out / rate-limit messages specific.
 - Stop discovery; stop downloads; Side Panel reload retains state.
-- **125** local Node tests still green after cleanup (`node --test tests/*.test.js`: background + content + naming + zip-writer + pdf-builder + gif-encoder + archive-lib + downloader + media-kinds + injected suites).
+- **135** local Node tests still green after cleanup (`node --test tests/*.test.js`: background + content + naming + zip-writer + pdf-builder + gif-encoder + archive-lib + downloader + media-kinds + injected suites).
 - Both CI copies parse as YAML and stay byte-identical (`diff .github/workflows/extension-tests.yml docs/ci/extension-tests.yml`); a workflow edit must be re-applied to BOTH.
 - `scripts/package-release.sh` exits **0** (was a deterministic 141 SIGPIPE) and the CI packaging step passes verbatim even with more than one zip in `releases/`.
 - The release zip unzips to a structurally loadable folder: manifest at root, contents identical to `extension/`, every manifest + runtime reference resolvable.

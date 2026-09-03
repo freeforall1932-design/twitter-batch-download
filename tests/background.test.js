@@ -1458,13 +1458,13 @@ test("every runtime action the UI sends has a handler, and every handler is reac
     );
   }
 
-  // Handlers with no sender are only allowed for read-only panel hooks and
-  // test seams; anything else means a documented feature no button can reach.
-  const allowedUnreachable = new Set(["scrollRescan"]);
+  // Handlers with no sender mean a documented feature no button can reach.
+  // (The old `scrollRescan` exception is gone: v3.7 gave it a real Rescan
+  // button, so both handler sets are now fully reachable.)
   for (const action of bgHandled) {
-    assert.ok(
-      sent.has(action) || allowedUnreachable.has(action),
-      `"${action}" is handled in background.js but no UI sends it`
-    );
+    assert.ok(sent.has(action), `"${action}" is handled in background.js but no UI sends it`);
+  }
+  for (const action of contentHandled) {
+    assert.ok(sent.has(action), `"${action}" is handled in content.js but no UI sends it`);
   }
 });

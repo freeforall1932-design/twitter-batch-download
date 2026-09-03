@@ -46,6 +46,12 @@
   const REPLAY_MAX_BYTES = 8 * 1024 * 1024; // ~8MB of serialized JSON, newest wins
   const replayBuffer = [];
   let replayBytes = 0;
+  // Monotonic sequence number for every buffered response. The isolated world
+  // remembers the highest seq it has already handled and asks for a replay
+  // "since" that number, so the frequent shallow fetch passes (tab open, route
+  // change, Fetch button) do not re-structured-clone the same multi-megabyte
+  // timeline payloads across worlds over and over.
+  let replaySerial = 0;
   const capturedOperations = new Map();
 
   // Cheap media-marker walk. The old code JSON.stringify()'d every GraphQL
@@ -138,7 +144,6 @@
       replayBytes -= dropped.bytes || 0;
     }
   }
-
   function emitGraphqlResponse(urlString, body) {
     if (!isGraphqlUrl(urlString) || !body || typeof body !== "object") return;
     const parsed = parseGraphqlUrl(urlString) || { operationName: "Unknown", queryId: "" };
@@ -161,22 +166,29 @@
       json: body,
       at: Date.now(),
       bytes: serialized.length,
+      seq: ++replaySerial,
       key: `${parsed.operationName}:${parsed.queryId}:${serialized.length}:${serialized.slice(0, 64)}`
     };
     bufferResponse(entry);
     post("xdlGraphqlResponse", entry);
   }
 
-  function replayAll() {
-    // Re-send everything buffered. The isolated world deduplicates by item id,
-    // and the background queue deduplicates again, so replays are safe.
+  // Replay everything the isolated world has not seen yet. `since` is the
+  // highest entry.seq the content script already handled (0/absent = all). The
+  // isolated world deduplicates by item id and the background queue dedupes
+  // again, so replaying is always safe — this only avoids paying for it twice.
+  function replayAll(since = 0) {
+    const floor = Number(since) || 0;
+    let count = 0;
     for (const entry of replayBuffer) {
+      if ((entry.seq || 0) <= floor) continue;
       post("xdlGraphqlResponse", entry, { replay: true });
+      count += 1;
     }
     for (const capture of capturedOperations.values()) {
       post("xdlNetworkCapture", capture, { replay: true });
     }
-    post("xdlReplayDone", { count: replayBuffer.length });
+    post("xdlReplayDone", { count, lastSeq: replaySerial });
   }
 
   function parseJsonMaybe(text) {
@@ -300,7 +312,7 @@
     if (event.source !== globalScope) return;
     const payload = event.data;
     if (!payload || payload.source !== "XDL_CONTENT") return;
-    if (payload.type === "xdlRequestReplay") replayAll();
+    if (payload.type === "xdlRequestReplay") replayAll(payload.since);
   });
 
   patchXhr();

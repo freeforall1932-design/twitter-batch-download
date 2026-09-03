@@ -2,6 +2,175 @@
 
 Chronological implementation record for X Media Downloader.
 
+## 2026-09-03 — v3.7 Fetch button: auto shallow fetch on tab open, in-page Fetch dock, hybrid deep fetch
+
+**Branch:** `arena/01a065c5-twitter-batch-download` · **Manifest 3.6.3 → 3.7.0** ·
+**Tests 125 → 135**
+
+**Session input (verbatim intent):** "when I open new tab into someone profile it
+doesn't automatically fetch until I scroll down and it load — can you add fetch
+button, look up my other repo rule34 one, there's already deployed fetch function
+although it's broken, or just make it from scratch specifically for Twitter/x
+website. This button should trigger automatic fetch as if I was scrolling and the
+page load. Or should I just reload the page again to trigger my extension? Can you
+look up the logic code in extension and see if there's any missing logic or broken
+code after previous session."
+
+Decisions the user made up front (asked before writing code): the button lives
+**both** in-page and in the Side Panel; a **shallow** fetch fires by itself on tab
+open/route change while the deep one stays a click; and the deep fetch is
+**hybrid** — scroll first, then silently page the profile.
+
+### Diagnosis — why a new profile tab looked dead until you scrolled
+
+Capture has been always-on since v3.2, but it was purely **reactive**: it listed
+whatever X had already rendered or already fetched, and nothing in the extension
+ever made X load *more*. X renders roughly one screenful of a profile and only
+requests the next batch when the viewport approaches the bottom, so a freshly
+opened tab legitimately had nothing more to give — the only driver was the Side
+Panel's **Start auto-scroll**, which requires the panel to be open and attached to
+that tab. Open a profile in a new tab without the panel and nothing ever scrolls.
+
+Four real defects made that worse (all found in this audit, all fixed below):
+a dead extension context wedged the video resolver forever, a route change only
+ran two of its three intended scans, one failed video resolve blacklisted that
+post for the rest of the tab's life, and a replay re-cloned the entire buffered
+GraphQL payload across worlds every time.
+
+### Sister repo check — `freeforall1932-design/rule34video`
+
+Read its deployed fetch: `panel-queue.js startCrawl()` →
+`adapter.describe(route)` (learn total pages) → `adapter.fetchPage(route, page)`
+per page over a `1-99` / `all` range, with `videoAdapter.fetchText()` scraping
+paginated HTML and `worldAdapter.request()` POSTing a JSON search API — i.e. a
+**remote paginated crawler**, not a scroll driver. That pattern does not port to
+X (no paginated HTML listings), but this repo already has its X-native twin:
+`background.js runProfileDiscovery()` cursor-pages `UserMedia` GraphQL with
+live-captured query IDs/features. So instead of importing the rule34 code, v3.7
+**reuses the existing discovery engine** as the second phase of the new deep
+fetch — the rule34 idea, expressed in the only way X allows.
+
+### What was built
+
+1. **Two-level fetch in `content.js`.**
+   - `shallowFetchPass()` — no page movement: `requestReplay()` (pull whatever
+     GraphQL the tab already buffered), `scanVisibleMedia()` (DOM photos +
+     queue video posts), then await the rate-bounded per-post video resolve.
+     Runs **by itself** on load (`shallowFetchPass("load")` + `armLoadFetch()`
+     at 900/2200/4000 ms) and on every SPA route change. This is the piece a
+     new profile tab was missing.
+   - `startDeepFetch()` — shallow → `autoScrollLoop()` (the existing,
+     live-tested engine) → `runRemoteFill()`. Click-only, never automatic.
+2. **In-page Fetch dock** (`.xdl-fetch-dock`, bottom-right) replacing the
+   auto-scroll-only badge: one widget that starts a fetch, shows the phase
+   (`Reading this view` / `Scrolling the timeline` / `Silently fetching @handle`)
+   with a live listed-count, turns its main button into **Stop** while running,
+   and has an **×** to dismiss it for that tab. A *running* fetch always shows
+   the dock even when the button is switched off, so the user can never lose
+   control of a tab the extension is scrolling.
+3. **Silent gap-fill (`runRemoteFill`).** After the scroll, the profile handle
+   is read from the URL (`remoteFillTarget()` — profiles and `/media`,
+   `/with_replies`, `/highlights` only; never a single post, never `home`/
+   `search`/`i`) and `discoveryStart` is sent to the worker with the panel's own
+   limit/repost/quoted settings. The run is polled (`discoveryGet`, 1 s) so the
+   dock shows progress, and Stop sends `discoveryStop`. Rows land in the
+   **Remote fetch** list — the two lists stay separate by standing decision.
+4. **Side Panel Scroll-capture card:** `Fetch media` (primary), `Stop`,
+   `Auto-scroll only`, `Rescan tab`, plus two switches — **Then fetch the rest
+   silently** (`deepFetchRemote`) and **Show the Fetch button on X pages**
+   (`showFetchButton`) — and a **Reload tab** button that appears in the status
+   pill when the active X tab has no live content script. The status pill now
+   reports the fetch phase; `scrollStatus` grew `fetching`, `fetchPhase`,
+   `fetchNote`, `fetchTarget`, `deepFetchRemote`, `showFetchButton`,
+   `dockHidden`, and `scans`.
+
+### Bugs found in the audit (each fixed + regression-tested)
+
+1. **`safeSend()` never released awaiting callers when the context was dead.**
+   `if (!chrome.runtime?.id) return;` skipped the callback, so after an
+   extension reload/update on an already-open X tab, `initEnv()`/`getTweetMedia()`
+   promises hung forever and `drainPendingVideoTweets` wedged with
+   `resolvingVideos` stuck `true` — no video post in that tab was ever listed
+   again until the page was reloaded. That is precisely the user's "should I
+   just reload the page again to trigger my extension?" symptom; the answer is
+   now no. Fixed: the callback always fires (`null`), plus `runtimeAlive()` and
+   a `withTimeout()` budget (90 s, covering the slowest legitimate path — an
+   offscreen GIF conversion) on every `sendMessage` round trip.
+2. **A route change only ran two of its three staged scans.**
+   `scheduleScan(700); scheduleScan(1800);` — `scheduleScan` coalesces (correct
+   for the MutationObserver), so the second call was silently dropped and a view
+   X rendered in stages lost its last pass. Fixed with an uncoalesced
+   `scheduleScanAt(delay)`; `scans` in the status payload makes it observable.
+3. **One failed video resolve blacklisted the post for the tab's lifetime.**
+   `resolvedVideoTweets.add(tweetId)` happened *before* the fetch and was never
+   rolled back on error, so a rate-limited or transient failure meant that
+   post's video never listed. Fixed with a bounded retry budget
+   (`VIDEO_RESOLVE_ATTEMPTS = 2`, `videoResolveAttempts` map) — recoverable, but
+   never a per-scan hammer.
+4. **Stop + immediate restart could leave two loops scrolling one tab.**
+   `autoScrollRunning` was a shared boolean, so the loop that was supposed to be
+   stopping re-read the *new* run's `true` and kept going. Fixed with per-run
+   tokens (`autoScrollRunId` / `deepFetchRunId`, the same pattern as the
+   worker's `discoveryRunSerial`); a superseded run returns without touching
+   shared state, and `stopCapture()` cancels an in-flight silent fill itself
+   (the abandoned poll loop can no longer report the Stop).
+5. **Every replay re-cloned the whole buffer across worlds.** `requestReplay()`
+   asked for everything (up to 40 entries / ~8 MB) each time, and v3.7 makes
+   replays frequent. `injected.js` entries now carry a monotonic `seq`; the
+   content script tracks `lastReplaySeq` and asks `xdlRequestReplay {since}`,
+   and `replayAll(since)` sends only newer entries (`xdlReplayDone` reports
+   `{count, lastSeq}`). A caller with no cursor still gets everything, so an
+   older content script against a newer MAIN world keeps working.
+6. **`scrollRescan` was a documented hook with no sender.** The panel's new
+   **Rescan tab** button sends it, and `tests/background.test.js`'s contract
+   test now checks *content.js* handlers for reachability too (its stale
+   `allowedUnreachable` exception for `scrollRescan` is gone).
+7. **Dead state:** `window.__xdl_active` was set to `false` and never updated —
+   now `true` once init completes (the guard tests `!== undefined`).
+8. **`profileHandleFromUrl` could throw on a non-http origin.** It passed
+   `window.location.origin` as the URL base; on `file:`/`about:` documents that
+   is the literal string `"null"`, and the WHATWG constructor parses the base
+   first, so even an absolute input threw (caught → silent "not a profile").
+   Base removed. Found by the jsdom harness, kept fixed because a swallowed
+   throw is how features go quietly missing.
+
+### Validation
+
+- `node --test tests/*.test.js` → **135 pass / 0 fail** (+10: fresh-tab shallow
+  fetch, staged-scan count, incremental replay, dock click → deep fetch, dock
+  switch/× behaviour, panel `scrollFetch` + Stop, `scrollRescan`, dead-context
+  recovery, plus the injected `since` replay test). The dead-context test was
+  verified to **fail against the old `safeSend`** before being kept.
+- `tests/content.test.js` shim upgraded (still backwards compatible): element
+  `addEventListener` now records and `el.emit(type)` dispatches, `dataset` is a
+  real proxy over `data-*` attributes (content.js writes `dataset.role` and
+  queries `[data-role="main"]`), `loadContentScript({href})` can start on a
+  profile URL, and `runTimeouts(rounds)` drives delayed passes.
+- **Real-DOM smoke (throwaway, NOT committed):** the actual `extension/content.js`
+  and `extension/sidepanel.js` were run inside jsdom against a fake X profile
+  page with a mock background. Result: zero runtime errors; the dock renders and
+  reports a live count; clicking it walks shallow → scroll → remote →
+  "Fetch complete — 15 listed from this tab. @nasa silent fill: 24 media found →
+  Remote fetch tab."; Stop, the × dismissal, both switches, `Rescan`, and every
+  new panel element id all behave. jsdom's only complaint was its unimplemented
+  `window.scrollBy`.
+- `node --check` on every shipped script in both folders; `firefox-extension/`
+  re-synced (byte-identical except its intentional MAIN-world `<script>` shim
+  and manifest), both manifests at **3.7.0**; `scripts/package-release.sh`
+  re-cut (`releases/x-media-downloader-v3.7.0.zip`).
+
+### Still open (live X, cannot be done offline)
+
+- One signed-in pass of the Fetch button on a real profile: fresh-tab shallow
+  fetch listing without scrolling, the dock's three phases, Stop mid-scroll and
+  mid-fill, the silent fill's rows appearing in the Remote fetch list, and the
+  rate-limit wording if X pushes back on the extra crawl.
+- WORKLIST P0 items 12 / 14 / 15 (quote card, v3.5–v3.6 output, `{name}`) are
+  unchanged and still pending; v3.7 adds item 16.
+- Deliberately NOT done: auto-starting the *deep* fetch on tab open (the user
+  chose shallow-auto + click-for-deep), merging the two lists, and any change to
+  `background.js` — the whole feature rides the existing `discovery*` contract.
+
 ## 2026-09-03 — Firefox port — separate folder, feasibility analysis, MV2 manifest
 
 **Branch:** `arena/01a064df-twitter-batch-download` · **Session input:** create separate folder for Firefox extension, port chrome extension folder into Firefox compatible, check codebase if possible and what would be needed, after reading 3 documents, add task into work list first.

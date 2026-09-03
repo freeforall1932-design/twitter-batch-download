@@ -88,9 +88,9 @@ function loadInjected() {
   // object from the Node `context` reference, so grab the real one to dispatch.
   const windowRef = vm.runInContext("window", context);
   const messageListener = listeners.find((l) => l.type === "message")?.fn;
-  const requestReplay = () => {
+  const requestReplay = (since) => {
     assert.ok(messageListener, "message listener registered");
-    messageListener({ source: windowRef, data: { source: "XDL_CONTENT", type: "xdlRequestReplay" } });
+    messageListener({ source: windowRef, data: { source: "XDL_CONTENT", type: "xdlRequestReplay", since } });
   };
   const graphqlUrl = (op) => `https://x.com/i/api/graphql/abc123/${op}?variables=x`;
 
@@ -136,4 +136,29 @@ test("injected replay buffer is bounded by count during a burst of media respons
   assert.equal(replayed, 40, "replay buffer holds at most 40 entries");
   const replayDone = injected.typePosts("xdlReplayDone")[0];
   assert.equal(replayDone.data.count, 40);
+});
+
+// v3.7: the isolated world now asks for a replay "since" the newest sequence
+// number it already handled, because shallow fetch passes run on every tab open
+// and route change. Without the filter each pass re-structured-cloned the whole
+// (up to ~8 MB) buffer across worlds again.
+test("injected replays only what the isolated world has not seen yet", async () => {
+  const injected = loadInjected();
+
+  await injected.context.fetch(injected.graphqlUrl("UserMedia"));
+  await injected.context.fetch(injected.graphqlUrl("UserMedia"));
+  const live = injected.typePosts("xdlGraphqlResponse").filter((post) => !post.replay);
+  assert.equal(live.length, 2);
+  assert.deepEqual(live.map((post) => post.data.seq), [1, 2], "entries carry a monotonic seq");
+
+  injected.requestReplay(1);
+  const replayed = injected.typePosts("xdlGraphqlResponse").filter((post) => post.replay);
+  assert.equal(replayed.length, 1, "only seq 2 is newer than the caller's cursor");
+  assert.equal(replayed[0].data.seq, 2);
+  assert.equal(injected.typePosts("xdlReplayDone")[0].data.count, 1);
+  assert.equal(injected.typePosts("xdlReplayDone")[0].data.lastSeq, 2);
+
+  // A caller with no cursor (older content script) still gets everything.
+  injected.requestReplay();
+  assert.equal(injected.typePosts("xdlGraphqlResponse").filter((post) => post.replay).length, 3);
 });

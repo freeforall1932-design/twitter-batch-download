@@ -36,8 +36,19 @@ function makeElement(tag, options = {}) {
     get innerHTML() { return this._innerHTML || ""; },
     getAttribute(name) { return name in this.attributes ? this.attributes[name] : null; },
     setAttribute(name, value) { this.attributes[name] = String(value); },
-    addEventListener() {},
-    removeEventListener() {},
+    addEventListener(type, listener) { (this._listeners ||= []).push({ type, listener }); },
+    removeEventListener(type, listener) {
+      if (!this._listeners) return;
+      const index = this._listeners.findIndex((entry) => entry.type === type && entry.listener === listener);
+      if (index !== -1) this._listeners.splice(index, 1);
+    },
+    // Fire a recorded listener the way the browser would. The in-page Fetch
+    // dock's handlers call preventDefault/stopPropagation, so supply both.
+    emit(type, event = {}) {
+      const detail = { type, preventDefault() {}, stopPropagation() {}, ...event };
+      (this._listeners || []).filter((entry) => entry.type === type).forEach((entry) => entry.listener(detail));
+      return detail;
+    },
     appendChild(child) { child.parentElement = this; this.children.push(child); return child; },
     insertAdjacentElement(_position, child) { return this.appendChild(child); },
     get src() { return this.attributes.src || ""; },
@@ -54,6 +65,17 @@ function makeElement(tag, options = {}) {
     querySelectorAll(selector) { return descendants(this).filter((node) => selectorMatches(node, selector)); }
   };
   if (options.className) el.className = options.className;
+  // In a real DOM `dataset` and `data-*` attributes are two views of the same
+  // storage. content.js writes `el.dataset.role` and then queries
+  // `[data-role="main"]`, so the shim has to bridge them or those lookups
+  // silently return null.
+  const dataAttr = (prop) => `data-${String(prop).replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`)}`;
+  el.dataset = new Proxy({}, {
+    get(_target, prop) { return typeof prop === "string" ? el.attributes[dataAttr(prop)] : undefined; },
+    set(_target, prop, value) { if (typeof prop === "string") el.attributes[dataAttr(prop)] = String(value); return true; },
+    has(_target, prop) { return typeof prop === "string" && dataAttr(prop) in el.attributes; },
+    deleteProperty(_target, prop) { if (typeof prop === "string") delete el.attributes[dataAttr(prop)]; return true; }
+  });
   return el;
 }
 
@@ -176,7 +198,7 @@ function loadContentScript(documentOptions = {}) {
     querySelectorAll(selector) { return body.querySelectorAll(selector); }
   };
 
-  const location = { href: "https://x.com/home", origin: "https://x.com" };
+  const location = { href: documentOptions.href || "https://x.com/home", origin: "https://x.com" };
 
   const context = {
     console: { log() {}, warn() {}, error() {} },
@@ -264,6 +286,15 @@ function loadContentScript(documentOptions = {}) {
       return captured;
     },
     runIntervals: () => intervals.forEach((entry) => entry.fn()),
+    // Timers never fire on their own in this shim; run `rounds` generations of
+    // them (a pass may schedule the next one, e.g. shallowFetchPass's settle).
+    runTimeouts: (rounds = 1) => {
+      for (let round = 0; round < rounds; round++) {
+        const pending = timeouts.splice(0, timeouts.length);
+        pending.forEach((entry) => entry.fn());
+      }
+    },
+    timeouts,
     queueAdds: () => sent.filter((message) => message.action === "queueAdd"),
     timelineCaptures: () => sent.filter((message) => message.action === "localTimelineCapture")
   };
@@ -492,4 +523,154 @@ test("DOMContentLoaded alone is enough to attach a deferred stylesheet", () => {
   env.emitDocumentEvent("DOMContentLoaded");
 
   assert.equal(html.children.length, 1, "the deferred style element must be attached");
+});
+
+// ==========================================================================
+// v3.7 — Fetch button: shallow auto-fetch on a fresh tab, the in-page dock,
+// and the deep fetch (scroll + silent fill) it triggers.
+// ==========================================================================
+
+test("a freshly opened profile tab fetches on its own, without scrolling", () => {
+  const env = loadContentScript({ href: "https://x.com/nasa" });
+  // At document_start / DOMContentLoaded X has rendered nothing yet; the first
+  // batch appears moments later. The delayed load passes must pick it up with
+  // no user scrolling — this is the reported "new tab lists nothing" case.
+  env.body.appendChild(makeTweetArticle({ tweetId: "800", handle: "nasa", text: "launch", photos: ["HHH888"] }));
+  env.observers.forEach((observer) => observer.callback());
+  env.runTimeouts(3);
+
+  const ids = env.queueAdds().flatMap((add) => add.items.map((item) => item.id));
+  assert.ok(ids.includes("800-HHH888"), "the first rendered batch lists without scrolling");
+  assert.deepEqual(ids, ["800-HHH888"], "the repeated passes must not list it twice");
+  assert.ok(env.posted.some((message) => message.type === "xdlRequestReplay"),
+    "it also pulls whatever GraphQL the page already fetched");
+});
+
+test("a route change schedules every staged follow-up scan", () => {
+  const env = loadContentScript();
+  env.runTimeouts(3); // drain the load passes so only the route change remains
+  const before = env.emitRuntimeMessage({ action: "scrollStatus" }).scans;
+
+  env.location.href = "https://x.com/nasa/media";
+  env.emitWindowMessage({
+    source: "XDL_INJECTED",
+    type: "xdlUrlChanged",
+    data: { previousUrl: "https://x.com/home", newUrl: "https://x.com/nasa/media" }
+  });
+  env.runTimeouts(2);
+  const after = env.emitRuntimeMessage({ action: "scrollStatus" }).scans;
+
+  // Regression: scheduleScan() coalesces, so the old scheduleScan(700) +
+  // scheduleScan(1800) pair silently dropped the 1800 ms pass — a view X
+  // rendered in stages was only ever scanned twice.
+  assert.equal(after - before, 3, "immediate + 700 ms + 1800 ms scans all ran");
+});
+
+test("replay requests are incremental, so repeated fetches stay cheap", () => {
+  const env = loadContentScript();
+  env.posted.length = 0;
+  env.emitWindowMessage({
+    source: "XDL_INJECTED",
+    type: "xdlGraphqlResponse",
+    data: { seq: 7, operationName: "UserMedia", json: { data: {} } },
+    capturedUrl: "https://x.com/nasa"
+  });
+
+  env.emitRuntimeMessage({ action: "scrollRescan" });
+  const replays = env.posted.filter((message) => message.type === "xdlRequestReplay");
+  assert.equal(replays[replays.length - 1].since, 7,
+    "only responses newer than the last one handled should be re-sent");
+});
+
+test("the in-page Fetch button starts a fetch as if the user scrolled", () => {
+  const env = loadContentScript({ href: "https://x.com/nasa" });
+  const dock = env.body.querySelector(".xdl-fetch-dock");
+  assert.ok(dock, "the dock is injected into the page");
+  assert.equal(dock.style.display, "flex");
+
+  const main = dock.querySelector('button[data-role="main"]');
+  assert.equal(main.textContent, "Fetch media");
+  main.emit("click");
+
+  const status = env.emitRuntimeMessage({ action: "scrollStatus" });
+  assert.equal(status.fetching, true, "the click started a deep fetch");
+  assert.equal(status.fetchPhase, "shallow", "it reads the tab before scrolling it");
+  assert.equal(main.textContent, "Stop", "the same button becomes Stop while fetching");
+  assert.ok(env.posted.some((message) => message.type === "xdlRequestReplay"));
+});
+
+test("the in-page Fetch button respects the Side Panel switch, except while running", () => {
+  const env = loadContentScript();
+  const dock = env.body.querySelector(".xdl-fetch-dock");
+
+  env.emitRuntimeMessage({ action: "scrollSettings", showFetchButton: false });
+  assert.equal(dock.style.display, "none", "switched off → no in-page button");
+
+  // A running fetch must always keep its progress + Stop on the page, or the
+  // user would have no way to stop a tab the extension is scrolling.
+  env.emitRuntimeMessage({ action: "scrollFetch" });
+  assert.equal(dock.style.display, "flex");
+});
+
+test("the in-page × dismisses the dock and the panel switch brings it back", () => {
+  const env = loadContentScript();
+  const dock = env.body.querySelector(".xdl-fetch-dock");
+  dock.querySelector('button[data-role="hide"]').emit("click");
+  assert.equal(dock.style.display, "none");
+
+  env.emitRuntimeMessage({ action: "scrollSettings", showFetchButton: true });
+  assert.equal(dock.style.display, "flex", "re-enabling clears the per-tab dismissal");
+});
+
+test("the Side Panel Fetch command starts a deep fetch and Stop cancels it", () => {
+  const env = loadContentScript();
+  const started = env.emitRuntimeMessage({ action: "scrollFetch", scrollSpeed: "medium", mediaFilter: "all" });
+  assert.equal(started.ok, true);
+  assert.equal(started.fetching, true);
+  assert.equal(started.running, true);
+
+  const busy = env.emitRuntimeMessage({ action: "scrollFetch" });
+  assert.equal(busy.ok, false, "a second fetch must not launch a second engine");
+
+  const stopped = env.emitRuntimeMessage({ action: "scrollStop" });
+  assert.equal(stopped.fetching, false);
+  assert.equal(stopped.running, false);
+  assert.equal(env.emitRuntimeMessage({ action: "scrollStatus" }).fetching, false);
+});
+
+test("Rescan re-reads the tab without scrolling it", () => {
+  const env = loadContentScript();
+  env.posted.length = 0;
+  env.body.appendChild(makeTweetArticle({ tweetId: "810", handle: "nasa", text: "post", photos: ["RES111"] }));
+
+  const status = env.emitRuntimeMessage({ action: "scrollRescan" });
+  assert.equal(status.ok, true);
+  assert.equal(status.fetching, false, "a rescan is not a deep fetch");
+  assert.ok(env.posted.some((message) => message.type === "xdlRequestReplay"));
+  const ids = env.queueAdds().flatMap((add) => add.items.map((item) => item.id));
+  assert.deepEqual(ids, ["810-RES111"]);
+});
+
+// Regression: safeSend() used to return without invoking its callback when the
+// extension context was invalidated (extension reloaded/updated while the X tab
+// stayed open). Every awaiting caller then hung forever, and the video resolver
+// wedged with `resolvingVideos` stuck true — no video post in that tab was ever
+// listed again until the user reloaded the page.
+test("a dead extension context releases awaiting callers instead of wedging capture", async () => {
+  const env = loadContentScript();
+  env.context.chrome.runtime.id = undefined;
+  env.body.appendChild(makeTweetArticle({ tweetId: "900", handle: "nasa", text: "clip", video: true }));
+  env.runIntervals();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  // Context back (a page reload would do this in real life): the same post must
+  // be resolvable again, which is only true if the first attempt released the
+  // resolver and left the post eligible for its bounded retry.
+  env.context.chrome.runtime.id = "test-extension-id";
+  env.body.appendChild(makeTweetArticle({ tweetId: "901", handle: "nasa", text: "clip 2", video: true }));
+  env.runIntervals();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.ok(env.sent.some((message) => message.action === "getTweetMedia"),
+    "video resolution still runs after an invalidated context");
 });
