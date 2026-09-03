@@ -6,12 +6,14 @@
 </head>
 <body>
   <!-- Offscreen document: converts X's silent MP4 "GIF" clips into real
-       animated .gif files (canvas + the streaming GIF89a encoder, balanced
-       or maximum quality) or a true-color APNG (lib/apngEncoder.js). It
-       exists because MV3 service workers have no <video> or canvas. Only
-       chrome.runtime is available here — chrome.storage / chrome.downloads
-       calls would crash the document. -->
+       animated image files — .gif (balanced or maximum quality,
+       lib/gifEncoder.js), animated .webp (lib/webpEncoder.js, true color via
+       the browser's native frame encoder) or a true-color APNG
+       (lib/apngEncoder.js). It exists because MV3 service workers have no
+       <video> or canvas. Only chrome.runtime is available here —
+       chrome.storage / chrome.downloads calls would crash the document. -->
   <script src="lib/gifEncoder.js"></script>
+  <script src="lib/webpEncoder.js"></script>
   <script src="lib/apngEncoder.js"></script>
   <script src="offscreen.js"></script>
 </body>

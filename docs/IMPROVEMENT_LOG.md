@@ -1,5 +1,17 @@
 # Improvement Log
 
+## 2026-09-03 — v3.15 animated-WebP mode + animated-format fallback chain
+
+User pointed out the v3.14 options were only that — options — and asked for **automatic fallback** so a failed conversion still lands as an animated image (with GIF before MP4 as the absolute last resort), plus a **WebP mode** as the middle ground between APNG and GIF, and a review that APNG/WebP/GIF are all genuinely animated formats.
+
+**New animated WebP mode (`webp`)** — `extension/lib/webpEncoder.js` (dependency-free, UMD): browsers cannot encode an animated WebP directly, but `canvas.toBlob("image/webp", quality)` already encodes each frame natively. The new encoder parses those static RIFF WebP frames (validating the VP8/VP8L headers and dimensions), and re-wraps them into the WebP Extended + Animation container exactly per the container spec (VP8X flags, ANIM loop/canvas, 16-byte ANMF headers with 24-bit fields, ALPH propagation, RIFF even-padding). Output is true color at Chrome's lossy quality (`webpQuality 0.9`, 25 fps, ≤1920 px, ≤256 MB) — measured on a 3-frame 48×48 clip: 686 B vs APNG 11.8 KB vs GIF-max 7.1 KB vs balanced GIF 2.6 KB, with accurate per-frame colors. Offscreen `MODES` and the `offscreenConvertGif` allowlist gained `"webp"`; `offscreen.html` loads the new encoder.
+
+**Fallback chain** — workers now hold `ANIMATED_OUTPUT_FIDELITY = ["apng", "webp", "gif-max", "gif"]`; `convertFallbackChain(preferred)` puts the user's choice first and every other animated format after it in fidelity order. `prepareRawDownload` tries each in turn and only when ALL animated formats failed does it fall back to the original MP4 (the user's "use GIF before MP4 as last resort" rule) — never a failed item. `gifOutput` normalization accepts `webp`; Side Panel setting renamed "Animated posts save as" with five options (balanced GIF remains the default) and the hint documents the retry order. Firefox port behavior unchanged (no offscreen → MP4 kept); sidepanel trio still byte-identical.
+
+**Animated-format review (reference decoders):** produced all four encodings from the same 3 frames and opened them with Pillow — GIF (balanced + max), PNG/APNG and WebP each report `n_frames=3` with the right size, loop and durations; APNG is pixel-exact; WebP is true color (≤3/channel lossy delta); GIF-max keeps each frame's hues via its per-frame tables; balanced GIF shows its documented frame-1-global-palette limitation (banding on color-shifting scenes — exactly why the new modes exist).
+
+**Tests (194 pass / 0 fail, ~4 s):** new `tests/webp-encoder.test.js` (7 tests — RIFF/VP8X/ANIM/ANMF structure, flags, 24-bit fields, durations, padding, ALPH propagation, VP8L path, a real reference-encoded VP8 fixture, rejection + single-use guards) and media-kinds additions (webp conversion, APNG→WebP fallback, all-formats-failed → MP4 with chain report, `convertFallbackChain` unit, `normalizeGifOutput` webp). Manifests 3.14.0 → **3.15.0** (both ports). No release zip cut yet (pending user review).
+
 ## 2026-09-03 — v3.14 output quality modes: maximum-quality GIF + true-color APNG
 
 User asked for converted GIFs to get "as close to the original MP4 source as an image format allows", even at the cost of size, and chose **both** quality paths rather than one. The "GIF posts save as" setting in Output settings now offers four choices (balanced `.gif` stays the default):

@@ -528,11 +528,12 @@ chrome.storage.sync.get(
       renderNamePreview();
     });
 
-    // GIF/APNG output: balanced .gif, maximum-quality .gif, true-color APNG
-    // (v3.14) or the original MP4 clip. The worker reads it at download time
-    // (Chrome only; Firefox has no offscreen document and keeps the MP4).
+    // Animated output: balanced .gif, maximum-quality .gif, animated WebP
+    // (v3.15), true-color APNG or the original MP4 clip. The worker reads it
+    // at download time and falls back through the other animated formats on
+    // failure (Chrome only; Firefox has no offscreen document and keeps MP4).
     const gifOutputBox = $("gifOutput");
-    const gifOutputValues = ["gif", "gif-max", "apng", "mp4"];
+    const gifOutputValues = ["gif", "gif-max", "webp", "apng", "mp4"];
     gifOutputBox.value = gifOutputValues.includes(stored.gifOutput) ? stored.gifOutput : "gif";
     gifOutputBox.addEventListener("change", () => {
       chrome.storage.sync.set({ gifOutput: gifOutputBox.value });

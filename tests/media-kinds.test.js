@@ -225,14 +225,112 @@ test("convertGifViaOffscreen degrades when a chunk pull fails", async () => {
   assert.match(String(result.error), /GIF job not found|chunk transfer failed/);
 });
 
+test("raw GIF with gifOutput=webp converts to an animated WebP with .webp extension", async () => {
+  const calls = [];
+  const webpBase64 = Buffer.from("RIFFxxxxWEBP-anim-body").toString("base64");
+  const background = loadBackground({
+    download: capturingDownload(calls),
+    syncStored: { gifOutput: "webp" },
+    offscreen: { createDocument: async () => {}, hasDocument: async () => true },
+    runtimeSendMessage: (message, callback) => {
+      if (message?.action === "offscreenConvertGif") {
+        assert.equal(message.job.output, "webp");
+        callback({ ok: true, jobId: message.job.jobId, totalChunks: 1 });
+        return undefined;
+      }
+      if (message?.action === "offscreenConvertGifChunk") {
+        callback({ ok: true, base64: webpBase64, index: 0, last: true });
+        return undefined;
+      }
+      return Promise.resolve();
+    }
+  });
+  await runQueue(background, [gifItem()], "raw");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, `data:image/webp;base64,${webpBase64}`);
+  assert.equal(calls[0].filename, "XMedia/nasa/nasa - Hello world - 111/002.webp");
+});
+
+test("fallback: chosen APNG failing retries WebP and saves an animated WebP", async () => {
+  const calls = [];
+  const webpBase64 = Buffer.from("RIFF-fallback-webp").toString("base64");
+  const attempted = [];
+  const background = loadBackground({
+    download: capturingDownload(calls),
+    syncStored: { gifOutput: "apng" },
+    offscreen: { createDocument: async () => {}, hasDocument: async () => true },
+    runtimeSendMessage: (message, callback) => {
+      if (message?.action === "offscreenConvertGif") {
+        attempted.push(message.job.output);
+        if (message.job.output === "apng") {
+          callback({ ok: false, error: "APNG encode exploded" });
+          return undefined;
+        }
+        callback({ ok: true, jobId: message.job.jobId, totalChunks: 1 });
+        return undefined;
+      }
+      if (message?.action === "offscreenConvertGifChunk") {
+        callback({ ok: true, base64: webpBase64, index: 0, last: true });
+        return undefined;
+      }
+      return Promise.resolve();
+    }
+  });
+  await runQueue(background, [gifItem()], "raw");
+  assert.deepEqual(attempted, ["apng", "webp"], "APNG tried first, WebP second — chain stops at the first success");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, `data:image/webp;base64,${webpBase64}`);
+  assert.equal(calls[0].filename, "XMedia/nasa/nasa - Hello world - 111/002.webp");
+});
+
+test("fallback: every animated format failing keeps the original MP4 and reports the chain", async () => {
+  const calls = [];
+  const attempted = [];
+  const warnings = [];
+  const background = loadBackground({
+    download: capturingDownload(calls),
+    syncStored: { gifOutput: "apng" },
+    offscreen: { createDocument: async () => {}, hasDocument: async () => true },
+    runtimeSendMessage: (message, callback) => {
+      if (message?.action !== "offscreenConvertGif") return Promise.resolve();
+      attempted.push(message.job.output);
+      callback({ ok: false, error: "nope" });
+      return undefined;
+    }
+  });
+  background.console = console;
+  const warn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(" "));
+  await runQueue(background, [gifItem()], "raw");
+  console.warn = warn;
+  assert.deepEqual(attempted, ["apng", "webp", "gif-max", "gif"], "chain walks every animated format");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "https://video.twimg.com/tweet_video/gif0.mp4");
+  assert.equal(calls[0].filename, "XMedia/nasa/nasa - Hello world - 111/002.mp4");
+  assert.ok(warnings.some((w) => w.includes("Every animated-image format failed") && w.includes("apng") && w.includes("gif")));
+});
+
+test("convertFallbackChain: preferred format first, other formats in fidelity order, mp4 alone", () => {
+  const background = loadBackground({});
+  const chain = (value) => Array.from(background.convertFallbackChain(value));
+  assert.deepEqual(chain("apng"), ["apng", "webp", "gif-max", "gif"]);
+  assert.deepEqual(chain("webp"), ["webp", "apng", "gif-max", "gif"]);
+  assert.deepEqual(chain("gif-max"), ["gif-max", "apng", "webp", "gif"]);
+  assert.deepEqual(chain("gif"), ["gif", "apng", "webp", "gif-max"]);
+  assert.deepEqual(chain("mp4"), ["mp4"]);
+  assert.deepEqual(chain("avif"), ["gif", "apng", "webp", "gif-max"]);
+});
+
 test("normalizeGifOutput accepts every mode and degrades unknown values to balanced gif", () => {
   const background = loadBackground({});
   assert.equal(background.normalizeGifOutput("gif"), "gif");
   assert.equal(background.normalizeGifOutput("gif-max"), "gif-max");
+  assert.equal(background.normalizeGifOutput("webp"), "webp");
   assert.equal(background.normalizeGifOutput("apng"), "apng");
   assert.equal(background.normalizeGifOutput("mp4"), "mp4");
+  assert.equal(background.normalizeGifOutput("WEBP"), "webp");
   assert.equal(background.normalizeGifOutput("GIF-MAX"), "gif-max");
-  assert.equal(background.normalizeGifOutput("webp"), "gif");
+  assert.equal(background.normalizeGifOutput("webp2"), "gif");
   assert.equal(background.normalizeGifOutput(undefined), "gif");
 });
 

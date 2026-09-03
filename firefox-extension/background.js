@@ -489,10 +489,11 @@ const OUTPUT_SETTINGS_DEFAULTS = {
   //         /media page of the SAME user collapse into one folder).
   //   OFF → XMedia/<post name>/001.jpg (pre-v3.11 layout).
   userFolders: true,
-  // v3.6/v3.14 — GIF handling:
+  // v3.6/v3.15 — GIF handling:
   //   "gif"     → real .gif, balanced (small files)
   //   "gif-max" → real .gif, maximum quality (local palettes + dithering, larger)
-  //   "apng"    → true-color APNG (closest to MP4 quality, larger)
+  //   "webp"    → animated WebP, true color, browser-native encoder (middle ground)
+  //   "apng"    → true-color APNG (closest to MP4 quality, largest)
   //   "mp4"     → keep the original MP4 clip
   gifOutput: "gif",
   // v3.10 — duplicate verification:
@@ -501,7 +502,19 @@ const OUTPUT_SETTINGS_DEFAULTS = {
 
 function normalizeGifOutput(value) {
   const v = String(value || "").toLowerCase();
-  return v === "mp4" ? "mp4" : v === "gif-max" ? "gif-max" : v === "apng" ? "apng" : "gif";
+  return v === "mp4" ? "mp4" : v === "gif-max" ? "gif-max" : v === "webp" ? "webp" : v === "apng" ? "apng" : "gif";
+}
+
+// Animated-image fidelity order for the fallback chain (v3.15): the format the
+// user selected is tried FIRST; if its conversion fails, every other animated
+// format is retried in this order (best fidelity → balanced GIF last), and the
+// original MP4 is kept ONLY when all of them failed — never a failed item.
+const ANIMATED_OUTPUT_FIDELITY = ["apng", "webp", "gif-max", "gif"];
+
+function convertFallbackChain(output) {
+  const preferred = normalizeGifOutput(output);
+  if (preferred === "mp4") return ["mp4"];
+  return [preferred, ...ANIMATED_OUTPUT_FIDELITY.filter((candidate) => candidate !== preferred)];
 }
 
 // A corrupt/legacy stored value must degrade to the shipped defaults, never
@@ -606,13 +619,17 @@ function rawPathForItem(item, settings, extOverride) {
 async function prepareRawDownload(item, settings) {
   const output = normalizeGifOutput(settings?.gifOutput);
   if (mediaKindOfItem(item) === "gif" && output !== "mp4") {
-    const converted = await convertGifViaOffscreen(item.url, output);
-    if (converted?.ok && converted.base64) {
-      const ext = output === "apng" ? "apng" : "gif";
-      const mime = output === "apng" ? "image/apng" : "image/gif";
-      return { url: `data:${mime};base64,${converted.base64}`, filename: rawPathForItem(item, settings, ext) };
+    const failures = [];
+    for (const candidate of convertFallbackChain(output)) {
+      const converted = await convertGifViaOffscreen(item.url, candidate);
+      if (converted?.ok && typeof converted.base64 === "string" && converted.base64) {
+        const ext = candidate === "apng" ? "apng" : candidate === "webp" ? "webp" : "gif";
+        const mime = candidate === "apng" ? "image/apng" : candidate === "webp" ? "image/webp" : "image/gif";
+        return { url: `data:${mime};base64,${converted.base64}`, filename: rawPathForItem(item, settings, ext) };
+      }
+      failures.push(`${candidate}: ${converted?.error || "conversion failed"}`);
     }
-    console.warn("[X-DL BG] GIF/APNG conversion unavailable, keeping the MP4 source:", converted?.error || "offscreen document unavailable");
+    console.warn(`[X-DL BG] Every animated-image format failed for a GIF item, keeping the MP4 source — ${failures.join(" | ")}`);
   }
   return { url: item.url, filename: rawPathForItem(item, settings) };
 }
@@ -1594,12 +1611,12 @@ async function runQueuePass() {
 }
 
 // ==========================================================================
-// GIF/APNG CONVERSION (Chrome only) — X's animated_gif media is a silent
-// MP4 clip; a real .gif (balanced or maximum quality) or a true-color APNG
-// is produced in a small offscreen document (<video> + canvas + the
-// streaming GIF89a/APNG encoders). Firefox MV2 has no chrome.offscreen, so
-// on this port ensureOffscreenDocument() returns false and the item degrades
-// to its original MP4 — never a failed item.
+// GIF/WEBP/APNG CONVERSION (Chrome only) — X's animated_gif media is a
+// silent MP4 clip; a real .gif (balanced or maximum quality), an animated
+// .webp or a true-color APNG is produced in a small offscreen document
+// (<video> + canvas + the streaming GIF89a/WebP/APNG encoders). Firefox MV2
+// has no chrome.offscreen, so on this port ensureOffscreenDocument() returns
+// false and the item degrades to its original MP4 — never a failed item.
 // ==========================================================================
 // The offscreen document exposes ONLY chrome.runtime (a storage/downloads
 // call there crashes the document), so the job carries just the URL and the
@@ -1617,7 +1634,7 @@ async function ensureOffscreenDocument() {
     await offscreen.createDocument({
       url: OFFSCREEN_DOCUMENT_PATH,
       reasons: ["BLOBS"],
-      justification: "Convert X's silent MP4 GIF clips into real animated .gif files."
+      justification: "Convert X's silent MP4 GIF clips into real animated GIF/WebP/APNG files."
     });
     return true;
   } catch (error) {
@@ -1648,8 +1665,9 @@ function sendOffscreenRequest(action, payload, timeoutMs, timeoutError) {
   });
 }
 
-// MP4 "GIF" → real .gif, converted in the offscreen document (a service
-// worker has no <video>/canvas). Returns { ok, base64 } or { ok:false }.
+// MP4 "GIF" → real .gif (balanced or maximum quality), animated WebP or
+// true-color APNG, converted in the offscreen document (a service worker has
+// no <video>/canvas). Returns { ok, base64 } or { ok:false }.
 async function convertGifViaOffscreen(url, output) {
   if (!(await ensureOffscreenDocument())) return { ok: false, error: "Offscreen document unavailable" };
   const jobId = `g-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
