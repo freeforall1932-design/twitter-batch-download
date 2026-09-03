@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "X Media Downloader",
-  "version": "3.9.0",
+  "version": "3.10.0",
   "description": "Download videos and photos from X/Twitter — Sidebar batch queue or one-click on tweets (Firefox port)",
   "browser_specific_settings": {
     "gecko": {
@@ -24,6 +24,7 @@
   "background": {
     "scripts": [
       "lib/naming.js",
+      "lib/dedupe.js",
       "lib/zipWriter.js",
       "lib/pdfBuilder.js",
       "lib/gifEncoder.js",

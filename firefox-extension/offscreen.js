@@ -142,15 +142,15 @@
     if (image.kind === "gif" && gifOutput !== "mp4") {
       try {
         const gifBytes = await convertMp4ToGif(image.url);
-        return { name: image.name, bytes: gifBytes, contentType: "image/gif" };
+        return { name: image.name, url: image.url, bytes: gifBytes, contentType: "image/gif" };
       } catch (error) {
         console.warn("[X-DL OFFSCREEN] GIF conversion failed, embedding MP4:", error);
         const source = await XDLArchive.fetchImageBytes(image.url);
-        return { name: image.name.replace(/\.gif$/i, ".mp4"), bytes: source.bytes, contentType: source.contentType };
+        return { name: image.name.replace(/\.gif$/i, ".mp4"), url: image.url, bytes: source.bytes, contentType: source.contentType };
       }
     }
     const fetched = await XDLArchive.fetchImageBytes(image.url);
-    return { name: image.name, bytes: fetched.bytes, contentType: fetched.contentType };
+    return { name: image.name, url: image.url, bytes: fetched.bytes, contentType: fetched.contentType };
   }
 
 
@@ -182,7 +182,20 @@
     // service-worker fallback): fetch, PDF page prep, ZIP/blob building.
     const assembled = await XDLArchive.buildArchiveBytes(fetched, format);
     saveBlobViaAnchor(new Blob([assembled.bytes], { type: assembled.mime }), filename);
-    return { ok: true, filename };
+    // v3.10 — digests travel back to the worker so the archive and each of
+    // its entries are recorded for byte-identical duplicate verification.
+    const dedupe = globalThis.XDLDedupe;
+    return {
+      ok: true,
+      filename,
+      hash: dedupe ? dedupe.hashBytes(assembled.bytes) : "",
+      size: assembled.bytes.byteLength,
+      entries: fetched.map((entry) => ({
+        url: entry.url,
+        hash: dedupe ? dedupe.hashBytes(entry.bytes) : "",
+        size: entry.bytes.byteLength
+      }))
+    };
   }
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {

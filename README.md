@@ -19,7 +19,7 @@ Self-hosted against your signed-in X session. No third-party accounts, API keys,
 - **Optional auto-scroll** — Let the extension scroll for you. It paces itself to how fast X renders, has no item cap, and never pauses for downloads. Available on its own (**Auto-scroll only**) or as the middle phase of **Fetch media**.
 - **Action-bar buttons on media posts** — **Download** saves immediately; **Add to queue** sends the post's media to the Side Panel list.
 - **Remote fetch (advanced)** — Enter `@username` or a profile/media URL, discover media (cap default 99,999), then select and download.
-- **Skip already downloaded** — Finished files are remembered and not re-listed, even after you clear the list.
+- **Skip already downloaded (v3.10)** — Finished files are remembered and not re-listed, even after you clear the list. **Two verifications** before anything is saved again: the media's **source URL** (canonical scheme + host + path, so `name=small`/`name=orig` and cache-busting params are one file) and its **byte content** (a SHA-256 of the actual bytes; different URLs carrying byte-identical content are one file). A duplicate is skipped and shown as `completed · duplicate` instead of saving a second copy under a renamed `(1)` file. Toggle off in Output settings ("Skip duplicates (byte compare + source URL)").
 - **Videos + photos + GIFs at full quality** — Highest-bitrate MP4 for videos; original-resolution photos (`name=orig` forced on every source); GIFs saved as **real animated `.gif` files** (v3.6, converted frame-by-frame from the silent MP4 clips X actually serves — switchable back to MP4 in Output settings).
 - **Include reposts** — Optional during profile discovery.
 - **Include quoted** — Media inside a quoted post's card (the "mentioned post" box with thumbnail and text) lists too, attributed to the quoted post's author, with a `quote` badge. On by default; switchable per tab.
@@ -110,7 +110,7 @@ No data is sent to third-party extension backends.
 │   ├── content.js             #   Capture forwarder, action bar, DOM bulk
 │   ├── sidepanel.html/js/css  #   Batch queue UI + Output settings card
 │   ├── offscreen.html/js      #   ZIP/CBZ/PDF assembly + MP4→GIF conversion
-│   ├── lib/                   #   naming.js, zipWriter.js, pdfBuilder.js, gifEncoder.js (shared with tests)
+│   ├── lib/                   #   naming.js, dedupe.js, zipWriter.js, pdfBuilder.js, gifEncoder.js (shared with tests)
 │   ├── popup.html/js          #   Side Panel launcher + capture status
 │   └── icon48.png / icon128.png
 ├── tests/                     # Node unit tests + sanitized fixtures
@@ -135,7 +135,7 @@ never loaded by the browser.
 
 ```bash
 for f in extension/*.js extension/lib/*.js; do node --check "$f"; done
-node --test tests/*.test.js   # 119 tests (offline: fixtures + window-less VM pipelines)
+node --test tests/*.test.js   # 164 tests (offline: fixtures + window-less VM pipelines)
 node --test tests/downloader.test.js
 ```
 

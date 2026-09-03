@@ -2,6 +2,95 @@
 
 Chronological implementation record for X Media Downloader.
 
+## 2026-09-03 — v3.10 byte-identical + source-URL duplicate verification (no more double saves under renamed files)
+
+**Branch:** `arena/01a0667d-twitter-batch-download` · **Manifest 3.9.0 → 3.10.0** ·
+**Tests 150 → 164** (+8 dedupe-pipeline, +5 dedupe unit, +1 naming — net +14 in the
+offline suite)
+
+**Session input (verbatim intent):** "The file naming still resulted in garbled
+random word and number text and then if that were to happen duplicate would
+occur due to different name but byte identical from same post url address
+happen can you also look into implementing that 2 verification like byte
+identical and url source to avoid duplications."
+
+Two things were asked: (1) the file-name fallback must never produce random
+"garbled word + number" text again, and (2) before saving a file, verify it
+against what was already downloaded by **byte content** and by **source URL**
+so a byte-identical file that ends up under a different name (Chrome uniquify,
+fallback rungs, size variants, CDN mirrors) is never saved a second time.
+
+### Part 1 — naming: already deterministic, closed the two remaining leak paths
+
+The v3.6.3 pass already removed the random `media_<timestamp>` fallback
+(`buildFallbackFilenames` now uses a deterministic `x-media/download_<stem>`
+ladder). This pass closed the two paths that could still scramble a name:
+
+- `background.js sanitizeFilePart` and `content.js sanitizeFilename` (the
+  legacy flat `x-media/…` naming used when the master folder is OFF) now strip
+  the same invisible bidi/format controls `lib/naming.js` strips
+  (U+200B/200E/200F/202A-202E/2066-2069/FEFF), so mirror/RTL post text cannot
+  render as scrambled characters in the file name.
+- Duplicates are now *prevented* rather than uniquified away, so Chrome's
+  `(1)` / `(2)` suffixes (the "random word and number" aftermath of a re-save)
+  no longer appear for the same media.
+
+### Part 2 — the two verifications (`lib/dedupe.js`)
+
+New shared `lib/dedupe.js` (UMD → `XDLDedupe`, loaded by background.js /
+offscreen.html / tests — no npm, no crypto.subtle dependency):
+
+| Check | Identity | Catches |
+|---|---|---|
+| **Source URL** | `canonicalSourceUrl()` = scheme + host + path (delivery params `name`/`format`/`v` stripped, host case + default ports normalized) | the same media address arriving with different query strings, or re-listed after the queue was cleared |
+| **Byte-identical** | Streaming SHA-256 of the actual bytes (incremental `Sha256`, chunked via `response.body.getReader()`, 512 MB bound — large videos are never held in memory) | different URLs / mirrors / size variants carrying byte-identical content |
+
+**Record store** — the legacy `downloadedMediaIdsV1` (ids only) is kept and
+stays in sync; a new `downloadedMediaRecordsV1` holds
+`{ id, mediaKey, url, urlKey, hash, size, filename, at }` with in-memory
+indexes by URL key, hash and mediaKey (capped 20 k, pruned like the old list).
+**Reset downloaded history** clears both stores.
+
+**Where the checks run:**
+
+- `mergeQueueItems` — the canonical URL is a third identity alongside `id` and
+  `mediaKey`, so two rows carrying the same media address collapse at list
+  time even when the old items lack a `mediaKey`; the same URL key is also
+  checked against the downloaded-record store (`alreadyDownloadedUrls`) for
+  "Skip already downloaded".
+- `downloadFile` — before `chrome.downloads.download`, the source URL is
+  checked first (zero network), then the bytes are streamed and SHA-256'd; a
+  hash hit (persisted or in-flight `pendingDigests`) skips the download with
+  `{ skipped: true, reason: "duplicate_url" | "duplicate_bytes" }` and marks
+  the queue row `completed · duplicate`. A verification failure (offline,
+  huge/CORS-blocked fetch) degrades to the historical direct download — dedupe
+  is best-effort and never loses a file.
+- Completion — `chrome.downloads.onChanged` (queue rows) and a pending-record
+  map (direct one-click saves, which have no queue item) write the SHA-256 +
+  canonical URL + real saved filename into the record store, so the NEXT time
+  the same media is listed it is caught by URL or bytes even after clearing
+  the list.
+- Archive pass — before assembling, if every media item of a post is already
+  verified, the whole ZIP/CBZ/PDF group is skipped (no re-save). On success,
+  each entry's digest AND the assembled archive's digest are recorded
+  (offscreen and worker fallback both return them).
+
+**Output settings** — new `verifyDuplicates` toggle (default ON) in the Side
+Panel Output settings card ("Skip duplicates (byte compare + source URL)");
+the queue pass, direct saves and the archive pre-check all respect it.
+
+**Live-X caveats:** the digest path fetches the media URL once before the
+download (streamed, so memory-safe) — a deliberate second network pass that
+only buys the byte check; `verifyDuplicates` can be switched off. Real-browser
+verification still pending (WORKLIST P0 items 12/14).
+
+**Deliverables:** `extension/lib/dedupe.js` + `firefox-extension/lib/dedupe.js`
+(byte-identical), background/offscreen/content/sidepanel changes mirrored to
+the Firefox port, `offscreen.html` loads `lib/dedupe.js`, manifest
+3.9.0 → 3.10.0 in both ports, regression + pipeline tests
+(`tests/dedupe.test.js`, `tests/dedupe-pipeline.test.js`, +2 in
+`tests/background.test.js`), release zip re-cut.
+
 ## 2026-09-03 — v3.9 virtualization-proof capture (posts that leave the DOM are no longer lost)
 
 **Branch:** `arena/01a065c5-twitter-batch-download` · **Manifest 3.8.0 → 3.9.0** ·
