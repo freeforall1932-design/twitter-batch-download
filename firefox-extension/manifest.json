@@ -1,0 +1,70 @@
+{
+  "manifest_version": 2,
+  "name": "X Media Downloader",
+  "version": "3.6.3",
+  "description": "Download videos and photos from X/Twitter — Sidebar batch queue or one-click on tweets (Firefox port)",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "x-media-downloader@example.com",
+      "strict_min_version": "109.0"
+    }
+  },
+  "permissions": [
+    "downloads",
+    "storage",
+    "cookies",
+    "tabs",
+    "activeTab",
+    "https://x.com/*",
+    "https://twitter.com/*",
+    "https://video.twimg.com/*",
+    "https://pbs.twimg.com/*",
+    "https://api.x.com/*"
+  ],
+  "background": {
+    "scripts": [
+      "lib/naming.js",
+      "lib/zipWriter.js",
+      "lib/pdfBuilder.js",
+      "lib/gifEncoder.js",
+      "lib/archive.js",
+      "background.js"
+    ]
+  },
+  "browser_action": {
+    "default_popup": "popup.html",
+    "default_title": "X Media Downloader",
+    "default_icon": {
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "sidebar_action": {
+    "default_panel": "sidepanel.html",
+    "default_title": "X Media Queue",
+    "default_icon": {
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://x.com/*",
+        "https://twitter.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "icons": {
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "web_accessible_resources": [
+    "injected.js",
+    "lib/*"
+  ]
+}
