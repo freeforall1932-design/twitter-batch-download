@@ -277,7 +277,7 @@ Cookie headers.
 **Fetch/rescan review note:** queue counts must be based on the worker's numeric `addedCount` acknowledgement. A missing response from an invalidated context is not an accepted row and must never be counted optimistically; content and worker dedupe remain separate layers.
 
 
-**Output policy:** per-post ZIP/CBZ/PDF packaging is retired. Queue downloads are always separate files: photos force `name=orig`, and videos select the highest-bitrate MP4. The old archive modules remain only for isolated offline regression fixtures and are not loaded or invoked by the shipped queue path.
+**Output policy:** per-post ZIP/CBZ/PDF packaging is retired. Queue downloads are always separate files: photos force `name=orig`, and videos select the highest-bitrate MP4. The old archive-enabled implementation is preserved under `source/archive-enabled/`; it is not loaded or invoked by the shipped queue path.
 
 
 | File | Role |

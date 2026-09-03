@@ -537,25 +537,7 @@ chrome.storage.sync.get(
       chrome.storage.sync.set({ rawMasterFolder: outputSettingsState.rawMasterFolder });
       renderNamePreview();
     });
-
-    // GIF handling + archive-inclusion toggles (v3.6). Same contract as the
-    // other output settings: written ONLY here, read by the background as a
-    // plain settings bag.
-    const gifOutputSelect = $("gifOutput");
-    gifOutputSelect.value = stored.gifOutput === "mp4" ? "mp4" : "gif";
-    gifOutputSelect.addEventListener("change", () => {
-      chrome.storage.sync.set({ gifOutput: gifOutputSelect.value === "mp4" ? "mp4" : "gif" });
-    });
-    const archiveGifsBox = $("archiveGifs");
-    archiveGifsBox.checked = stored.archiveGifs !== false;
-    archiveGifsBox.addEventListener("change", () => {
-      chrome.storage.sync.set({ archiveGifs: archiveGifsBox.checked });
-    });
-    const archiveVideosBox = $("archiveVideos");
-    archiveVideosBox.checked = stored.archiveVideos === true;
-    archiveVideosBox.addEventListener("change", () => {
-      chrome.storage.sync.set({ archiveVideos: archiveVideosBox.checked });
-    });
+    // Duplicate verification is the only remaining output safeguard.
     const verifyDuplicatesBox = $("verifyDuplicates");
     verifyDuplicatesBox.checked = stored.verifyDuplicates !== false;
     verifyDuplicatesBox.addEventListener("change", () => {

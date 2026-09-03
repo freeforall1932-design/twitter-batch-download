@@ -15,7 +15,7 @@ if (typeof chrome === 'undefined' && typeof browser !== 'undefined') {
 // loaded via manifest background.scripts. Guard.
 try {
   if (typeof importScripts === 'function') {
-    importScripts("lib/naming.js", "lib/dedupe.js", "lib/zipWriter.js", "lib/pdfBuilder.js", "lib/archive.js");
+    importScripts("lib/naming.js", "lib/dedupe.js");
   }
 } catch (error) {
   console.error("[X-DL BG] Failed to load lib/ scripts:", error);

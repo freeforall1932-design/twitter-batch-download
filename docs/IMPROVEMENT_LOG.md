@@ -1,5 +1,14 @@
 # Improvement Log
 
+## 2026-09-03 — Split archive-enabled source from the stripped shipped extension
+
+The prior archive retirement was completed physically. ZIP/CBZ/PDF runtime files (`offscreen.*`, `lib/archive.js`, `lib/zipWriter.js`, and `lib/pdfBuilder.js`) were removed from both shipped extension folders, along with the offscreen permission and archive library loads. The shipped UI and manifests now expose only separate original-resolution downloads.
+
+For users who need the former four-format implementation as source/reference, it is preserved under `source/archive-enabled/` and is explicitly not a Load unpacked target. This keeps the production extension small and prevents stale archive code from being accidentally invoked.
+
+The existing archive-specific tests now belong to that source variant and need a follow-up harness relocation; the production extension syntax checks pass.
+
+
 ## 2026-09-03 — Fetch/rescan review: do not count unacknowledged queue items
 
 Reviewed the previous session's shallow fetch, mutation harvest, deep fetch, rescan, and queue dedupe paths. The ID/media-key/source-URL dedupe layers are correctly complementary: the content tab suppresses repeated submissions, while the worker remains authoritative across DOM, GraphQL, scroll, remote fill, and rescans. One reporting bug was found: `submitDomItems()` optimistically counted all candidates when `safeSend()` returned no response, including an invalidated extension context or rejected worker message. That could make fetch/rescan status claim media was listed when it was not.

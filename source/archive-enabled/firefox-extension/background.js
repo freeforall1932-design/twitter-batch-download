@@ -4,17 +4,40 @@
 // and (v3.5) per-post ZIP/CBZ/PDF assembly relayed to an offscreen document.
 // ==========================================================================
 
-// Shared output engine: naming/template/sanitize (lib/naming.js), STORE-only
-// ZIP writer (lib/zipWriter.js), dependency-free PDF 1.4 writer
-// (lib/pdfBuilder.js), and the fetch/PDF-page/archive-bytes helpers
-// (lib/archive.js, shared with the offscreen document). The same files load
-// there and in Node tests. Guarded so a packaging mistake degrades to raw
-// downloads instead of killing the whole worker at parse time.
+// Firefox port: compatibility shim
+// Firefox MV2 background page loads lib files via manifest scripts array,
+// so importScripts may be undefined. Also chrome vs browser namespace.
+var _extApi = (typeof browser !== 'undefined' ? browser : chrome);
+if (typeof chrome === 'undefined' && typeof browser !== 'undefined') {
+  var chrome = browser;
+}
+// In Firefox MV2, importScripts is not needed because lib files are already
+// loaded via manifest background.scripts. Guard.
 try {
-  importScripts("lib/naming.js", "lib/dedupe.js");
+  if (typeof importScripts === 'function') {
+    importScripts("lib/naming.js", "lib/dedupe.js", "lib/zipWriter.js", "lib/pdfBuilder.js", "lib/archive.js");
+  }
 } catch (error) {
   console.error("[X-DL BG] Failed to load lib/ scripts:", error);
 }
+// Unified executeScript for Chrome MV3 (chrome.scripting) and Firefox MV2 (tabs.executeScript)
+async function _executeScriptCompat(tabId, func) {
+  if (chrome.scripting && chrome.scripting.executeScript) {
+    return chrome.scripting.executeScript({ target: { tabId }, func });
+  }
+  // Firefox MV2 fallback: tabs.executeScript with code string
+  if (chrome.tabs && chrome.tabs.executeScript) {
+    const funcStr = `(${func.toString()})()`;
+    return new Promise((resolve, reject) => {
+      chrome.tabs.executeScript(tabId, { code: funcStr }, (results) => {
+        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else resolve([{ result: results && results[0] }]);
+      });
+    });
+  }
+  throw new Error("No executeScript API available");
+}
+
 
 // --- Auth cache ---
 let bearerToken = null;
@@ -168,13 +191,10 @@ async function refreshAuth(tabId) {
   // Try extracting from page scripts if we have a tabId
   if (tabId) {
     try {
-      const results = await chrome.scripting.executeScript({
-        target: { tabId },
-        func: () => {
-          return Array.from(document.querySelectorAll('script[src]'))
-            .map(s => s.src)
-            .filter(s => s.includes('.js'));
-        }
+      const results = await _executeScriptCompat(tabId, () => {
+        return Array.from(document.querySelectorAll('script[src]'))
+          .map(s => s.src)
+          .filter(s => s.includes('.js'));
       });
       const scriptUrls = results?.[0]?.result || [];
       const mainUrl = scriptUrls.find(u => /main\.[a-f0-9]+/.test(u));
@@ -1890,6 +1910,7 @@ function processQueue() {
   // the raw pass on the same chain, so a group is never assembled twice.
   queueProcessing = queueProcessing
     .then(() => runQueuePass())
+    .then(() => runArchivePass())
     .catch((error) => console.error("[X-DL BG] Queue processing error", error));
   return queueProcessing;
 }
@@ -2090,10 +2111,10 @@ async function handleQueueMessage(msg) {
     // omitted → the stored default from the settings card. Whitelisted so a
     // corrupt value degrades to raw, never to a surprise archive.
     const outputSettings = await getOutputSettings();
-    // Archive output was retired: every queue run is now a separate original
-    // resolution file. Ignore stale settings or old UI messages rather than
-    // allowing an archived run from pre-v3.12 state.
-    state.outputFormat = "raw";
+    const requested = msg.format !== undefined ? msg.format : outputSettings.outputFormat;
+    state.outputFormat = globalThis.XDLNaming
+      ? globalThis.XDLNaming.normalizeOutputFormat(requested)
+      : "raw";
     state.items.forEach((item) => {
       const sourceOk = !msg.source || (item.source || "remote") === msg.source;
       const allowed = sourceOk && (msg.mode === "all" || item.selected);
@@ -2209,10 +2230,7 @@ function resolveOperationRecord(preferredNames) {
 }
 
 async function scrapeOperationIdsFromBundles(tabId, operationNames) {
-  const results = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: () => Array.from(document.scripts).map((script) => script.src).filter((src) => /\.js(?:\?|$)/.test(src))
-  });
+  const results = await _executeScriptCompat(tabId, () => Array.from(document.scripts).map((script) => script.src).filter((src) => /\.js(?:\?|$)/.test(src)));
   const urls = results?.[0]?.result || [];
   const ids = {};
   // Query IDs change often. Read the bundle belonging to the currently open X UI
