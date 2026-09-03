@@ -1,11 +1,14 @@
-// Fixture tests for the dependency-free PDF writer (extension/lib/pdfBuilder.js):
+// Fixture tests for the dependency-free PDF writer
+// (source/archive-enabled/chrome-extension/lib/pdfBuilder.js — the archive
+// path retired from the shipped extension/ build in v3.12, so this
+// archive-specific historical suite pins the preserved source variant):
 // JPEG frame parsing (jpegInfo) and PDF document structure — header, page
 // tree, DCTDecode image embedding, and exact cross-reference offsets.
 // Ported from nh-dw-2.0 test/pdf-builder.test.js (mocha → node:test).
 
 const assert = require("node:assert");
 const { describe, it } = require("node:test");
-const { jpegInfo, buildPdfDocument } = require("../extension/lib/pdfBuilder.js");
+const { jpegInfo, buildPdfDocument } = require("../source/archive-enabled/chrome-extension/lib/pdfBuilder.js");
 
 // Minimal JPEG with a real SOF0 frame: SOI, SOF0(length 17, precision, H, W,
 // components + component specs), then payload, then EOI.

@@ -1,5 +1,44 @@
 # Improvement Log
 
+## 2026-09-03 — Follow-up: archive-specific tests retargeted to `source/archive-enabled/`
+
+The split left the archive-specific historical suites pointing at the stripped
+`extension/` worker, so they could not run: `tests/archive-lib.test.js`,
+`tests/pdf-builder.test.js` and `tests/zip-writer.test.js` required
+`extension/lib/{archive,zipWriter,pdfBuilder}.js` — files that no longer exist —
+and the archive-path tests inside `tests/downloader.test.js` and
+`tests/media-kinds.test.js` ran against the v3.12 worker, which always forces
+`outputFormat = "raw"` and never invokes the archive pass (8 failures total;
+one "unknown format degrades to raw" test only passed by accident).
+
+The follow-up keeps every archive test runnable and pins it to the PRESERVED
+source variant instead of deleting it:
+
+- `tests/helpers/load-background.js` gains an `extensionRoot` option (default
+  `"extension"`) so a suite can load the worker + `lib/` from
+  `source/archive-enabled/chrome-extension` with the exact same VM harness.
+- New `tests/archive-background.test.js` (16 tests) hosts the archive-pass
+  coverage moved out of the shipped-worker suites: worker data-URL
+  ZIP/CBZ/PDF bytes and naming, "videos still raw + stored default" and
+  unknown-format degradation, archive failure semantics, offscreen job relay,
+  media-kind rules (`archivedKinds`/`effectiveGroupFormat`/
+  `archiveEntryExtension`), queueStart archive warnings, mixed-post PDF→ZIP,
+  `archiveGifs`/`archiveVideos`, and the offscreen GIF-entry job shape.
+- `tests/downloader.test.js` keeps the raw-mode path tests (9) for the v3.12
+  worker; `tests/media-kinds.test.js` keeps quality/GIF-identity/raw-GIF tests
+  (5). The raw-run "warnings stay silent" assertion stayed with the shipped
+  suite; its "single-format photo archive post" half moved with the archive
+  suite.
+- The three library suites now require
+  `source/archive-enabled/chrome-extension/lib/*` and say so in their headers.
+
+Validation: `node --test tests/*.test.js` → **168 pass / 0 fail** (~4 s;
++1 from the raw/archive warning-test split, no archive coverage lost).
+`source/archive-enabled/README.md` now documents the test wiring, and the
+stale shipped-build README (which still advertised ZIP/CBZ/PDF in the UI,
+permissions and layout) was corrected. No `extension/` or `firefox-extension/`
+file changed, so the manifest stays 3.12.0.
+
 ## 2026-09-03 — Split archive-enabled source from the stripped shipped extension
 
 The prior archive retirement was completed physically. ZIP/CBZ/PDF runtime files (`offscreen.*`, `lib/archive.js`, `lib/zipWriter.js`, and `lib/pdfBuilder.js`) were removed from both shipped extension folders, along with the offscreen permission and archive library loads. The shipped UI and manifests now expose only separate original-resolution downloads.
