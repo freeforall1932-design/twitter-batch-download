@@ -1,6 +1,6 @@
 # Development Worklist
 
-_Last audited: 2026-09-03 (this session = **v3.8 Rescan restores deleted rows**: `Rescan tab` and `Fetch media` now forget the tab's "already listed" memory and re-list the posts on screen, so rows the user deleted come back; new **Remove selected** button; `skippedDownloaded` reporting so "nothing came back" always names a reason. Prev = **v3.7 Fetch button**: shallow auto-fetch on tab open/route change, in-page Fetch dock, hybrid deep fetch (scroll → silent GraphQL fill), Side Panel Fetch/Rescan/Reload-tab controls, plus an 8-item missing-logic audit — see the newest IMPROVEMENT_LOG entry. Prev = Firefox port: separate firefox-extension/ folder MV2 sidebar_action + compat shims, README, manifest variant. Prev = v3.6.3 naming-degarble + perf queue:
+_Last audited: 2026-09-03 (this session = **v3.9 virtualization-proof capture**: X removes articles that scroll off-screen and capture was scan-only, so posts inserted and removed between two scans were never listed at all — measured **81 of 207 photos and 39 of 103 posts** on a fast scroll. `harvestMutationArticles()` now reads the observer's `addedNodes` **and** `removedNodes`, lifting that to 204/101 (fast) and 207/103 (normal) with **0 duplicates**; videos went **1 → 17** because a harvested video post is now queued for its per-post resolve instead of vanishing. Dedupe itself was already airtight and is now test-pinned. Prev = **v3.8 Rescan restores deleted rows**: `Rescan tab` and `Fetch media` now forget the tab's "already listed" memory and re-list the posts on screen, so rows the user deleted come back; new **Remove selected** button; `skippedDownloaded` reporting so "nothing came back" always names a reason. Prev = **v3.7 Fetch button**: shallow auto-fetch on tab open/route change, in-page Fetch dock, hybrid deep fetch (scroll → silent GraphQL fill), Side Panel Fetch/Rescan/Reload-tab controls, plus an 8-item missing-logic audit — see the newest IMPROVEMENT_LOG entry. Prev = Firefox port: separate firefox-extension/ folder MV2 sidebar_action + compat shims, README, manifest variant. Prev = v3.6.3 naming-degarble + perf queue:
 `sanitizeArtifactFilename` strips invisible bidi/format controls, the
 `buildFallbackFilenames` last resort is no longer random
 `media_<timestamp>` text, `queueChanged` broadcasts are throttled, one
@@ -43,7 +43,9 @@ No manual API key / password / cookie paste. Self-hosted against the signed-in X
 | Per-post ZIP/CBZ/PDF output | **Done (v3.5, kind rules v3.6), needs live spot-check** | One archive per post (≤4 items), assembled in the offscreen document, saved via `<a download>` anchor (blob-filename quirk); worker data-URL fallback. v3.6: PDF is photos-only (GIF/video posts degrade PDF→ZIP); GIFs archive by default, videos opt-in; warnings at queueStart. NOT the removed whole-batch ZIP. |
 | GIF → real .gif + quality guarantees | **Done (v3.6), needs live spot-check** | `normalizePhotoUrl` forces `name=orig` on every source; videos keep highest-bitrate MP4; GIFs convert MP4→GIF89a in the offscreen document (`lib/gifEncoder.js`, bounded 30 s/360 frames/720 px) with MP4 fallback on any failure; `gifOutput` toggle. |
 | Naming-scheme checkboxes | **Done (v3.5), hardening (v3.6.2)** | `nameTemplate` (sync, default `{user} - {text} - {id}`), checkbox UI + live preview + manual input for custom templates; id fallback, reserved-name prefix. v3.6.2: `makePostBaseName` collapses separators after sanitizing so a token whose content is stripped (e.g. text "???") can't leave `nasa -  - 111`. |
-| Offline CI | **Done (v3.5), hardened (v3.6.1), actions bumped (2026-09-02 follow-up)** | `.github/workflows/extension-tests.yml` + byte-identical `docs/ci/extension-tests.yml` (see `docs/ci/README.md`): read-only permissions, concurrency cancel, timeout, glob safe syntax check, packaging artifact assertion; syntax + `node --test` (140 as of v3.8 = the v3.6.3 queue's 6 + 10 Fetch-button/audit + 5 rescan/restore regressions) + packaging smoke. Actions on `@v5` — v4 declared the `node20` runtime that runner images now force onto node24 with a warning; v5+ declare `node24` (upstream is at v7, see IMPROVEMENT_LOG). Both the packaging script and its CI assertion were made exit-code-honest this pass (see next row). No real-browser CI — GitHub runners cannot drive MV3 (verified in nh-dw-2.0). |
+| Offline CI | **Done (v3.5), hardened (v3.6.1), actions bumped (2026-09-02 follow-up)** | `.github/workflows/extension-tests.yml` + byte-identical `docs/ci/extension-tests.yml` (see `docs/ci/README.md`): read-only permissions, concurrency cancel, timeout, glob safe syntax check, packaging artifact assertion; syntax + `node --test` (150 as of v3.9 = the v3.6.3 queue's 6 + 10 Fetch-button/audit + 5 rescan/restore + 7 virtualization-harvest + 3 dedupe/queue regressions) + packaging smoke. Actions on `@v5` — v4 declared the `node20` runtime that runner images now force onto node24 with a warning; v5+ declare `node24` (upstream is at v7, see IMPROVEMENT_LOG). Both the packaging script and its CI assertion were made exit-code-honest this pass (see next row). No real-browser CI — GitHub runners cannot drive MV3 (verified in nh-dw-2.0). |
+| Virtualization-proof capture | **New (v3.9), needs live-X** | `harvestMutationArticles(mutations)` runs inside the MutationObserver callback *before* the coalesced scan and reads articles from `addedNodes` (earlier than any scan; `img.src` is already the CDN URL before decode) **and** `removedNodes` (the guaranteed last chance — X can insert and trim in the same task, so the node is never in the document when a scan runs; a detached subtree stays fully queryable). Containers walked, non-element nodes skipped. Shares `submitDomItems()` with the scan so counting/status/dock cannot drift. Cannot duplicate: `makeDomQueueItems` marks `listedMediaIds`/`listedMediaKeys` as it builds. Measured: photos 81 → 204 (fast) / 207 (normal), posts 39 → 101 / 103, **videos 1 → 17**, duplicate ids **0** in every configuration. |
+| Dedupe (all layers) | **Verified (v3.9), test-pinned** | content.js `listedMediaIds`/`listedMediaKeys` (tab memory) + per-article `seenUrls`; `mediaEntryToItem`'s dedupe context; background `mergeQueueItems` on `knownIds` **and** `knownKeys` across the whole live queue — which collapses the same photo arriving from the DOM and from GraphQL under different id shapes, and (since v3.7) from the scroll list and the remote fill. Identity is the CDN leaf, so `name=small`/`900x900`/`orig` are one row. |
 | Rescan / restore deleted rows | **New (v3.8), needs live-X** | `forgetListedMedia()` clears `listedMediaIds`/`listedMediaKeys`/video-resolve state **and** `lastReplaySeq`, so an explicit rescan (or the start of a deep fetch) re-lists rows the user deleted — including posts X virtualized out of the DOM, which survive only in the MAIN-world replay buffer. Automatic load/route passes stay incremental (rule: *automatic = incremental, explicit click = clean slate*). `Rescan tab` answers immediately with `rescanning: true` and the panel's status poll reports the outcome; **Remove selected** (`queueRemove` with an `ids` array — the worker already accepted it) completes the pick-and-delete loop. |
 | Fetch button / deep fetch | **New (v3.7), needs live-X** | In-page `.xdl-fetch-dock` (Fetch media / Stop / ×) + Side Panel `Fetch media`. Shallow pass (replay + DOM rescan + video resolve, no page movement) runs automatically on tab open and every route change; deep fetch = shallow → existing auto-scroll engine → optional silent `discoveryStart` fill of the same profile (rows land in the Remote fetch list; profiles only, never a single post). Run tokens make Stop authoritative; `scrollStop` stops both engines. |
 | Capture robustness audit (v3.7) | **Done, regression-tested** | Fixed: `safeSend` hung awaiting callers on a dead context (wedged the video resolver until a page reload), a route change dropped its 1800 ms staged scan, one failed video resolve blacklisted that post for the tab's life (now a 2-attempt budget), Stop + restart could leave two scroll loops, every replay re-cloned the whole MAIN-world buffer (now `seq`/`since` incremental), `scrollRescan` had no sender, `window.__xdl_active` dead state, `profileHandleFromUrl` threw on a non-http origin. |
@@ -143,6 +145,16 @@ Use this before claiming “ready” or merging large changes:
 - [x] v3.8: an explicit action that finds nothing still reports a reason
       (`skippedDownloaded` distinguishes "already in your list" from "held back
       by a setting"). No silent no-ops.
+- [x] v3.9: capture does not depend on a node still being in the document when a
+      scan runs — mutation records (`addedNodes` + `removedNodes`) are harvested
+      synchronously in the observer callback.
+- [x] v3.9: the harvest and the scan share one submission path
+      (`submitDomItems`), so counters, status text and dock refresh cannot drift.
+- [x] v3.9: harvesting cannot duplicate — `makeDomQueueItems` marks the tab's
+      dedupe sets as it builds each item, and the worker dedupes on id + media key
+      as a second layer.
+- [x] v3.9: a harvested *video* post is queued for the bounded per-post resolve
+      (`pendingVideoTweets`) — that is what took videos from 1 to 17.
 - [x] v3.8: `forgetListedMedia()` is reachable ONLY from explicit user actions.
       Calling it from a load/route pass would re-clone the whole replay buffer
       on every mutation tick.
@@ -161,6 +173,16 @@ Use this before claiming “ready” or merging large changes:
   the cumulative `passCounters` + per-pass delta, and give an explicit rescan its
   own `lastRescan` record instead of reading `lastPass` (which means "whatever
   pass ran most recently", usually an automatic one).
+- Scan-only capture (pre-v3.9): reading `article[data-testid="tweet"]` from the
+  live DOM assumes a post stays rendered long enough to be seen. X virtualizes, so
+  it does not — the scan alone loses ~60% of media on a fast scroll (measured).
+  Keep the mutation harvest in front of it.
+- Weakening video dedupe by dropping the media key (considered and rejected in
+  v3.9). Two harness artifacts — a tweet id past `Number.MAX_SAFE_INTEGER`, and a
+  fake video URL whose leaf was identical for every post — made it look like
+  videos were being lost to dedupe. They were not: real X leaves are unique per
+  video, and dropping the key would have listed every reposted/quoted video
+  twice. **Fix the fixture, not the dedupe.**
 - Hardcoded third-party query IDs as the only discovery path (capture + scrape is OK; single stale ID as sole source is not).
 
 ## P0 — repo layout & release packaging (try-it-out path)
@@ -283,6 +305,28 @@ never executed in a browser) and **item 13** (live fixtures).
       the active tab's list only (Scroll capture vs Remote fetch), leaves files on
       disk alone, and disables itself again afterwards.
 
+18. **Open (v3.9, never run in a browser)** — capture completeness on a real
+    signed-in profile. Biggest measured effect of any item here, so it is the one
+    most worth two minutes:
+    - Run a **fast** auto-scroll (or **Fetch media**) on a long profile and
+      compare the panel's row count with the post count X shows on that profile's
+      `/media` tab. Before v3.9 a fast pass silently dropped ~60% of the media;
+      the counts should now be close, with any difference explained by reposts,
+      the media filter, and **Skip already downloaded**.
+    - Scroll a few screens manually and confirm posts you scrolled *past* quickly
+      are in the list, not only the ones you lingered on.
+    - Confirm **video** posts from fast-scrolled-past sections resolve (the panel
+      shows `resolving N video posts`) and that none are listed twice.
+    - Watch for **skeleton/placeholder** articles being listed as media on a real
+      timeline (they yield nothing in the harness; real X skeletons deserve one
+      look).
+    - Watch CPU on a very long scroll: the harvest runs per mutation batch and has
+      never been profiled against a real 1000-post timeline. It is bounded by the
+      dedupe sets, but "bounded" is not the same as "measured".
+    - Confirm no duplicates when the same post arrives from the DOM *and* a
+      GraphQL capture, and that a deep fetch's silent fill does not duplicate what
+      the scroll already listed (two lists, one row).
+
 **Live GraphQL reference needed for item 15 / 14 (a sanitized capture, no
 credentials):** the display-name field on the GraphQL path is
 `core.user_results.result.legacy.name` (already used by `background.js` for
@@ -344,7 +388,7 @@ control strip in `sanitizeArtifactFilename`, and the deterministic fallback in
 `queueChanged`, one `resolveTweetMedia` media resolver, bounded `injected.js`
 replay + marker walk). Tasks **6–7 stay holds** — do not implement them until a
 big-queue session provides live jank evidence, or a decision to split
-`background.js` regardless. Full suite: **125 pass / 0 fail** (v3.6.3) → **135** (v3.7) → **140 pass / 0 fail** (v3.8). Manifest bumped
+`background.js` regardless. Full suite: **125** (v3.6.3) → **135** (v3.7) → **140** (v3.8) → **150 pass / 0 fail** (v3.9). Manifest bumped
 **3.6.2 → 3.6.3** and `releases/x-media-downloader-v3.6.3.zip` was cut +
 offline-verified (manifest at root, byte-identical to `extension/`).
 
@@ -440,7 +484,7 @@ Tasks:
 - Reposts off/on correct.
 - Protected / NSFW / logged-out / rate-limit messages specific.
 - Stop discovery; stop downloads; Side Panel reload retains state.
-- **140** local Node tests still green after cleanup (`node --test tests/*.test.js`: background + content + naming + zip-writer + pdf-builder + gif-encoder + archive-lib + downloader + media-kinds + injected suites).
+- **150** local Node tests still green after cleanup (`node --test tests/*.test.js`: background + content + naming + zip-writer + pdf-builder + gif-encoder + archive-lib + downloader + media-kinds + injected suites).
 - Both CI copies parse as YAML and stay byte-identical (`diff .github/workflows/extension-tests.yml docs/ci/extension-tests.yml`); a workflow edit must be re-applied to BOTH.
 - `scripts/package-release.sh` exits **0** (was a deterministic 141 SIGPIPE) and the CI packaging step passes verbatim even with more than one zip in `releases/`.
 - The release zip unzips to a structurally loadable folder: manifest at root, contents identical to `extension/`, every manifest + runtime reference resolvable.

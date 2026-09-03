@@ -16,6 +16,9 @@ const vm = require("node:vm");
 function makeElement(tag, options = {}) {
   const el = {
     tagName: String(tag).toUpperCase(),
+    // content.js's mutation harvest walks record nodes and skips anything that
+    // is not an element, so the shim has to say what these are.
+    nodeType: 1,
     children: [],
     parentElement: null,
     attributes: { ...(options.attributes || {}) },
@@ -60,6 +63,14 @@ function makeElement(tag, options = {}) {
         node = node.parentElement;
       }
       return null;
+    },
+    matches(selector) { return matches(this, selector); },
+    remove() {
+      const parent = this.parentElement;
+      if (!parent) return;
+      const index = parent.children.indexOf(this);
+      if (index !== -1) parent.children.splice(index, 1);
+      this.parentElement = null;
     },
     querySelector(selector) { return this.querySelectorAll(selector)[0] || null; },
     querySelectorAll(selector) { return descendants(this).filter((node) => selectorMatches(node, selector)); }
@@ -305,6 +316,11 @@ function loadContentScript(documentOptions = {}) {
     },
     timeouts,
     setQueueResponder: (fn) => { queueResponder = fn; },
+    // Deliver mutation records to every observing MutationObserver the way the
+    // browser does. Each record is { addedNodes: [...], removedNodes: [...] }.
+    emitMutations: (records) => observers
+      .filter((observer) => observer.observing)
+      .forEach((observer) => observer.callback(records, observer)),
     queueAdds: () => sent.filter((message) => message.action === "queueAdd"),
     timelineCaptures: () => sent.filter((message) => message.action === "localTimelineCapture")
   };
@@ -681,6 +697,124 @@ test("a rescan that adds nothing explains why", async () => {
   assert.equal(status.lastRescan.skippedDownloaded, 3,
     "the rescan keeps its own record, so a later automatic pass cannot erase it");
   assert.equal(status.lastRescan.added, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Virtualized timelines: a post that leaves the DOM must still be listed once
+// ---------------------------------------------------------------------------
+
+test("a post that leaves the DOM before any scan is still listed", () => {
+  const env = loadContentScript({ href: "https://x.com/nasa" });
+  const before = env.queueAdds().length;
+
+  // X inserts an article and removes it again between two coalesced scans; the
+  // mutation record is the only place the node still exists.
+  const article = makeTweetArticle({ tweetId: "800", handle: "nasa", text: "gone", photos: ["LLL800"] });
+  env.emitMutations([{ addedNodes: [article], removedNodes: [] }]);
+  env.emitMutations([{ addedNodes: [], removedNodes: [article] }]);
+  article.remove();
+
+  const ids = env.queueAdds().slice(before).flatMap((add) => add.items.map((item) => item.id));
+  assert.ok(ids.includes("800-LLL800"),
+    "the photo was captured from the mutation records, not from a DOM scan");
+});
+
+test("a post inserted and removed in the same task is still listed", () => {
+  const env = loadContentScript({ href: "https://x.com/nasa" });
+  const before = env.queueAdds().length;
+
+  // The hardest case: one record carrying the node on both sides, which is what
+  // a synchronous insert+trim produces. No scan could ever see this node in the
+  // document, because it was never in the document when a scan ran.
+  const article = makeTweetArticle({ tweetId: "801", handle: "nasa", text: "blink", photos: ["MMM801", "MMM802"] });
+  env.emitMutations([{ addedNodes: [article], removedNodes: [article] }]);
+
+  const ids = env.queueAdds().slice(before).flatMap((add) => add.items.map((item) => item.id));
+  assert.deepEqual(ids.sort(), ["801-MMM801", "801-MMM802"],
+    "both photos of the blinked post were listed");
+});
+
+test("harvesting the same post twice lists it exactly once", () => {
+  const env = loadContentScript({ href: "https://x.com/nasa" });
+  const article = makeTweetArticle({ tweetId: "802", handle: "nasa", text: "twice", photos: ["NNN802"] });
+
+  for (let round = 0; round < 4; round++) {
+    env.emitMutations([{ addedNodes: [article], removedNodes: [] }]);
+    env.emitMutations([{ addedNodes: [], removedNodes: [article] }]);
+  }
+  env.runIntervals();   // the 2.5 s full-page scan sees it too
+  env.runTimeouts(2);   // and so does the coalesced scan
+
+  const ids = env.queueAdds().flatMap((add) => add.items.map((item) => item.id));
+  const occurrences = ids.filter((id) => id === "802-NNN802").length;
+  assert.equal(occurrences, 1, "one item however many times the node is harvested or scanned");
+});
+
+test("a container of articles is harvested, and text nodes are ignored", () => {
+  const env = loadContentScript({ href: "https://x.com/nasa" });
+  const before = env.queueAdds().length;
+
+  const container = makeElement("div");
+  container.appendChild(makeTweetArticle({ tweetId: "803", handle: "nasa", text: "a", photos: ["OOO803"] }));
+  container.appendChild(makeTweetArticle({ tweetId: "804", handle: "nasa", text: "b", photos: ["PPP804"] }));
+  env.emitMutations([{ addedNodes: [{ nodeType: 3, textContent: "whitespace" }, container], removedNodes: [] }]);
+
+  const ids = env.queueAdds().slice(before).flatMap((add) => add.items.map((item) => item.id));
+  assert.deepEqual(ids.sort(), ["803-OOO803", "804-PPP804"],
+    "nested articles are found and a text node does not throw");
+});
+
+test("a video post that leaves the DOM is still resolved", async () => {
+  const env = loadContentScript({ href: "https://x.com/nasa" });
+  const article = makeTweetArticle({ tweetId: "805", handle: "nasa", text: "clip", video: true });
+  env.emitMutations([{ addedNodes: [article], removedNodes: [article] }]);
+  await flush(); await flush(); await flush();
+
+  // A video has no usable direct URL in the DOM, so the proof it was harvested
+  // is the per-post resolve being started at all (the harvest drains the pending
+  // set immediately, which is why pendingVideos reads 0 here).
+  const resolves = env.sent.filter((message) => message.action === "getTweetMedia");
+  assert.ok(resolves.some((message) => String(message.tweetId) === "805"),
+    "the video post that virtualized away was still queued for resolving");
+});
+
+test("the same photo at different sizes lists once", () => {
+  const env = loadContentScript({ href: "https://x.com/nasa" });
+  const before = env.queueAdds().length;
+
+  // X swaps name=small → name=900x900 → name=orig as a post renders and
+  // re-renders; the CDN leaf is the identity, not the query string.
+  const small = makeTweetArticle({ tweetId: "806", handle: "nasa", text: "size", photos: ["QQQ806"] });
+  env.emitMutations([{ addedNodes: [small], removedNodes: [] }]);
+  const large = makeTweetArticle({ tweetId: "806", handle: "nasa", text: "size", photos: ["QQQ806"] });
+  env.emitMutations([{ addedNodes: [large], removedNodes: [small] }]);
+  env.runIntervals();
+
+  const urls = env.queueAdds().slice(before).flatMap((add) => add.items.map((item) => item.url));
+  assert.equal(urls.length, 1, "one row for one photo");
+  assert.match(urls[0], /name=orig$/, "and it is the full-resolution variant");
+});
+
+test("a rescan after a rescan adds nothing new", async () => {
+  const env = loadContentScript({ href: "https://x.com/nasa" });
+  env.body.appendChild(makeTweetArticle({ tweetId: "807", handle: "nasa", text: "stable", photos: ["RRR807"] }));
+  env.runIntervals();
+
+  // The worker still has the row, so it takes nothing: the content script may
+  // re-send, but the list must not grow and the note must say so.
+  env.setQueueResponder(() => ({ addedCount: 0, skippedDownloaded: 0 }));
+  const first = env.emitRuntimeMessage({ action: "scrollRescan" });
+  const second = env.emitRuntimeMessage({ action: "scrollRescan" });
+  assert.equal(first.rescanning, true);
+  assert.equal(second.reason, "A rescan is already running on this tab.",
+    "a second click cannot start a concurrent rescan");
+
+  env.runTimeouts(2);
+  await flush(); await flush(); await flush();
+
+  const status = env.emitRuntimeMessage({ action: "scrollStatus" });
+  assert.equal(status.lastRescan.added, 0, "no duplicates from repeated rescans");
+  assert.match(status.text, /nothing new/, "and the user is told nothing changed");
 });
 
 test("a rescan that re-lists everything says how many", async () => {

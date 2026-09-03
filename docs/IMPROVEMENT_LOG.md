@@ -2,6 +2,149 @@
 
 Chronological implementation record for X Media Downloader.
 
+## 2026-09-03 — v3.9 virtualization-proof capture (posts that leave the DOM are no longer lost)
+
+**Branch:** `arena/01a065c5-twitter-batch-download` · **Manifest 3.8.0 → 3.9.0** ·
+**Tests 140 → 150**
+
+**Session input (verbatim intent):** "Don't forget to add function that filter the
+same post will not be added into list so there won't be duplication when it's
+rescan or listen fetch when I scroll the website normally also did the previous
+fetch already fill the gap of not adding the existing post into the list since if
+I scroll and the page load only the 'new' post was added the existing post before
+that was not added and not listed at all."
+
+Two questions in one: *is dedupe airtight?* and *did the earlier work already fix
+the "only new posts get listed" gap?* The answers turned out to be **yes** and
+**no** — and the second one was a real, measurable data-loss bug.
+
+### Part 1 — dedupe was already airtight (proved, not assumed)
+
+Three layers already existed and each is now pinned by a test:
+
+| Layer | Key | Catches |
+|---|---|---|
+| content.js `listedMediaIds` / `listedMediaKeys` | `tweetId-mediaKey`, CDN leaf | re-sending a post this tab already listed (every scan, every harvest, every rescan) |
+| content.js per-article `seenUrls` + `mediaEntryToItem` dedupe context | URL / id+key | the same photo twice inside one post, and GraphQL items vs DOM items |
+| background `mergeQueueItems` | `knownIds` **and** `knownKeys` across the whole live queue | the same media arriving from the DOM *and* from GraphQL with different id shapes, and — since v3.7 — from the scroll list *and* the remote fill |
+
+Measured across every harness configuration below: **0 duplicate ids**. New tests:
+`harvesting the same post twice lists it exactly once`, `the same photo at
+different sizes lists once` (X swaps `name=small` → `900x900` → `orig`; the CDN
+leaf is the identity, not the query string), `a rescan after a rescan adds nothing
+new`, `the same media is one row across the scroll and remote lists`,
+`queueRemove drops several rows at once`, `a removed row is allowed back, and says
+why when it is not`.
+
+### Part 2 — the gap was real: capture was scan-only, and X virtualizes
+
+`scanVisibleMedia()` reads `article[data-testid="tweet"]` **from the live DOM**,
+driven by a coalesced 150 ms MutationObserver scan plus a 2.5 s interval scan. X
+removes articles that scroll off-screen, so a post inserted *and* removed between
+two scans was never in the DOM at any instant a scan ran — it was never listed at
+all. That is precisely the reported symptom: the newly rendered posts at the
+bottom got added, the ones that had already scrolled past did not.
+
+**Measured** (throwaway jsdom harness, 120-post fake timeline = 103 photo posts /
+207 photos + 17 video posts, articles trimmed to a fixed window as new ones
+arrive, so nothing is in the DOM for long):
+
+| Scroll pattern | Photos listed **before** | **after** | Unique photo posts | Videos | Duplicate ids |
+|---|---|---|---|---|---|
+| window 20, batch/300 ms (normal) | — | **207 / 207** | **103 / 103** | 17 / 17 | 0 |
+| window 6, batch/40 ms (fast auto-scroll) | **81** | **204** | **39 → 101** | **1 → 17** | 0 |
+| window 3, batch/10 ms (extreme) | — | 199 | 99 | 17 | 0 |
+
+So on a fast pass roughly **60% of the media was being silently dropped**, and
+**16 of 17 videos** with it. The GraphQL replay path cushions this in real use
+(a timeline response lists its posts whether or not they are still rendered), but
+it cannot cover a view X served from cache without a network call — which is
+exactly the case v3.7's per-post video resolve was added for.
+
+### The fix — harvest the mutation records themselves
+
+`harvestMutationArticles(mutations)` runs inside the MutationObserver callback,
+before the coalesced scan is even scheduled, and reads articles out of
+**`addedNodes` and `removedNodes`**:
+
+- `addedNodes` catches a post the instant it arrives — earlier than any scan, and
+  `img.src` is already the CDN URL even before the image decodes.
+- `removedNodes` is the guaranteed last chance, and the reason this works even in
+  the hardest case: X (or a fast auto-scroll) can insert and trim in the **same
+  task**, so the node is never in the document at any point a scan could observe.
+  A mutation record still holds it, and a detached subtree stays fully queryable.
+- Containers are walked (`node.querySelectorAll`) and non-element nodes skipped,
+  so a fragment of ten articles is one harvest and a whitespace text node cannot
+  throw.
+
+It cannot create duplicates: `makeDomQueueItems` marks `listedMediaIds` /
+`listedMediaKeys` as it builds each item, so an article harvested on the way in
+and again on the way out lists once — and the worker's id+mediaKey dedupe is the
+second line of defence. `submitDomItems()` was factored out of `scanVisibleMedia`
+so the harvest and the scan share one submission path and their counting, status
+text and dock refresh cannot drift apart.
+
+**Videos came along for free, and they were the bigger win.** A harvested video
+post has no usable direct URL, so it goes into `pendingVideoTweets` for the
+bounded per-post resolve. Before this change a video post that virtualized away
+was never even *queued* for resolving, which is why the fast-scroll run listed 1
+video instead of 17. The harness confirms all 17 now resolve (`pendingVideos`
+drains 12 → 6 → 0, 15 `getTweetMedia` calls + 2 from the replay buffer).
+
+### Two harness artifacts I fixed instead of "fixing" the extension
+
+Both looked like extension bugs and neither was:
+
+1. The fake page built tweet ids as `1800000000000000000 + index`, which is past
+   `Number.MAX_SAFE_INTEGER` — every post collapsed to one id, so "unique photo
+   posts" read 1. Base lowered to `1800000000000000`.
+2. The fake `getTweetMedia` returned `…/720x1280/fake.mp4` for **every** video, so
+   all 17 shared the media key `fake` and correctly deduped into one row. Real X
+   leaves are unique per video, so the fake was wrong, not the dedupe.
+
+The tempting "fix" — stop deduping videos by media key — would have made reposted
+and quoted videos list twice. **Do not weaken production dedupe to satisfy an
+unrealistic fixture**; fix the fixture. (Recorded because the measurement was
+misleading for a moment and the wrong conclusion was one edit away.)
+
+### Small honesty fix found on the way
+
+`scrollRescan` answered `rescanning: true` even when it refused a second
+concurrent rescan, so the panel would claim work that was not happening. The
+handler now reports `ok: false` + the guard's reason. Pinned by
+`a rescan after a rescan adds nothing new`.
+
+### Validation
+
+- `node --test tests/*.test.js` → **150 pass / 0 fail** (+10). The test shim
+  gained `emitMutations(records)` (delivers `{addedNodes, removedNodes}` to every
+  observing MutationObserver), `nodeType: 1`, `matches()` and `remove()` on its
+  elements — the harvest path reads all four.
+- Real-DOM jsdom harness (throwaway, NOT committed): the three scroll patterns in
+  the table above, plus re-runs of the interactive dock smoke, the rescan/restore
+  smoke and the full hybrid deep fetch — `shallow(15) → scroll → discoveryStart
+  @nasa → 24 media found → "Fetch complete — 15 listed from this tab. @nasa
+  silent fill: 24 media found → Remote fetch tab."` All zero errors.
+- `node --check` on every shipped script in both folders; `firefox-extension/`
+  re-synced (diff back to exactly the 17 + 55 pre-existing compat lines); both
+  manifests **3.9.0**; `releases/x-media-downloader-v3.9.0.zip` cut and verified.
+
+### Still open (live X)
+
+- One signed-in pass of a **fast** auto-scroll on a long profile: the count in the
+  panel should now match what the timeline actually contained. Compare against
+  the post count X shows on the profile's `/media` tab — that is the only ground
+  truth available.
+- Confirm the harvest does not list **placeholder/skeleton** articles as media on
+  a real timeline (they yield no items in the harness because they have no
+  `tweetPhoto`/`videoPlayer` node, but real X skeletons are worth one look).
+- Watch CPU on a very long scroll: the harvest runs per mutation batch. It is
+  bounded by `listedMediaIds` (each article yields items at most once) but has
+  never been profiled against a real 1000-post timeline.
+- Deliberately NOT done: no `scroll`-event listener (mutation records already
+  fire on every virtualization change, and a scroll handler would double the
+  work), and no change to the 150 ms coalescing or the 2.5 s interval scan.
+
 ## 2026-09-03 — v3.8 Rescan restores deleted rows (+ Remove selected)
 
 **Branch:** `arena/01a065c5-twitter-batch-download` · **Manifest 3.7.0 → 3.8.0** ·

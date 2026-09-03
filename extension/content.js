@@ -685,6 +685,20 @@
     setTimeout(() => scanVisibleMedia(), delay);
   }
 
+  // Single submission path for DOM-derived items, shared by the full-page scan
+  // and the mutation harvest so the counting, status text and dock refresh can
+  // never drift apart between them.
+  function submitDomItems(items) {
+    if (!items || !items.length) return;
+    safeSend({ action: "queueAdd", items, source: "scroll", skipDownloaded }, (response) => {
+      notePassResult(response, items.length);
+      const added = response?.addedCount ?? items.length;
+      listedCount += added;
+      statusText = `Listed ${listedCount} media item${listedCount === 1 ? "" : "s"} from this tab.`;
+      renderFetchDock();
+    });
+  }
+
   function scanVisibleMedia() {
     if (!document.body) return;
     scanCount += 1;
@@ -693,16 +707,54 @@
     const items = [];
     for (const article of articles) items.push(...makeDomQueueItems(article));
 
-    if (items.length) {
-      safeSend({ action: "queueAdd", items, source: "scroll", skipDownloaded }, (response) => {
-        notePassResult(response, items.length);
-        const added = response?.addedCount ?? items.length;
-        listedCount += added;
-        statusText = `Listed ${listedCount} media item${listedCount === 1 ? "" : "s"} from this tab.`;
-        renderFetchDock();
-      });
-    }
+    submitDomItems(items);
+    drainPendingVideoTweets();
+  }
 
+  // X virtualizes its timeline: articles scrolled off-screen are REMOVED from the
+  // DOM. A coalesced scan (150 ms) plus the 2.5 s interval scan only ever sees
+  // what is in the DOM at that instant, so a post inserted and removed between
+  // two scans was never listed at all. Measured on a fast-scroll harness with a
+  // 6-article window: 39 of 103 photo posts survived, 126 photos and 16 of 17
+  // videos were lost — which is the "only the new posts got added, the existing
+  // ones were never listed" report.
+  //
+  // Reading the mutation records themselves closes the hole, because a record
+  // still holds the nodes: `addedNodes` catches posts the moment they arrive
+  // (their images may not have decoded yet — `img.src` is already the CDN URL),
+  // and `removedNodes` is a guaranteed last chance for posts that already left.
+  // A detached subtree stays fully queryable and `src` survives detachment, so
+  // this works even when X inserts and removes in the same task, before any
+  // observer callback could otherwise see the node in the document.
+  //
+  // It cannot create duplicates: makeDomQueueItems marks listedMediaIds /
+  // listedMediaKeys as it builds each item, so an article harvested on the way
+  // in and again on the way out lists once, and the queue dedupes on id and
+  // media key as a second line of defence.
+  function harvestMutationArticles(mutations) {
+    const seen = new Set();
+    const articles = [];
+    const collect = (node) => {
+      if (!node || node.nodeType !== 1 || seen.has(node)) return;
+      seen.add(node);
+      if (node.matches?.('article[data-testid="tweet"]')) { articles.push(node); return; }
+      if (!node.querySelectorAll) return;
+      for (const found of node.querySelectorAll('article[data-testid="tweet"]')) {
+        if (!seen.has(found)) { seen.add(found); articles.push(found); }
+      }
+    };
+    for (const mutation of mutations || []) {
+      for (const node of mutation.addedNodes || []) collect(node);
+      for (const node of mutation.removedNodes || []) collect(node);
+    }
+    if (!articles.length) return;
+
+    const items = [];
+    for (const article of articles) items.push(...makeDomQueueItems(article));
+    submitDomItems(items);
+    // A harvested video post has no usable direct URL, so it needs the same
+    // bounded per-post resolve as a scanned one — without this, videos that
+    // virtualized away were never even queued for resolving.
     drainPendingVideoTweets();
   }
 
@@ -1400,8 +1452,11 @@
       document.addEventListener("DOMContentLoaded", startDomWatchers, { once: true });
       return;
     }
-    const observer = new MutationObserver(() => {
+    const observer = new MutationObserver((mutations) => {
       injectActionButtons();
+      // Harvest first: this is the only moment a virtualized post is guaranteed
+      // to be reachable, so it must not wait for the coalesced scan.
+      harvestMutationArticles(mutations);
       scheduleScan(150);
     });
     observer.observe(document.body, { childList: true, subtree: true });
@@ -1507,6 +1562,12 @@
     // immediately (the pass can take seconds while video posts resolve); the
     // panel's status poll picks up the completion note.
     if (msg.action === "scrollRescan") {
+      if (rescanRunning) {
+        // Say so rather than pretending a second pass started: the panel shows
+        // this string, and "rescanning" while nothing is happening is a lie.
+        sendResponse({ ...statusPayload(), ok: false, reason: "A rescan is already running on this tab." });
+        return;
+      }
       startRescan();
       sendResponse({ ...statusPayload(), rescanning: true });
       return;

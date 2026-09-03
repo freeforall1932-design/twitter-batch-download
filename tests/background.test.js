@@ -983,6 +983,73 @@ test("a completed download is remembered so it is not re-listed later", async ()
   assert.equal(afterReset.addedCount, 1);
 });
 
+test("queueRemove drops several rows at once for Remove selected", async () => {
+  const background = loadBackground();
+  await background.handleQueueMessage({
+    action: "queueAdd",
+    source: "scroll",
+    items: [
+      { id: "a", url: "https://example.test/a", type: "photo" },
+      { id: "b", url: "https://example.test/b", type: "photo" },
+      { id: "c", url: "https://example.test/c", type: "photo" }
+    ]
+  });
+  // The array form existed in the worker before v3.8 gave it a sender.
+  const state = await background.handleQueueMessage({ action: "queueRemove", ids: ["a", "c"] });
+  assert.deepEqual(Array.from(state.items, (item) => item.id), ["b"]);
+});
+
+test("a removed row is allowed back, and says why when it is not", async () => {
+  const background = loadBackground({ stored: { downloadedMediaIdsV1: ["900-gone"] } });
+  await background.handleQueueMessage({
+    action: "queueAdd",
+    source: "scroll",
+    items: [{ id: "900-gone", mediaKey: "gone", url: "https://pbs.example.com/media/gone.jpg", type: "photo" }]
+  });
+  await background.handleQueueMessage({ action: "queueRemove", id: "900-gone" });
+
+  // Rescan re-sends it. The worker dedupes against the LIVE queue, so a removed
+  // row is welcome back — unless a setting holds it, and then it must say so.
+  const held = await background.handleQueueMessage({
+    action: "queueAdd",
+    source: "scroll",
+    skipDownloaded: true,
+    items: [{ id: "900-gone", mediaKey: "gone", url: "https://pbs.example.com/media/gone.jpg", type: "photo" }]
+  });
+  assert.equal(held.addedCount, 0);
+  assert.equal(held.skippedDownloaded, 1,
+    "'nothing came back' must be distinguishable from 'held back by a setting'");
+
+  const back = await background.handleQueueMessage({
+    action: "queueAdd",
+    source: "scroll",
+    skipDownloaded: false,
+    items: [{ id: "900-gone", mediaKey: "gone", url: "https://pbs.example.com/media/gone.jpg", type: "photo" }]
+  });
+  assert.equal(back.addedCount, 1);
+  assert.equal(back.skippedDownloaded, 0);
+});
+
+test("the same media is one row across the scroll and remote lists", async () => {
+  const background = loadBackground();
+  const scrolled = await background.handleQueueMessage({
+    action: "queueAdd",
+    source: "scroll",
+    items: [{ id: "950-AbC", mediaKey: "AbC", url: "https://pbs.example.com/media/AbC.jpg?name=orig", type: "photo" }]
+  });
+  assert.equal(scrolled.addedCount, 1);
+
+  // v3.7's deep fetch fills the Remote list from the same profile the scroll is
+  // reading, so the same post arrives twice with two different sources.
+  const remote = await background.handleQueueMessage({
+    action: "queueAdd",
+    source: "remote",
+    items: [{ id: "950-1730000000", mediaKey: "AbC", url: "https://pbs.example.com/media/AbC.jpg?name=orig", type: "photo" }]
+  });
+  assert.equal(remote.addedCount, 0, "the remote fill must not duplicate a scrolled post");
+  assert.equal(remote.items.length, 1);
+});
+
 test("queueRemove drops a single row without touching the rest", async () => {
   const background = loadBackground();
   await background.handleQueueMessage({
