@@ -112,20 +112,15 @@
       <input id="rawMasterFolder" type="text" placeholder="Empty = save loose files like before" autocomplete="off">
       <p class="hint">Files save as <code>Downloads/&lt;folder&gt;/&lt;post name&gt;/001.jpg</code>. Leave <strong>empty</strong> to switch the folder off and go back to the old flat <code>x-media/</code> layout. Slashes nest deeper (e.g. <code>XMedia/raw</code>).</p>
 
-      <label class="settings-label" for="defaultFormat">Download quality</label>
-      <select id="defaultFormat">
-        <option value="raw">Original resolution (separate files)</option>
-        
-      </select>
-      <p class="hint">Photos use the original resolution available from X; videos use the highest-bitrate MP4 available.</p>
-
-      <label class="settings-label" for="gifOutput">GIF posts save as</label>
+      <label class="settings-label" for="gifOutput">Animated posts save as</label>
       <select id="gifOutput">
-        <option value="gif">Real .gif files (converted, keeps animation)</option>
+        <option value="gif-max">Real .gif — maximum quality (per-frame palettes + dithering)</option>
+        <option value="webp">Animated WebP — true color, smaller than APNG (middle ground)</option>
+        <option value="apng">APNG — true color (largest, closest to MP4)</option>
         <option value="mp4">Original MP4 clips (as X serves them)</option>
       </select>
-      <p class="hint">X delivers GIFs as small silent MP4 clips. "Real .gif" converts them back — full quality frames, looping forever.</p>
-      <label class="check-label settings-check" title="Save raw downloads as XMedia/<user>/<post name>/001.jpg… — one folder per user the media is sourced from, so a user's whole media archive lives together and media seen on the home timeline, a profile and its /media page lands in the SAME folder (the folder doubles as a visual dedupe; byte + source-URL verification still runs). Archives cannot create folders, so the username is forced into the archive file name instead."><input id="userFolders" type="checkbox" checked> One folder per user (XMedia/&lt;user&gt;/…)</label>
+      <p class="hint">X delivers GIFs as small silent MP4 clips. The selected format is converted in the extension's offscreen document — and if it fails, the other animated formats are retried in quality order (APNG → WebP → GIF), so the original MP4 is a last resort. On the Firefox port conversion is unavailable and the MP4 clip is kept.</p>
+      <label class="check-label settings-check" title="Save raw downloads as XMedia/<user>/<post name>/001.jpg… — one folder per user the media is sourced from, so a user's whole media store lives together and media seen on the home timeline, a profile and its /media page lands in the SAME folder (the folder doubles as a visual dedupe; byte + source-URL verification still runs)."><input id="userFolders" type="checkbox" checked> One folder per user (XMedia/&lt;user&gt;/…)</label>
       <label class="check-label settings-check" title="Before saving, check the media's source URL and SHA-256 content hash against already-downloaded files. Byte-identical or same-URL media is skipped instead of saved again under a new name."><input id="verifyDuplicates" type="checkbox" checked> Skip duplicates (byte compare + source URL)</label>
       
 
@@ -155,19 +150,11 @@
         <button data-concurrency="2" class="selected">2</button>
       </div>
     </div>
-    <div class="concurrency-control">
-      <span>Save posts as</span>
-      <select id="jobFormat" aria-label="Format for this download" title="Applies to this download only — set the default in Output settings.">
-        <option value="raw">Separate files</option>
-        
-      </select>
-    </div>
     <div class="action-row">
       <button id="downloadSelectedBtn" class="button primary" disabled>Download selected</button>
       <button id="removeSelectedBtn" class="button secondary" disabled title="Delete the ticked rows from this list. Nothing is downloaded or un-downloaded — press Rescan tab to bring them back.">Remove selected</button>
       <button id="stopBtn" class="button secondary" disabled>Stop</button>
     </div>
-    <div id="queueNotices" class="queue-notices" role="alert" style="display:none"></div>
     <p id="downloadNotice" class="download-notice">Tick items, or use Select all, then download. Downloads keep running while you scroll.</p>
   </footer>
   <script src="lib/naming.js"></script>

@@ -1445,62 +1445,6 @@ test("queueClearFinished drops only completed and failed rows", async () => {
   assert.ok(remaining.includes("901-b"), "an unfinished row must survive Clear finished");
 });
 
-test("buildRunNotices only warns about media kinds actually packed into the archive", () => {
-  const background = loadBackground();
-  // Items that share a tweetId belong to the same post, so media kinds combine.
-  const queued = (id, kind) => ({
-    id, tweetId: "tw-mix", type: kind === "gif" ? "video" : kind, isGif: kind === "gif", status: "queued"
-  });
-
-  // A post with photos + a video while video archiving is OFF: the archive is a
-  // clean photo-only ZIP and the video stays a separate raw MP4. This must NOT
-  // raise the "mix ... not a single-format post" warning.
-  const photoVideoPost = [
-    queued("p1", "photo"),
-    queued("v1", "video")
-  ];
-  const off = background.buildRunNotices(
-    { items: photoVideoPost },
-    { archiveGifs: true, archiveVideos: false },
-    "zip"
-  );
-  assert.ok(!off.some((notice) => /mix/i.test(notice)), `no mix warning expected: ${off}`);
-
-  // Same post with videos opted in: now the archive genuinely mixes photo/video
-  // entries, so the warning is correct.
-  const on = background.buildRunNotices(
-    { items: photoVideoPost },
-    { archiveGifs: true, archiveVideos: true },
-    "zip"
-  );
-  assert.ok(on.some((notice) => /mix/i.test(notice)), "mix warning expected when video is archived");
-  assert.ok(on.some((notice) => /include video files packed/i.test(notice)), "video archive warning expected");
-
-  // A post mixing photo + GIF (GIFs archive by default) raises the mix warning.
-  const photoGifPost = [
-    queued("p2", "photo"),
-    queued("g1", "gif")
-  ];
-  const gifOn = background.buildRunNotices(
-    { items: photoGifPost },
-    { archiveGifs: true, archiveVideos: false },
-    "zip"
-  );
-  assert.ok(gifOn.some((notice) => /mix/i.test(notice)), "photo+GIF is a genuinely mixed archive");
-
-  // A single-format post (photos only) never warns.
-  const photosOnly = [
-    queued("p3", "photo"),
-    queued("p4", "photo")
-  ];
-  const singleFormat = background.buildRunNotices(
-    { items: photosOnly },
-    { archiveGifs: true, archiveVideos: false },
-    "zip"
-  );
-  assert.equal(singleFormat.length, 0, "a photos-only post never warns");
-});
-
 // Regression for the round-3 review: two handlers existed in background.js and
 // were listed in the SESSION_HANDOFF message contract, but no UI ever sent them
 // (queueClearFinished, queueClearDownloadedHistory). A contract the docs

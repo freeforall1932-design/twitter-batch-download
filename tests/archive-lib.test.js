@@ -1,7 +1,12 @@
 // Shared archive engine (lib/archive.js): the service-worker fallback and the
-// offscreen document now run ONE copy of fetch/PDF-page/archive-bytes code.
+// offscreen document run ONE copy of fetch/PDF-page/archive-bytes code.
 // This suite pins the byte-level output to the same writers the offscreen
 // path uses, so the two contexts cannot drift apart.
+//
+// v3.12 retired the archive path from the shipped extension/ build. This
+// suite is an archive-specific historical test, so it imports the PRESERVED
+// source variant (source/archive-enabled/chrome-extension/lib/), which is
+// where the archive engine now lives.
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
@@ -10,12 +15,12 @@ const test = require("node:test");
 // in (importScripts in the worker, <script> tags in the offscreen document):
 // under the globalThis.XDLZip / XDLPdf names. Mirror that here instead of
 // wiring module dependencies into the browser-shared file.
-globalThis.XDLZip = require("../extension/lib/zipWriter.js");
-globalThis.XDLPdf = require("../extension/lib/pdfBuilder.js");
+globalThis.XDLZip = require("../source/archive-enabled/chrome-extension/lib/zipWriter.js");
+globalThis.XDLPdf = require("../source/archive-enabled/chrome-extension/lib/pdfBuilder.js");
 
-const { bytesToBase64, buildArchiveBytes } = require("../extension/lib/archive.js");
-const { buildZip } = require("../extension/lib/zipWriter.js");
-const { jpegInfo, buildPdfDocument } = require("../extension/lib/pdfBuilder.js");
+const { bytesToBase64, buildArchiveBytes } = require("../source/archive-enabled/chrome-extension/lib/archive.js");
+const { buildZip } = require("../source/archive-enabled/chrome-extension/lib/zipWriter.js");
+const { jpegInfo, buildPdfDocument } = require("../source/archive-enabled/chrome-extension/lib/pdfBuilder.js");
 
 function makeJpeg(width, height, payload = 400) {
   const buf = new Uint8Array(payload + 20);

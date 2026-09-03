@@ -20,12 +20,16 @@ on:
   push:
     paths:
       - 'extension/**'
+      - 'firefox-extension/**'
+      - 'source/archive-enabled/**'
       - 'tests/**'
       - 'scripts/**'
       - '.github/workflows/extension-tests.yml'
   pull_request:
     paths:
       - 'extension/**'
+      - 'firefox-extension/**'
+      - 'source/archive-enabled/**'
       - 'tests/**'
       - 'scripts/**'
       - '.github/workflows/extension-tests.yml'

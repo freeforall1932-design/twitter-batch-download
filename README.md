@@ -24,8 +24,8 @@ Self-hosted against your signed-in X session. No third-party accounts, API keys,
 - **Include reposts** — Optional during profile discovery.
 - **Include quoted** — Media inside a quoted post's card (the "mentioned post" box with thumbnail and text) lists too, attributed to the quoted post's author, with a `quote` badge. On by default; switchable per tab.
 - **Rate-limit handling** — Throttle + exponential backoff; Side Panel shows a retry countdown on 429/503.
-- **Master folder + per-user + per-post folders (v3.5 layout, v3.11 per-user)** — Raw downloads save as `Downloads/XMedia/<user>/<post name>/001.jpg…` — one folder **per user** the media is sourced from (the owning post's author), so media seen on the home timeline, a profile and its `/media` page of the same user all land in the same folder (it doubles as visual dedupe on top of the byte + source-URL checks). The master folder is configurable in the Side Panel's **Output settings**; **One folder per user** (`userFolders`) can be switched off to restore `Downloads/XMedia/<post name>/001.jpg…`, and emptying the master folder restores the old flat `Downloads/x-media/{username}_{post text}_{tweetId}_{index}.{ext}` layout exactly. Slashes nest deeper (`XMedia/raw`). Archives cannot create folders, so ZIP/CBZ/PDF names always carry the username (`nasa - 111.cbz`).
-- **One file per post (v3.5, media-kind rules v3.6)** — Optional **ZIP / CBZ / PDF** output: a post's media (up to 4 items) bundles into a single `<post name>.zip|cbz|pdf` with entries `001…004` in post order. PDF pages embed original JPEGs losslessly (PNG/WebP re-encoded via canvas). **PDF holds photos only** — a post whose archive includes a GIF or video is saved as ZIP instead. GIFs join archives by default (as real `.gif` entries); videos only when explicitly opted in — both toggles live in Output settings, and the run warns up front when a video post is being zipped or a post mixes photos/GIFs/videos. This is a per-post archive of at most four items — the old multi-GB whole-batch ZIP stays removed.
+- **Master folder + per-user + per-post folders (v3.5 layout, v3.11 per-user)** — Downloads save as `Downloads/XMedia/<user>/<post name>/001.jpg…` — one folder **per user** the media is sourced from (the owning post's author), so media seen on the home timeline, a profile and its `/media` page of the same user all land in the same folder (it doubles as visual dedupe on top of the byte + source-URL checks). The master folder is configurable in the Side Panel's **Output settings**; **One folder per user** (`userFolders`) can be switched off to restore `Downloads/XMedia/<post name>/001.jpg…`, and emptying the master folder restores the old flat `Downloads/x-media/{username}_{post text}_{tweetId}_{index}.{ext}` layout exactly. Slashes nest deeper (`XMedia/raw`). Since v3.12 every item is saved as its **own file** — per-post ZIP/CBZ/PDF bundles are no longer exposed by the shipped UI or worker.
+- **Separate original-resolution files only (v3.12, GIF conversion restored v3.13, quality modes v3.14, WebP + fallback v3.15)** — The queue downloads each selected media item independently: original-resolution photos (`name=orig`), highest-bitrate MP4 videos, and GIFs as a real `.gif`, animated `.webp` or true-color APNG per the output setting (converted from X's silent MP4 clips in a small offscreen document; if the chosen format fails, the other animated formats are retried — Chrome; the Firefox port keeps the MP4 clip). The former per-post **ZIP / CBZ / PDF** output (≤4 items of one post, media-kind rules, archive toggles and warnings) was retired from the shipped build and is preserved for reference — **not** a Load-unpacked target — under [`source/archive-enabled/`](source/archive-enabled/README.md). The old multi-GB whole-batch ZIP stays removed.
 - **Naming scheme checkboxes (v3.5)** — The post name is built from tokens (`{user}`, `{name}`, `{text}`, `{id}`, `{date}`; default `{user} - {text} - {id}`) picked with checkboxes and a live example preview; hand-typed custom templates keep working through a manual input. Degenerate names fall back to the post id; Windows-reserved names are prefixed.
 - **Live session capture** — MAIN-world observer learns current GraphQL operation IDs and safe request headers from the open X tab.
 - **No third-party services** — Calls go to X only, using your browser session.
@@ -64,14 +64,13 @@ Under any media post: **Download** saves it now, **Add to queue** sends it to th
 
 Switch to the **Remote fetch** tab, enter `@username` or a profile URL, set a limit, optionally include reposts and quoted-post media, then **Remote discover**. This crawls X directly, so it can hit rate limits sooner than normal scrolling — prefer Scroll capture when you can.
 
-### Output settings (v3.5–v3.6)
+### Output settings
 
 Open **Output settings** (between the toolbar and the list):
 
-- **Master folder for saved files** — default `XMedia`; raw files save as `Downloads/XMedia/<post name>/001.jpg…`. Leave it **empty** to switch the folder off (old flat `x-media/` layout). Requires Chrome's *"Ask where to save each file"* to be off for folders to auto-create.
-- **Default format for posts with media** — separate files (raw) or one ZIP/CBZ/PDF per post. The dock's **Save posts as** picker overrides it for a single download without changing the stored default.
-- **GIF posts save as** (v3.6) — real `.gif` files (converted, keeps the animation and loops forever) or the original MP4 clips.
-- **Include GIFs / videos in post archives** (v3.6) — GIFs archive by default, videos are opt-in; both are ZIP/CBZ-only (never PDF). Switched off, they always save as separate files.
+- **Master folder for saved files** — default `XMedia`; raw files save as `Downloads/XMedia/<user>/<post name>/001.jpg…`. Leave it **empty** to switch the folder off (old flat `x-media/` layout). Requires Chrome's *"Ask where to save each file"* to be off for folders to auto-create.
+- **Format (v3.12)** — always **separate original-resolution files**; per-post ZIP/CBZ/PDF bundles were retired with the archive path (see `source/archive-enabled/`).
+- **Animated posts save as** (v3.6, restored v3.13, quality modes v3.14, WebP + fallback v3.15) — four choices: real `.gif` — **maximum quality** (default: 25 fps, ≤1920 px, per-frame 256-color palettes + Floyd–Steinberg dithering), **animated WebP** (25 fps, ≤1920 px, true color via the browser's native encoder, small files — the middle ground), **APNG — true color** (no palette, every frame keeps full RGBA; the closest an image format gets to the MP4), or the **original MP4 clips**. The old balanced 12 fps/global-palette GIF was removed in the v3.15 review (WebP covers that niche better and a single-table GIF bands on color shifts). If the chosen format fails, the other animated formats are retried in quality order (APNG → WebP → GIF) and the MP4 is the last resort. Firefox port: conversion is unavailable (no `chrome.offscreen`), so the MP4 clip is kept.
 - **Post name is built from** — tick the tokens; the example preview updates live. Untick everything and names fall back to the post id. A hand-typed custom template shows a manual input instead.
 
 ## How it works
@@ -81,8 +80,8 @@ Open **Output settings** (between the toolbar and the list):
 3. **Discovery** — Resolves user via `UserByScreenName`, pages `UserMedia` (or captured media-timeline aliases), parses timeline instructions, enqueues media.
 4. **Single tweet** — `TweetResultByRestId` for action-bar / DOM bulk.
 5. **Downloads** — `chrome.downloads` with concurrency 1–2, retries, and a safer filename ladder if Chrome rejects a path. Paths honor the **Output settings** (master folder + name template); relative subpaths only, never absolute, never `..`.
-6. **Archives (v3.5/v3.6)** — With ZIP/CBZ/PDF selected, a post's archived media are fetched and assembled in an **offscreen document** (`offscreen.html`), then saved by clicking an in-document `<a download>` anchor — some Chromium builds ignore the `filename` argument for `blob:` URLs and would otherwise save a UUID. Archives land at the download-directory root as `<post name>.<ext>` (the anchor mechanism cannot carry folders). If the offscreen API is unavailable, the worker falls back to a small base64 `data:` URL (safe: at most 4 items per post; GIF entries then embed their MP4 source, since conversion needs a DOM). Offscreen documents only expose `chrome.runtime`, so settings are relayed into the job message — never read from storage there.
-7. **GIF conversion (v3.6)** — GIF items are converted in the same offscreen document: the MP4 clip is decoded through `<video>` + canvas at 12 fps (bounded: ≤30 s, ≤360 frames, ≤720 px) and encoded by a local GIF89a writer (`lib/gifEncoder.js`, median-cut palette + LZW). Raw-mode GIFs travel back as base64 and are saved via a `data:` URL so they still land inside the master folder; any failure falls back to the original MP4.
+6. **Downloads (v3.12)** — every selected item is saved as its own file; no archive pass runs and the worker ignores stale `outputFormat` values (it always forces raw). The former per-post ZIP/CBZ/PDF assembly (offscreen document + `<a download>` anchor, worker data-URL fallback, media-kind rules) is preserved only in `source/archive-enabled/` — see its README.
+7. **GIF/WebP/APNG conversion (v3.6, re-added v3.13, quality modes v3.14, WebP v3.15)** — X serves `animated_gif` media as a small silent MP4 clip. The worker asks a small offscreen document (chrome.runtime only) to convert it per the `gifOutput` setting: maximum-quality GIF89a (`lib/gifEncoder.js`, median-cut per-frame palettes + LZW, ≤30 s / ≤1920 px / ≤256 MB) (per-frame local palettes + Floyd–Steinberg dithering, ≤30 s / ≤1920 px / ≤256 MB), animated WebP (`lib/webpEncoder.js` wraps browser-encoded static WebP frames into the WebP animation container; true color, ≤256 MB) or true-color APNG (`lib/apngEncoder.js`, full RGBA frames, same caps). Large results travel back **chunked** (3 MB binary per runtime message); all sizes save via a `data:` URL so they still land inside the master folder with the right `.gif`/`.webp`/`.apng` extension. **Fallback:** the other animated formats are retried in quality order (APNG → WebP → GIF) before the original MP4 is kept — never a failed item. Firefox port: no offscreen → MP4 kept.
 
 ## Permissions
 
@@ -93,7 +92,7 @@ Open **Output settings** (between the toolbar and the list):
 | `storage` | Queue, discovery state, settings |
 | `activeTab` + `scripting` | Buttons, bundle metadata, messaging |
 | `sidePanel` | Batch queue UI |
-| `offscreen` | Assemble per-post ZIP/CBZ/PDF blobs and convert GIF clips (MV3 workers have no object URLs, `<video>` or canvas) |
+| `offscreen` | Convert X's silent MP4 "GIF" clips into real animated `.gif`/`.webp`/`.apng` files (MV3 workers have no `<video>`/canvas). Conversion only — no archive assembly |
 
 **Host permissions:** `x.com`, `twitter.com`, `video.twimg.com`, `pbs.twimg.com`, `api.x.com`.
 
@@ -105,14 +104,16 @@ No data is sent to third-party extension backends.
 .
 ├── extension/                 # ← Load unpacked: select THIS folder in chrome://extensions
 │   ├── manifest.json          #   MV3, name/version live here
-│   ├── background.js          #   Auth, GraphQL, queue, discovery, downloads, archive pass
+│   ├── background.js          #   Auth, GraphQL, queue, discovery, downloads (raw only)
 │   ├── injected.js            #   MAIN-world GraphQL/header capture
 │   ├── content.js             #   Capture forwarder, action bar, DOM bulk
 │   ├── sidepanel.html/js/css  #   Batch queue UI + Output settings card
-│   ├── offscreen.html/js      #   ZIP/CBZ/PDF assembly + MP4→GIF conversion
-│   ├── lib/                   #   naming.js, dedupe.js, zipWriter.js, pdfBuilder.js, gifEncoder.js (shared with tests)
+│   ├── offscreen.html/js      #   MP4 clip → .gif / .webp / APNG conversion document (chrome.runtime ONLY)
+│   ├── lib/                   #   naming.js, dedupe.js, gifEncoder.js, webpEncoder.js, apngEncoder.js (shared with tests)
 │   ├── popup.html/js          #   Side Panel launcher + capture status
 │   └── icon48.png / icon128.png
+├── source/archive-enabled/    # Preserved pre-v3.12 archive build (NOT a Load-unpacked target)
+├── firefox-extension/         # Firefox port of the same raw-only build (no offscreen)
 ├── tests/                     # Node unit tests + sanitized fixtures
 ├── scripts/
 │   └── package-release.sh     # Zip extension/ → releases/ (packaging only, no build)
@@ -135,7 +136,8 @@ never loaded by the browser.
 
 ```bash
 for f in extension/*.js extension/lib/*.js; do node --check "$f"; done
-node --test tests/*.test.js   # 167 tests (offline: fixtures + window-less VM pipelines)
+node --test tests/*.test.js   # 169 tests (offline: fixtures + window-less VM pipelines;
+                              # the archive suites pin source/archive-enabled/)
 node --test tests/downloader.test.js
 ```
 

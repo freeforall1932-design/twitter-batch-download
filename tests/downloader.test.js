@@ -1,46 +1,21 @@
-// Download pipeline tests for the v3.5 output upgrade, mirroring the sister
+// Download pipeline tests for the v3.5+ output upgrade, mirroring the sister
 // repo's "Downloader (raw mode)" suite: master folder on/custom/off/weird
-// (feature 1), per-post ZIP/CBZ/PDF assembly through the worker fallback
-// (feature 2), and template-driven names end to end (feature 3). Runs the
-// REAL background.js + lib/ files in a VM — no browser needed.
+// (feature 1), template-driven names end to end (feature 3), and the v3.11
+// per-user folders. Runs the REAL v3.12 shipped background.js + lib/ files in
+// a VM — no browser needed. The per-post ZIP/CBZ/PDF assembly tests (the old
+// feature 2) now live in tests/archive-background.test.js and exercise the
+// preserved source variant under source/archive-enabled/.
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const { loadBackground } = require("./helpers/load-background.js");
 
-// Minimal JPEG with a real SOF0 frame (same fixture as pdf-builder.test.js).
-function makeJpeg(width, height, payload = 400) {
-  const buf = new Uint8Array(payload + 20);
-  buf.set([
-    0xFF, 0xD8,
-    0xFF, 0xC0, 0x00, 0x11, 0x08,
-    (height >> 8) & 0xFF, height & 0xFF,
-    (width >> 8) & 0xFF, width & 0xFF,
-    3, 0x01, 0x11, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01
-  ], 0);
-  buf[buf.length - 2] = 0xFF;
-  buf[buf.length - 1] = 0xD9;
-  return buf;
-}
-
 function capturingDownload(calls) {
   let nextId = 1;
   return (downloadOptions, callback) => {
     calls.push(downloadOptions);
     callback(nextId++);
-  };
-}
-
-function jpegFetch(fetched) {
-  return async (url) => {
-    if (fetched) fetched.push(url);
-    return {
-      ok: true,
-      status: 200,
-      headers: { get: () => "image/jpeg" },
-      arrayBuffer: async () => makeJpeg(100, 150).buffer
-    };
   };
 }
 
@@ -188,146 +163,21 @@ test("raw mode: userFolders:false restores the pre-v3.11 master layout", async (
   ]);
 });
 
-test("zip per post: one data-URL archive named <base>.zip with 001/002 entries in post order, items completed", async () => {
-  const calls = [];
-  const fetched = [];
-  const background = loadBackground({
-    download: capturingDownload(calls),
-    fetch: jpegFetch(fetched)
-  });
-  await startQueue(background, "zip");
-
-  assert.equal(calls.length, 1, "exactly one archive download per post");
-  assert.equal(calls[0].filename, "nasa - Hello world - 111.zip");
-  assert.ok(calls[0].url.startsWith("data:application/zip;base64,"), "worker fallback uses a data: URL");
-  // Every original full-size image was fetched, in post order.
-  assert.deepEqual(fetched, [
-    "https://pbs.twimg.com/media/pic0.jpg?format=jpg&name=orig",
-    "https://pbs.twimg.com/media/pic1.jpg?format=jpg&name=orig"
-  ]);
-
-  const zip = Buffer.from(calls[0].url.split(",")[1], "base64");
-  assert.equal(zip.readUInt32LE(0), 0x04034b50, "ZIP local header signature");
-  assert.ok(zip.indexOf(Buffer.from("001.jpg")) !== -1, "entry 001.jpg present");
-  assert.ok(zip.indexOf(Buffer.from("002.jpg")) !== -1, "entry 002.jpg present");
-  assert.ok(zip.indexOf(Buffer.from("001.jpg")) < zip.indexOf(Buffer.from("002.jpg")), "post order kept");
-  // The original image bytes are stored verbatim (STORE method).
-  assert.ok(zip.indexOf(Buffer.from(makeJpeg(100, 150))) !== -1, "original image embedded unmodified");
-
-  const state = await background.handleQueueMessage({ action: "queueGet" });
-  assert.deepEqual(Array.from(state.items, (item) => item.status), ["completed", "completed"]);
-  assert.equal(state.running, false, "queue finished");
-});
-
-test("cbz per post: same archive, .cbz name and comicbook MIME", async () => {
-  const calls = [];
-  const background = loadBackground({ download: capturingDownload(calls), fetch: jpegFetch() });
-  await startQueue(background, "cbz");
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].filename, "nasa - Hello world - 111.cbz");
-  assert.ok(calls[0].url.startsWith("data:application/vnd.comicbook+zip;base64,"));
-});
-
-test("pdf per post: every page in order at native size, named <base>.pdf", async () => {
-  const calls = [];
-  const background = loadBackground({ download: capturingDownload(calls), fetch: jpegFetch() });
-  await startQueue(background, "pdf");
-
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].filename, "nasa - Hello world - 111.pdf");
-  assert.ok(calls[0].url.startsWith("data:application/pdf;base64,"));
-  const pdf = Buffer.from(calls[0].url.split(",")[1], "base64");
-  const text = pdf.toString("latin1");
-  assert.ok(text.startsWith("%PDF-1.4\n"), "PDF header");
-  assert.ok(text.includes("/Count 2"), "one page per photo");
-  // Right orientation: the page box matches the image's native 100x150.
-  assert.equal(text.split("/MediaBox [0 0 100 150]").length - 1, 2, "page size = image size");
-  assert.ok(pdf.indexOf(Buffer.from(makeJpeg(100, 150))) !== -1, "JPEG embedded verbatim (DCTDecode)");
-});
-
-test("archive formats: videos still download raw; the stored default applies when no per-job format is sent", async () => {
-  const calls = [];
-  const background = loadBackground({
-    download: capturingDownload(calls),
-    fetch: jpegFetch(),
-    syncStored: { outputFormat: "zip" }
-  });
-  const video = {
-    id: "111-v",
-    url: "https://video.twimg.com/vid/111.mp4",
-    type: "video",
-    author: "@nasa",
-    text: "Hello world",
-    tweetId: "111",
-    mediaId: "v1",
-    mediaIndex: 2,
-    selected: true,
-    filename: "x-media/nasa_Hello world_111_3.mp4"
-  };
-  await background.handleQueueMessage({ action: "queueAdd", items: [...photoItems(2), video] });
-  await background.handleQueueMessage({ action: "queueSelectVisible", filter: "all", selected: true });
-  // No format in the message → the stored default ("zip") is used.
-  await background.handleQueueMessage({ action: "queueStart", mode: "selected" });
-  await background.processQueue();
-
-  const filenames = calls.map((call) => call.filename).sort();
-  assert.deepEqual(filenames, [
-    "XMedia/nasa/nasa - Hello world - 111/003.mp4",
-    "nasa - Hello world - 111.zip"
-  ]);
-  const state = await background.handleQueueMessage({ action: "queueGet" });
-  const archive = state.items.filter((item) => item.type === "photo");
-  assert.deepEqual(Array.from(archive, (item) => item.status), ["completed", "completed"]);
-});
-
-test("archive formats: an unknown/corrupt format value degrades to raw", async () => {
+test("raw mode: a stale format from old UI state still degrades to separate files", async () => {
   const calls = [];
   const background = loadBackground({ download: capturingDownload(calls) });
-  await startQueue(background, "tarball");
+  // Pre-v3.12 UIs sent "zip"/"cbz"/"pdf" per job; the v3.12+ worker must
+  // ignore them and save every item as its own original-resolution file.
+  await background.handleQueueMessage({ action: "queueAdd", items: photoItems(2) });
+  await background.handleQueueMessage({ action: "queueSelectVisible", filter: "all", selected: true });
+  const started = await background.handleQueueMessage({ action: "queueStart", mode: "selected", format: "zip" });
+  await background.processQueue();
+
+  assert.equal(started.outputFormat, "raw", "stale archive format ignored");
   assert.deepEqual(calls.map((call) => call.filename), [
     "XMedia/nasa/nasa - Hello world - 111/001.jpg",
     "XMedia/nasa/nasa - Hello world - 111/002.jpg"
   ]);
-});
-
-test("archive failure marks the whole post failed with the reason, without touching other posts", async () => {
-  const calls = [];
-  const background = loadBackground({
-    download: capturingDownload(calls),
-    fetch: async () => ({ ok: false, status: 404, headers: { get: () => null }, arrayBuffer: async () => new ArrayBuffer(0) })
-  });
-  await startQueue(background, "zip");
-  assert.equal(calls.length, 0, "no download starts for a failed archive");
-  const state = await background.handleQueueMessage({ action: "queueGet" });
-  assert.deepEqual(Array.from(state.items, (item) => item.status), ["failed", "failed"]);
-  assert.match(state.items[0].error, /404/);
-});
-
-test("offscreen path: the job is relayed with the templated filename and numbered entries; success completes the post", async () => {
-  const jobs = [];
-  const background = loadBackground({
-    download: capturingDownload([]),
-    offscreen: {
-      createDocument: async () => {},
-      hasDocument: async () => false
-    },
-    runtimeSendMessage: (message, callback) => {
-      // saveQueueState also broadcasts queueChanged with no callback.
-      if (message?.action !== "offscreenBuildArchive") return Promise.resolve();
-      jobs.push(message);
-      callback({ ok: true, filename: message.job.filename });
-      return undefined;
-    }
-  });
-  await startQueue(background, "zip");
-
-  assert.equal(jobs.length, 1);
-  assert.equal(jobs[0].action, "offscreenBuildArchive");
-  assert.equal(jobs[0].job.format, "zip");
-  assert.equal(jobs[0].job.filename, "nasa - Hello world - 111.zip");
-  assert.deepEqual(Array.from(jobs[0].job.images, (image) => image.name), ["001.jpg", "002.jpg"]);
-  const state = await background.handleQueueMessage({ action: "queueGet" });
-  assert.deepEqual(Array.from(state.items, (item) => item.status), ["completed", "completed"]);
 });
 
 test("single-post downloadFile message honors master folder + template when item metadata is present", async () => {

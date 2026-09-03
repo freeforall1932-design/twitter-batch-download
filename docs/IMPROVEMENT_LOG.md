@@ -1,5 +1,93 @@
 # Improvement Log
 
+## 2026-09-03 — v3.15 animated-WebP mode + animated-format fallback chain
+
+User pointed out the v3.14 options were only that — options — and asked for **automatic fallback** so a failed conversion still lands as an animated image (with GIF before MP4 as the absolute last resort), plus a **WebP mode** as the middle ground between APNG and GIF, and a review that APNG/WebP/GIF are all genuinely animated formats.
+
+**New animated WebP mode (`webp`)** — `extension/lib/webpEncoder.js` (dependency-free, UMD): browsers cannot encode an animated WebP directly, but `canvas.toBlob("image/webp", quality)` already encodes each frame natively. The new encoder parses those static RIFF WebP frames (validating the VP8/VP8L headers and dimensions), and re-wraps them into the WebP Extended + Animation container exactly per the container spec (VP8X flags, ANIM loop/canvas, 16-byte ANMF headers with 24-bit fields, ALPH propagation, RIFF even-padding). Output is true color at Chrome's lossy quality (`webpQuality 0.9`, 25 fps, ≤1920 px, ≤256 MB) — measured on a 3-frame 48×48 clip: 686 B vs APNG 11.8 KB vs GIF-max 7.1 KB vs balanced GIF 2.6 KB, with accurate per-frame colors. Offscreen `MODES` and the `offscreenConvertGif` allowlist gained `"webp"`; `offscreen.html` loads the new encoder.
+
+**Fallback chain** — workers now hold `ANIMATED_OUTPUT_FIDELITY = ["apng", "webp", "gif-max", "gif"]`; `convertFallbackChain(preferred)` puts the user's choice first and every other animated format after it in fidelity order. `prepareRawDownload` tries each in turn and only when ALL animated formats failed does it fall back to the original MP4 (the user's "use GIF before MP4 as last resort" rule) — never a failed item. `gifOutput` normalization accepts `webp`; Side Panel setting renamed "Animated posts save as" and the hint documents the retry order. Firefox port behavior unchanged (no offscreen → MP4 kept); sidepanel trio still byte-identical.
+
+**Post-review refinement (same PR):** the balanced global-palette GIF option was **removed** — one GIF mode only (`gif-max`), which is now the default. Reasoning: the balanced mode was only the pre-v3.14 legacy behavior; WebP now covers the small/simple niche with true color and at smaller sizes (686 B vs 2.6 KB on the review clip), while a single-table GIF measurably banded on color-shifting scenes ((232,112,43) vs source (27,223,41) on the red→green test) — the opposite of the "as close to MP4 as possible" goal. Legacy stored `"gif"` values and unknown values normalize to `gif-max`; the fallback chain is now APNG → WebP → GIF (still GIF before MP4 as the last resort). The balanced encoder remains in `lib/gifEncoder.js` as library capability (the preserved archive-enabled build and its tests use the default encoder path), but it is no longer a worker output, offscreen mode or UI option.
+
+**Animated-format review (reference decoders):** produced all four encodings from the same 3 frames and opened them with Pillow — GIF (balanced + max), PNG/APNG and WebP each report `n_frames=3` with the right size, loop and durations; APNG is pixel-exact; WebP is true color (≤3/channel lossy delta); GIF-max keeps each frame's hues via its per-frame tables; balanced GIF shows its documented frame-1-global-palette limitation (banding on color-shifting scenes — exactly why the new modes exist).
+
+**Tests (194 pass / 0 fail, ~4 s):** new `tests/webp-encoder.test.js` (7 tests — RIFF/VP8X/ANIM/ANMF structure, flags, 24-bit fields, durations, padding, ALPH propagation, VP8L path, a real reference-encoded VP8 fixture, rejection + single-use guards) and media-kinds additions (webp conversion, APNG→WebP fallback, all-formats-failed → MP4 with chain report, `convertFallbackChain` unit, `normalizeGifOutput` webp). Manifests 3.14.0 → **3.15.0** (both ports). No release zip cut yet (pending user review).
+
+## 2026-09-03 — v3.14 output quality modes: maximum-quality GIF + true-color APNG
+
+User asked for converted GIFs to get "as close to the original MP4 source as an image format allows", even at the cost of size, and chose **both** quality paths rather than one. The "GIF posts save as" setting in Output settings now offers four choices (balanced `.gif` stays the default):
+
+- **Real .gif — balanced** (unchanged default): 12 fps, ≤720 px, one global 256-color palette, no dithering, 40 MB cap.
+- **Real .gif — maximum quality** (`gif-max`): 25 fps, ≤1920 px, **per-frame local 256-color tables** + Floyd–Steinberg error diffusion (5-bit/channel lookup so the dither pass is O(pixels)), 256 MB cap. Much closer to the source; files are much larger.
+- **APNG — true color** (`apng`): identical caps to max GIF but **no palette at all** — every frame stays full RGBA (24/32-bit), filter-0 scanlines, per-frame deflate via `CompressionStream`, correct `acTL`/`fcTL`/`fdAT` sequence numbers and CRCs. Visually the closest an image format gets to the MP4. New dependency-free `extension/lib/apngEncoder.js` (UMD, no chrome APIs).
+- **Original MP4 clips** (unchanged).
+
+**Mechanics:**
+
+- `extension/offscreen.js` grew a `MODES` map and a **chunked two-message relay**: `offscreenConvertGif { job: { url, output, jobId } } → { ok, jobId, totalChunks }`, then `offscreenConvertGifChunk { jobId, index } → { ok, base64, index, last }` (3 MB binary per chunk ≈ 4 MB base64), per-job buffer with 15-minute TTL. The legacy single-message `{ ok, base64 }` path is kept for no-jobId callers/tests. Background `convertGifViaOffscreen(url, output)` joins the chunks and the worker still sends the file to `chrome.downloads` as a `data:` URL, so the master folder + per-user subfolders survive for `.gif` **and** `.apng` filenames.
+- Workers (both ports) normalize `gifOutput` to `gif | gif-max | apng | mp4` (unknown/legacy values degrade to the balanced default) and pass the mode through to the offscreen job; every failure still degrades to the original MP4, never a failed item.
+- `offscreen.html` now loads `lib/apngEncoder.js`; `sidepanel.html/js` (both ports, byte-identical) expose the four options and persist them via `storage.sync`.
+- Firefox port behavior is intentionally unchanged: no `chrome.offscreen` in MV2, so the MP4 clip is kept regardless of the setting (UI hint still documents this).
+
+**Tests (183 pass / 0 fail, ~4 s):** new `tests/apng-encoder.test.js` (6 tests — chunk CRC verification, strict fcTL/fdAT sequence checks, zlib inflate of filter-0 scanlines, byte-exact true-color gradient round-trip, acTL count+CRC patch, CRC reference vector) validated against PIL's real APNG decoder; `tests/gif-encoder.test.js` gained a local-palette reader + 4 max-quality tests (per-frame tables, dither pattern engagement, LZW growth under dither, solid-frame exactness); `tests/media-kinds.test.js` covers the chunked relay end-to-end plus `gif-max`/`apng` extension+MIME choices and chunk-failure degradation. Two encoder bugs found and fixed by the new tests: the GIF local-palette guard re-wrote the header on every frame (multi-header corrupt file), and the APNG acTL patch initially missed the signature (wrong part offsets) and included the PNG length field in the recomputed CRC. Manifests 3.13.0 → **3.14.0** (both ports); workflows (both copies) now also trigger on `firefox-extension/**` and `source/archive-enabled/**`. Syntax checks pass for every shipped script; no release zip cut yet (pending user review).
+
+## 2026-09-03 — v3.13 leanness pass: dead archive code stripped, GIF conversion restored (GIF-only offscreen)
+
+Asked to confirm the shipped folders were "lean, no bloat from the disabled feature, ready to test". File/permission level was already lean; the dead archive code still INSIDE the shipped scripts was not. This pass removes it and restores the one useful capability that the v3.12 strip had silently broken.
+
+**Removed from the shipped Chrome `extension/` + `firefox-extension/` builds:**
+
+- `background.js` (both ports): the whole dead archive section — `runArchivePass`, `buildArchiveInWorker`, `sendArchiveJobToOffscreen`, `archiveGroups`, `effectiveGroupFormat`, `archiveEntryExtension`, `archivedKinds` (~230 lines), plus the archive branches in `buildRunNotices` (function removed), `runQueuePass` and `queueStart`, and the `archiveGifs`/`archiveVideos` settings. Stale comments referencing the archive pass were corrected.
+- `sidepanel.html/js/css` (both ports): vestigial `defaultFormat`/`jobFormat` selects (one option each), the archive branch in the name preview, `queueNotices` box + render logic + CSS, archive mentions in the `userFolders` tooltip, and storage keys `outputFormat`/`archiveGifs`/`archiveVideos`.
+
+**Restored (the part worth keeping):**
+
+- GIF conversion now genuinely works again on Chrome: a small **GIF-only** offscreen document (`extension/offscreen.html` + `offscreen.js`, ~200 lines) decodes X's silent MP4 clip (≤30 s / ≤360 frames / ≤720 px / ≤40 MB) and returns a real GIF89a to the worker as base64; the `offscreen` permission is back in the Chrome manifest. No archive/Blob/anchor/dedupe code — the offscreen document exposes only `chrome.runtime` and handles only `offscreenConvertGif`.
+- The Side Panel "GIF posts save as" select is now actually wired (it existed in the HTML but was never persisted by `sidepanel.js`).
+- Firefox port has no `chrome.offscreen` (MV2), so it keeps the MP4 clip — documented limitation, unchanged.
+
+**Tests (169 pass / 0 fail, ~4 s):** the two archive-specific tests living in shipped-worker suites were moved to `tests/archive-background.test.js` (with the other archive coverage pinned to `source/archive-enabled/`); a new regression pins that the shipped worker ignores a stale `format:"zip"` and saves separate files; the existing raw-GIF offscreen test now covers the restored shipped path. `lib/naming.js` keeps `buildArchiveFilename`/format helpers deliberately — they are the shared naming engine used by the preserved archive variant and its tests, and keeping them byte-identical prevents drift. Manifests 3.12.0 → **3.13.0** (both ports). Syntax checks pass for every shipped script; packaging smoke passes; no release zip cut yet (pending user review).
+
+## 2026-09-03 — Follow-up: archive-specific tests retargeted to `source/archive-enabled/`
+
+The split left the archive-specific historical suites pointing at the stripped
+`extension/` worker, so they could not run: `tests/archive-lib.test.js`,
+`tests/pdf-builder.test.js` and `tests/zip-writer.test.js` required
+`extension/lib/{archive,zipWriter,pdfBuilder}.js` — files that no longer exist —
+and the archive-path tests inside `tests/downloader.test.js` and
+`tests/media-kinds.test.js` ran against the v3.12 worker, which always forces
+`outputFormat = "raw"` and never invokes the archive pass (8 failures total;
+one "unknown format degrades to raw" test only passed by accident).
+
+The follow-up keeps every archive test runnable and pins it to the PRESERVED
+source variant instead of deleting it:
+
+- `tests/helpers/load-background.js` gains an `extensionRoot` option (default
+  `"extension"`) so a suite can load the worker + `lib/` from
+  `source/archive-enabled/chrome-extension` with the exact same VM harness.
+- New `tests/archive-background.test.js` (16 tests) hosts the archive-pass
+  coverage moved out of the shipped-worker suites: worker data-URL
+  ZIP/CBZ/PDF bytes and naming, "videos still raw + stored default" and
+  unknown-format degradation, archive failure semantics, offscreen job relay,
+  media-kind rules (`archivedKinds`/`effectiveGroupFormat`/
+  `archiveEntryExtension`), queueStart archive warnings, mixed-post PDF→ZIP,
+  `archiveGifs`/`archiveVideos`, and the offscreen GIF-entry job shape.
+- `tests/downloader.test.js` keeps the raw-mode path tests (9) for the v3.12
+  worker; `tests/media-kinds.test.js` keeps quality/GIF-identity/raw-GIF tests
+  (5). The raw-run "warnings stay silent" assertion stayed with the shipped
+  suite; its "single-format photo archive post" half moved with the archive
+  suite.
+- The three library suites now require
+  `source/archive-enabled/chrome-extension/lib/*` and say so in their headers.
+
+Validation: `node --test tests/*.test.js` → **168 pass / 0 fail** (~4 s;
++1 from the raw/archive warning-test split, no archive coverage lost).
+`source/archive-enabled/README.md` now documents the test wiring, and the
+stale shipped-build README (which still advertised ZIP/CBZ/PDF in the UI,
+permissions and layout) was corrected. No `extension/` or `firefox-extension/`
+file changed, so the manifest stays 3.12.0.
+
 ## 2026-09-03 — Split archive-enabled source from the stripped shipped extension
 
 The prior archive retirement was completed physically. ZIP/CBZ/PDF runtime files (`offscreen.*`, `lib/archive.js`, `lib/zipWriter.js`, and `lib/pdfBuilder.js`) were removed from both shipped extension folders, along with the offscreen permission and archive library loads. The shipped UI and manifests now expose only separate original-resolution downloads.

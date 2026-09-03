@@ -11,6 +11,11 @@ function loadBackground(options = {}) {
   const stored = { ...(options.stored || {}) };
   const syncStored = { ...(options.syncStored || {}) };
   const downloadChangedListeners = [];
+  // Which worker root to exercise: the shipped build by default, or the
+  // preserved archive-enabled source variant (see tests/archive-background
+  // .test.js). "extension" resolves to repo-root extension/, so passing
+  // "source/archive-enabled/chrome-extension" loads the old archive worker.
+  const extensionRoot = options.extensionRoot || "extension";
   const context = {
     Blob,
     TextEncoder,
@@ -24,7 +29,7 @@ function loadBackground(options = {}) {
     // Run the real lib/ files in the VM context, exactly like the worker.
     importScripts: (...files) => {
       for (const file of files) {
-        const libSource = fs.readFileSync(path.join(__dirname, "..", "..", "extension", file), "utf8");
+        const libSource = fs.readFileSync(path.join(__dirname, "..", "..", extensionRoot, file), "utf8");
         vm.runInContext(libSource, context, { filename: file });
       }
     },
@@ -70,7 +75,7 @@ function loadBackground(options = {}) {
   context.globalThis = context;
   context.global = context;
   vm.createContext(context);
-  const source = fs.readFileSync(path.join(__dirname, "..", "..", "extension", "background.js"), "utf8");
+  const source = fs.readFileSync(path.join(__dirname, "..", "..", extensionRoot, "background.js"), "utf8");
   vm.runInContext(source, context, { filename: "background.js" });
   context.emitDownloadChange = async (delta) => {
     await Promise.all(downloadChangedListeners.map((listener) => listener(delta)));

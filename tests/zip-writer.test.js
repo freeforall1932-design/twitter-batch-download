@@ -1,4 +1,7 @@
-// Structure tests for the STORE-only ZIP writer (extension/lib/zipWriter.js):
+// Structure tests for the STORE-only ZIP writer
+// (source/archive-enabled/chrome-extension/lib/zipWriter.js — the archive
+// path retired from the shipped extension/ build in v3.12, so this
+// archive-specific historical suite pins the preserved source variant):
 // CRC-32 reference vector, local headers, verbatim stored data, central
 // directory, and the end-of-central-directory record — everything a reader
 // needs to open a per-post archive.
@@ -6,7 +9,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { crc32, buildZip } = require("../extension/lib/zipWriter.js");
+const { crc32, buildZip } = require("../source/archive-enabled/chrome-extension/lib/zipWriter.js");
 
 function bytes(text) {
   return new Uint8Array(Buffer.from(text, "latin1"));

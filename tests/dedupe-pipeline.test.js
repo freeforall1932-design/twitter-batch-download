@@ -235,34 +235,6 @@ test("a direct one-click download records its digest when Chrome finishes", asyn
   assert.equal(second.reason, "duplicate_bytes");
 });
 
-test("an already-verified archive group is skipped before assembly (no new file)", async () => {
-  const calls = [];
-  const background = loadBackground({
-    download: capturingDownload(calls),
-    // fetch is never used: the group is rejected before the offscreen/worker
-    // assembly path can fetch a single byte.
-    fetch: async () => { throw new Error("must not fetch"); },
-    stored: {
-      downloadedMediaRecordsV1: [
-        { id: "500-m1", mediaKey: "m1", url: "https://pbs.twimg.com/media/m1.jpg", urlKey: "https://pbs.twimg.com/media/m1.jpg", hash: "h1", filename: "XMedia/nasa - post - 500/001.jpg" },
-        { id: "500-m2", mediaKey: "m2", url: "https://pbs.twimg.com/media/m2.jpg", urlKey: "https://pbs.twimg.com/media/m2.jpg", hash: "h2", filename: "XMedia/nasa - post - 500/002.jpg" }
-      ]
-    }
-  });
-
-  await background.handleQueueMessage({
-    action: "queueAdd",
-    source: "scroll",
-    items: [
-      { id: "500-m1", mediaKey: "m1", url: "https://pbs.twimg.com/media/m1.jpg", type: "photo", tweetId: "500", author: "@nasa", displayName: "NASA", text: "post", mediaIndex: 0 },
-      { id: "500-m2", mediaKey: "m2", url: "https://pbs.twimg.com/media/m2.jpg", type: "photo", tweetId: "500", author: "@nasa", displayName: "NASA", text: "post", mediaIndex: 1 }
-    ]
-  });
-  await background.handleQueueMessage({ action: "queueStart", mode: "all", source: "scroll", format: "zip" });
-  await background.processQueue();
-
-  assert.equal(calls.length, 0, "a fully verified group must not reach the save path");
-  const state = await background.handleQueueMessage({ action: "queueGet" });
-  assert.ok(state.items.every((item) => item.status === "completed"));
-  assert.ok(state.items.every((item) => item.duplicateReason === "archive_duplicate"));
-});
+// The archive-group skip behavior (an already-verified post assembling
+// nothing) lives with the other archive tests in tests/archive-background
+// .test.js, which pins the preserved archive-enabled source variant.

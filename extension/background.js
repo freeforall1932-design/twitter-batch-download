@@ -1,15 +1,14 @@
 // ==========================================================================
 // background.js — Service Worker for X Media Downloader
 // Handles: auth, GraphQL API, media extraction, queue, direct downloads,
-// and (v3.5) per-post ZIP/CBZ/PDF assembly relayed to an offscreen document.
+// and (v3.13) MP4→GIF conversion relayed to a GIF-only offscreen document.
 // ==========================================================================
 
-// Shared output engine: naming/template/sanitize (lib/naming.js), STORE-only
-// ZIP writer (lib/zipWriter.js), dependency-free PDF 1.4 writer
-// (lib/pdfBuilder.js), and the fetch/PDF-page/archive-bytes helpers
-// (lib/archive.js, shared with the offscreen document). The same files load
-// there and in Node tests. Guarded so a packaging mistake degrades to raw
-// downloads instead of killing the whole worker at parse time.
+// Shared output engine here: naming/template/sanitize (lib/naming.js) and
+// duplicate verification (lib/dedupe.js). The GIF encoder (lib/gifEncoder.js)
+// loads only in the offscreen document — a worker has no <video>/canvas.
+// Guarded so a packaging mistake degrades to raw downloads instead of killing
+// the whole worker at parse time.
 try {
   importScripts("lib/naming.js", "lib/dedupe.js");
 } catch (error) {
@@ -461,32 +460,50 @@ function resolveTweetMedia(item) {
 const OUTPUT_SETTINGS_DEFAULTS = {
   rawMasterFolder: "XMedia", // "" (empty) = master folder OFF → old flat layout
   nameTemplate: "{user} - {text} - {id}",
-  outputFormat: "raw",
+  outputFormat: "raw", // kept for legacy stored values; worker always forces raw (v3.12+)
   // v3.11 — per-user folders:
   //   ON  → XMedia/<user>/<post name>/001.jpg (the user = the owning post's
   //         author, so media from the home timeline, a profile and the
   //         /media page of the SAME user collapse into one folder).
   //   OFF → XMedia/<post name>/001.jpg (pre-v3.11 layout).
   userFolders: true,
-  // v3.6 — media-kind handling:
-  gifOutput: "gif",     // "gif" = convert X's silent MP4 "GIFs" to real .gif files; "mp4" = keep the source clip
-  archiveGifs: true,    // GIFs join per-post archives like photos (ZIP/CBZ only — never PDF)
-  archiveVideos: false, // videos stay raw MP4s unless explicitly opted into ZIP/CBZ archives
+  // v3.6/v3.15 — GIF handling (one GIF mode only since the v3.15 review:
+  // the balanced 12 fps/global-palette GIF was removed — WebP now covers the
+  // small/simple niche with true color, and a single-table GIF bands badly on
+  // color-shifting scenes; legacy stored "gif" values map to gif-max):
+  //   "gif-max" → real .gif, maximum quality (per-frame local palettes + dithering)
+  //   "webp"    → animated WebP, true color, browser-native encoder (middle ground)
+  //   "apng"    → true-color APNG (closest to MP4 quality, largest)
+  //   "mp4"     → keep the original MP4 clip
+  gifOutput: "gif-max",
   // v3.10 — duplicate verification:
   verifyDuplicates: true // byte-identical + source-URL checks before a file is saved again
 };
 
 function normalizeGifOutput(value) {
-  return String(value || "").toLowerCase() === "mp4" ? "mp4" : "gif";
+  const v = String(value || "").toLowerCase();
+  // The pre-v3.15 balanced mode ("gif") is retired; stored legacy values now
+  // mean the maximum-quality GIF so existing preferences degrade gracefully.
+  return v === "mp4" ? "mp4" : v === "gif" || v === "gif-max" ? "gif-max" : v === "webp" ? "webp" : v === "apng" ? "apng" : "gif-max";
+}
+
+// Animated-image fidelity order for the fallback chain (v3.15): the format the
+// user selected is tried FIRST; if its conversion fails, every other animated
+// format is retried in this order (best fidelity → GIF last), and the original
+// MP4 is kept ONLY when all of them failed — never a failed item.
+const ANIMATED_OUTPUT_FIDELITY = ["apng", "webp", "gif-max"];
+
+function convertFallbackChain(output) {
+  const preferred = normalizeGifOutput(output);
+  if (preferred === "mp4") return ["mp4"];
+  return [preferred, ...ANIMATED_OUTPUT_FIDELITY.filter((candidate) => candidate !== preferred)];
 }
 
 // A corrupt/legacy stored value must degrade to the shipped defaults, never
-// to a surprise behavior (e.g. a truthy string flipping video archiving on).
+// to a surprise behavior.
 function normalizeOutputSettings(stored) {
   const merged = { ...OUTPUT_SETTINGS_DEFAULTS, ...(stored || {}) };
   merged.gifOutput = normalizeGifOutput(merged.gifOutput);
-  merged.archiveGifs = merged.archiveGifs !== false;
-  merged.archiveVideos = merged.archiveVideos === true;
   merged.verifyDuplicates = merged.verifyDuplicates !== false;
   merged.userFolders = merged.userFolders !== false;
   return merged;
@@ -574,30 +591,29 @@ function rawPathForItem(item, settings, extOverride) {
   ) || swapExt(item.filename);
 }
 
-// Which media kinds join per-post archives under the current settings.
-// Photos always do; GIFs and videos are user-opted (Feature toggles in the
-// Side Panel Output settings card).
-function archivedKinds(settings) {
-  const kinds = new Set(["photo"]);
-  if (settings?.archiveGifs !== false) kinds.add("gif");
-  if (settings?.archiveVideos === true) kinds.add("video");
-  return kinds;
-}
-
 // Raw download source + path for one item. GIF items are converted from X's
-// MP4 clip into a real .gif by the offscreen document (canvas + GIF89a
-// encoder); the resulting data: URL goes through chrome.downloads, which —
-// unlike blob: URLs — honors the filename argument including subfolders, so
-// converted GIFs still land inside the master folder. Every failure mode
-// (no offscreen API, conversion error, oversized result) degrades to the
-// original MP4 rather than failing the item.
+// MP4 clip into a real .gif (maximum quality), an animated WebP
+// or a true-color APNG by the offscreen document; the resulting data: URL
+// goes through chrome.downloads, which — unlike blob: URLs — honors the
+// filename argument including subfolders, so converted files still land
+// inside the master folder. The selected format is tried first; any
+// conversion failure falls through the other animated formats and only after
+// ALL of them fail does the item degrade to its original MP4 (never a failed
+// item).
 async function prepareRawDownload(item, settings) {
-  if (mediaKindOfItem(item) === "gif" && normalizeGifOutput(settings?.gifOutput) === "gif") {
-    const converted = await convertGifViaOffscreen(item.url);
-    if (converted?.ok && converted.base64) {
-      return { url: `data:image/gif;base64,${converted.base64}`, filename: rawPathForItem(item, settings, "gif") };
+  const output = normalizeGifOutput(settings?.gifOutput);
+  if (mediaKindOfItem(item) === "gif" && output !== "mp4") {
+    const failures = [];
+    for (const candidate of convertFallbackChain(output)) {
+      const converted = await convertGifViaOffscreen(item.url, candidate);
+      if (converted?.ok && typeof converted.base64 === "string" && converted.base64) {
+        const ext = candidate === "apng" ? "apng" : candidate === "webp" ? "webp" : "gif";
+        const mime = candidate === "apng" ? "image/apng" : candidate === "webp" ? "image/webp" : "image/gif";
+        return { url: `data:${mime};base64,${converted.base64}`, filename: rawPathForItem(item, settings, ext) };
+      }
+      failures.push(`${candidate}: ${converted?.error || "conversion failed"}`);
     }
-    console.warn("[X-DL BG] GIF conversion unavailable, keeping the MP4 source:", converted?.error || "offscreen document unavailable");
+    console.warn(`[X-DL BG] Every animated-image format failed for a GIF item, keeping the MP4 source — ${failures.join(" | ")}`);
   }
   return { url: item.url, filename: rawPathForItem(item, settings) };
 }
@@ -841,9 +857,9 @@ async function getTweetMedia(tweetId) {
     const ownerDate = ownerLegacy.created_at || "";
     const mediaItems = ownerLegacy.extended_entities?.media || ownerLegacy.entities?.media || [];
     // Position within the OWNING post's media list — drives the 001…004
-    // numbering inside the master folder and archive entry order. URL selection,
-    // GIF detection, and extension come from the shared resolveTweetMedia so the
-    // single-post path and the timeline path use identical rules.
+    // numbering inside the master folder. URL selection, GIF detection, and
+    // extension come from the shared resolveTweetMedia so the single-post
+    // path and the timeline path use identical rules.
     let mediaIndex = -1;
     for (const m of mediaItems) {
       mediaIndex += 1;
@@ -1351,8 +1367,8 @@ async function rememberDownloadedRecord(input) {
   return merged;
 }
 
-// One completed item → remembered record (called from onChanged, restart
-// reconciliation, and the archive pass).
+// One completed item → remembered record (called from onChanged and restart
+// reconciliation).
 async function rememberCompletedDownload(item, downloadId) {
   if (!item) return null;
   let filename = "";
@@ -1519,45 +1535,6 @@ async function saveQueueState() {
   broadcastQueueChanged();
 }
 
-// Up-front warnings for the run that just started, computed from the posts
-// actually queued (v3.6). Surfaced in the Side Panel dock so "zipping a
-// video post" and "this post mixes photos/GIFs/videos" never happen
-// silently. Empty in raw mode — raw downloads never combine media.
-function buildRunNotices(state, settings, format) {
-  const notices = [];
-  if (format === "raw") return notices;
-  const kindsPerPost = new Map();
-  for (const item of state.items) {
-    if (item.status !== "queued") continue;
-    const key = item.tweetId || item.id;
-    if (!kindsPerPost.has(key)) kindsPerPost.set(key, new Set());
-    kindsPerPost.get(key).add(mediaKindOfItem(item));
-  }
-  const archived = archivedKinds(settings);
-  let mixedPosts = 0, videoArchivePosts = 0, pdfFallbackPosts = 0;
-  for (const kinds of kindsPerPost.values()) {
-    // Only kinds actually packed into this post's archive matter. A post that
-    // mixes, say, photos + a video while video archiving is OFF produces a
-    // clean photo-only ZIP plus a separate raw MP4 — that is *not* a mixed
-    // single archive, so it must not raise the "mix" warning.
-    const archivedKindsForPost = [...kinds].filter((kind) => archived.has(kind));
-    if (archivedKindsForPost.length > 1) mixedPosts++;
-    if (archived.has("video") && kinds.has("video")) videoArchivePosts++;
-    if (format === "pdf" && archivedKindsForPost.some((kind) => kind !== "photo")) pdfFallbackPosts++;
-  }
-  const plural = (n) => (n === 1 ? "post" : "posts");
-  if (videoArchivePosts) {
-    notices.push(`Warning: ${videoArchivePosts} ${plural(videoArchivePosts)} include video files packed into ${format === "cbz" ? "CBZ" : "ZIP"} archives — video archives can be large.`);
-  }
-  if (mixedPosts) {
-    notices.push(`Warning: ${mixedPosts} ${plural(mixedPosts)} mix photos, GIFs and/or videos — not a single-format post.`);
-  }
-  if (pdfFallbackPosts) {
-    notices.push(`Warning: PDF holds photos only — ${pdfFallbackPosts} ${plural(pdfFallbackPosts)} with GIFs/videos will be saved as ZIP instead.`);
-  }
-  return notices;
-}
-
 function publicQueueState() {
   return queueState || { ...QUEUE_DEFAULT };
 }
@@ -1566,18 +1543,11 @@ async function runQueuePass() {
   const state = await getQueueState();
   if (!state.running || state.stopped) return;
   const settings = await getOutputSettings();
-  const format = globalThis.XDLNaming
-    ? globalThis.XDLNaming.normalizeOutputFormat(state.outputFormat)
-    : "raw";
   const active = state.items.filter((item) => ["starting", "downloading"].includes(item.status)).length;
   const slots = Math.max(0, state.concurrency - active);
-  // With an archive format active, queued items whose media kind is archived
-  // belong to the per-post archive pass (runArchivePass): photos always,
-  // GIFs when "Include GIFs in archives" is on, videos only when the user
-  // explicitly opted videos in. Everything else flows through here as a raw
-  // file.
-  const rawEligible = (item) => item.status === "queued"
-    && (format === "raw" || !archivedKinds(settings).has(mediaKindOfItem(item)));
+  // Archive output was retired (v3.12): every queued item downloads as its own
+  // original-resolution file. No archive pass exists anymore.
+  const rawEligible = (item) => item.status === "queued";
   const nextItems = state.items.filter(rawEligible).slice(0, slots);
   for (const item of nextItems) {
     item.status = "starting";
@@ -1625,22 +1595,18 @@ async function runQueuePass() {
 }
 
 // ==========================================================================
-// ARCHIVE PASS — one ZIP/CBZ/PDF per post (v3.5, media-kind rules v3.6)
+// GIF/WEBP/APNG CONVERSION — X's animated_gif media is a silent MP4 clip; a
+// real .gif (maximum quality), an animated .webp or a true-color
+// APNG is produced in a small offscreen document (<video> + canvas + the
+// streaming GIF89a/WebP/APNG encoders). A worker has no DOM, so without the
+// offscreen document every format fails and the item degrades to its original
+// MP4 — never a failed item.
 // ==========================================================================
-// When the effective output format is zip/cbz/pdf, the queued media of each
-// post (up to 4 items on X) becomes one archive named after the templated
-// post base name. Kind rules:
-//   photos  → always archived; PDF allowed (photos are the only PDF pages).
-//   GIFs    → archived when `archiveGifs` is on, as REAL .gif entries
-//             (converted from X's MP4 clips); ZIP/CBZ only — a post whose
-//             archive contains a GIF or video degrades PDF → ZIP.
-//   videos  → raw MP4s unless `archiveVideos` is explicitly on; ZIP/CBZ only.
-// Assembly happens in the offscreen document (object URL + <a download>
-// anchor — some Chromium builds ignore chrome.downloads' filename for blob:
-// URLs); when the offscreen API is unavailable the worker falls back to a
-// base64 data: URL for photo-only jobs (GIF conversion needs a DOM). This is
-// a PER-POST archive of ≤4 items — the old multi-GB whole-batch ZIP stays
-// removed.
+// The offscreen document exposes ONLY chrome.runtime (a storage/downloads
+// call there crashes the document), so the job carries just the URL and the
+// encoded bytes travel back as base64 (chunked when large). chrome.downloads
+// honors the filename argument for data: URLs, so converted files still land
+// inside the master folder.
 
 const OFFSCREEN_DOCUMENT_PATH = "offscreen.html";
 
@@ -1652,7 +1618,7 @@ async function ensureOffscreenDocument() {
     await offscreen.createDocument({
       url: OFFSCREEN_DOCUMENT_PATH,
       reasons: ["BLOBS"],
-      justification: "Assemble per-post ZIP/CBZ/PDF archives, convert GIF clips, and save them via an object URL."
+      justification: "Convert X's silent MP4 GIF clips into real animated GIF/WebP/APNG files."
     });
     return true;
   } catch (error) {
@@ -1683,211 +1649,44 @@ function sendOffscreenRequest(action, payload, timeoutMs, timeoutError) {
   });
 }
 
-function sendArchiveJobToOffscreen(job) {
-  return sendOffscreenRequest("offscreenBuildArchive", { job }, 180000, "Archive assembly timed out");
-}
-
-// MP4 "GIF" → real .gif, converted in the offscreen document (a service
-// worker has no <video>/canvas). Returns { ok, base64 } or { ok:false }.
-async function convertGifViaOffscreen(url) {
+// MP4 "GIF" → real .gif (maximum quality), animated WebP or
+// true-color APNG, converted in the offscreen document (a service worker has
+// no <video>/canvas). Returns { ok, base64 } or { ok:false }.
+// Large outputs are transferred chunked (max-quality GIF/APNG/WebP can exceed
+// the size of a single runtime message): the offscreen document answers with
+// the chunk count, then each 3 MB binary chunk is pulled by index and joined
+// here.
+async function convertGifViaOffscreen(url, output) {
   if (!(await ensureOffscreenDocument())) return { ok: false, error: "Offscreen document unavailable" };
-  return sendOffscreenRequest("offscreenConvertGif", { job: { url } }, 120000, "GIF conversion timed out");
-}
-
-// Service-worker fallback: assemble the archive here and hand a data: URL to
-// chrome.downloads (data: URLs respect the filename argument; blob: URLs do
-// not on some builds). Byte-level archive work (fetch, PDF page prep, ZIP/PDF
-// build) lives in lib/archive.js — the same code the offscreen document runs.
-// Never used for large payloads — a post is ≤4 items. No DOM here, so GIF
-// entries cannot be converted: their MP4 bytes go in verbatim under an .mp4
-// entry name.
-async function buildArchiveInWorker(job) {
-  const archive = globalThis.XDLArchive;
-  if (!archive) throw new Error("Archive engine unavailable.");
-  const dedupe = globalThis.XDLDedupe;
-  const format = globalThis.XDLNaming.normalizeOutputFormat(job.format);
-  const fetched = [];
-  for (const image of job.images) {
-    const name = image.kind === "gif" ? image.name.replace(/\.gif$/i, ".mp4") : image.name;
-    const fetchedImage = await archive.fetchImageBytes(image.url);
-    // v3.10 — per-entry digests so a re-run assembles nothing when every
-    // item of the post is already byte-verified.
-    fetched.push({
-      name,
-      bytes: fetchedImage.bytes,
-      contentType: fetchedImage.contentType,
-      url: image.url,
-      hash: dedupe ? dedupe.hashBytes(fetchedImage.bytes) : "",
-      size: fetchedImage.bytes.byteLength
-    });
-  }
-  const assembled = await archive.buildArchiveBytes(fetched, format);
-  // The data: URL is the archive payload itself; byte verification already ran
-  // at the archive level (hash below), so skip the per-URL check here.
-  const result = await downloadFile(
-    `data:${assembled.mime};base64,${archive.bytesToBase64(assembled.bytes)}`,
-    job.filename,
-    { verifyBytes: false }
+  const jobId = `g-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const started = await sendOffscreenRequest(
+    "offscreenConvertGif",
+    { job: { url, output, jobId } },
+    600000,
+    "GIF conversion timed out"
   );
-  if (!result.success) throw new Error(result.error || "Unable to start archive download");
-  return {
-    ok: true,
-    hash: dedupe ? dedupe.hashBytes(assembled.bytes) : "",
-    size: assembled.bytes.byteLength,
-    entries: fetched.map((entry) => ({ url: entry.url, hash: entry.hash, size: entry.size }))
-  };
-}
-
-// Queued archive-eligible media grouped per owning post, in post order
-// (mediaIndex). Which kinds are eligible depends on the settings toggles —
-// see archivedKinds(); ineligible items stay in the raw pass.
-function archiveGroups(state, settings) {
-  const kinds = archivedKinds(settings);
-  const groups = new Map();
-  for (const item of state.items) {
-    if (item.status !== "queued" || !kinds.has(mediaKindOfItem(item))) continue;
-    const key = item.tweetId || item.id;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(item);
-  }
-  for (const group of groups.values()) {
-    group.sort((a, b) => (Number(a.mediaIndex) || 0) - (Number(b.mediaIndex) || 0));
-  }
-  return groups;
-}
-
-// PDF pages can only be still images. The moment a GIF or video enters a
-// post's archive, PDF silently degrades to ZIP for THAT post (announced up
-// front via the queueStart notices).
-function effectiveGroupFormat(group, requestedFormat) {
-  const hasMotion = group.some((item) => mediaKindOfItem(item) !== "photo");
-  if (hasMotion && requestedFormat === "pdf") return "zip";
-  return requestedFormat;
-}
-
-// Target archive-entry extension per item. GIF entries are named .gif when
-// conversion is on — the offscreen document renames a failed conversion
-// back to .mp4 so the archive is never mislabeled.
-function archiveEntryExtension(item, settings) {
-  const kind = mediaKindOfItem(item);
-  if (kind === "video") return "mp4";
-  if (kind === "gif") return normalizeGifOutput(settings?.gifOutput) === "gif" ? "gif" : "mp4";
-  return extensionForItem(item);
-}
-
-async function runArchivePass() {
-  const state = await getQueueState();
-  if (!state.running || state.stopped) return;
-  const naming = globalThis.XDLNaming;
-  if (!naming) return;
-  const format = naming.normalizeOutputFormat(state.outputFormat);
-  if (format === "raw") return;
-  const settings = await getOutputSettings();
-
-  for (const [, group] of archiveGroups(state, settings)) {
-    if (state.stopped) break;
-    const groupFormat = effectiveGroupFormat(group, format);
-    const lead = group[0];
-    const fields = namingFieldsForItem(lead);
-    const filename = naming.buildArchiveFilename(
-      { nameTemplate: settings.nameTemplate, userFolders: settings.userFolders },
-      fields,
-      groupFormat
+  if (!started?.ok) return started;
+  const chunks = [];
+  const total = Number(started.totalChunks) || 1;
+  for (let i = 0; i < total; i++) {
+    const chunk = await sendOffscreenRequest(
+      "offscreenConvertGifChunk",
+      { jobId, index: i },
+      60000,
+      "GIF chunk transfer timed out"
     );
-    const job = {
-      format: groupFormat,
-      filename,
-      gifOutput: normalizeGifOutput(settings.gifOutput),
-      images: group.map((item, position) => ({
-        url: item.url,
-        kind: mediaKindOfItem(item),
-        name: `${naming.pageNumber(item.mediaIndex ?? position)}.${archiveEntryExtension(item, settings)}`
-      }))
-    };
-
-    // v3.10 — byte/source verification BEFORE assembling anything: if every
-    // media item of this post is already in the downloaded-history store, the
-    // archive would be byte-identical too — skip it instead of re-saving it
-    // under a uniquified "(1)" name.
-    if (settings.verifyDuplicates) {
-      const known = [];
-      for (const item of group) known.push(await findDownloadedForItem(item));
-      if (known.every(Boolean)) {
-        group.forEach((item) => {
-          item.status = "completed";
-          item.error = null;
-          item.downloadId = null;
-          item.note = "Skipped — every media item of this post is already saved (byte/source verified).";
-          item.duplicateReason = "archive_duplicate";
-          item.duplicateOf = known.find(Boolean)?.filename || "";
-        });
-        await rememberDownloadedId(lead.id);
-        await saveQueueState();
-        continue;
-      }
+    if (!chunk?.ok || typeof chunk.base64 !== "string") {
+      return { ok: false, error: chunk?.error || "GIF chunk transfer failed" };
     }
-
-    group.forEach((item) => {
-      item.status = "starting";
-      item.attempts = (item.attempts || 0) + 1;
-    });
-    await saveQueueState();
-
-    let result;
-    if (await ensureOffscreenDocument()) {
-      result = await sendArchiveJobToOffscreen(job);
-    } else {
-      result = await buildArchiveInWorker(job).catch((error) => ({ ok: false, error: String(error?.message || error) }));
-    }
-
-    if (result?.ok) {
-      for (let i = 0; i < group.length; i++) {
-        const item = group[i];
-        const entry = result.entries?.[i] || {};
-        // Per-item records first, so a later identical run skips this group
-        // entirely (pre-assembly check above) instead of re-assembling it.
-        await rememberDownloadedRecord(downloadedRecordFor(item, item.url, null, entry.hash, entry.size));
-        item.status = "completed";
-        item.error = null;
-        item.downloadId = null;
-        item.digest = entry.hash ? { hash: entry.hash, size: entry.size } : null;
-        await rememberDownloadedId(item.id);
-      }
-      // Archive-level record (schema + deterministic ZIP timestamps make the
-      // bytes reproducible), for future byte verification of re-downloads.
-      if (result.hash) {
-        await rememberDownloadedRecord({
-          id: "archive:" + (lead.tweetId || lead.id || filename),
-          mediaKey: "archive:" + (lead.tweetId || lead.id || filename),
-          url: filename,
-          urlKey: "archive:" + filename,
-          hash: result.hash,
-          size: result.size,
-          filename,
-          at: Date.now()
-        });
-      }
-    } else {
-      group.forEach((item) => {
-        item.status = "failed";
-        item.error = result?.error || "Archive assembly failed";
-        item.downloadId = null;
-      });
-    }
-    await saveQueueState();
+    chunks.push(chunk.base64);
   }
-
-  if (!state.items.some((item) => ["queued", "starting", "downloading"].includes(item.status))) {
-    state.running = false;
-    await saveQueueState();
-  }
+  return { ok: true, base64: chunks.join("") };
 }
 
 function processQueue() {
   // Runtime messages, retry timers, and multiple terminal download events can
   // request scheduling at the same time. Chain passes so slot calculations and
-  // starting-state reservations cannot overlap. The archive pass runs after
-  // the raw pass on the same chain, so a group is never assembled twice.
+  // starting-state reservations cannot overlap.
   queueProcessing = queueProcessing
     .then(() => runQueuePass())
     .catch((error) => console.error("[X-DL BG] Queue processing error", error));
@@ -2085,14 +1884,9 @@ async function handleQueueMessage(msg) {
     });
     state.stopped = false; state.running = true;
   } else if (msg.action === "queueStart") {
-    // Per-job "Save as" from the Side Panel dock. An explicit format applies
-    // to THIS run only (it is never written back to the stored default);
-    // omitted → the stored default from the settings card. Whitelisted so a
-    // corrupt value degrades to raw, never to a surprise archive.
-    const outputSettings = await getOutputSettings();
-    // Archive output was retired: every queue run is now a separate original
-    // resolution file. Ignore stale settings or old UI messages rather than
-    // allowing an archived run from pre-v3.12 state.
+    // Archive output was retired (v3.12): every queue run is now a separate
+    // original-resolution file. Ignore stale settings or old UI messages
+    // rather than allowing an archived run from pre-v3.12 state.
     state.outputFormat = "raw";
     state.items.forEach((item) => {
       const sourceOk = !msg.source || (item.source || "remote") === msg.source;
@@ -2108,9 +1902,6 @@ async function handleQueueMessage(msg) {
     });
     state.stopped = false;
     state.running = true;
-    // Announce archive-mode surprises (video posts being zipped, mixed-media
-    // posts, PDF→ZIP fallbacks) before the first byte downloads.
-    state.notices = buildRunNotices(state, outputSettings, state.outputFormat);
   } else if (msg.action === "queueStop") {
     state.stopped = true;
     state.running = false;

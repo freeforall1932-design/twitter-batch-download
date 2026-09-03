@@ -129,21 +129,6 @@ function render() {
   $("engineStatus").textContent = state.running ? "Downloading" : state.stopped ? "Paused" : activeTab === "scroll" ? "Capturing" : "Ready";
   $("engineStatus").className = "status-pill " + (state.running ? "running" : "idle");
 
-  // v3.6: archive-mode warnings computed by the background at queueStart
-  // (video posts being zipped, mixed-media posts, PDF→ZIP fallbacks).
-  const noticesBox = $("queueNotices");
-  const notices = Array.isArray(state.notices) ? state.notices : [];
-  if (notices.length && state.running) {
-    noticesBox.style.display = "";
-    noticesBox.textContent = "";
-    for (const notice of notices) {
-      const line = document.createElement("p");
-      line.textContent = notice;
-      noticesBox.appendChild(line);
-    }
-  } else {
-    noticesBox.style.display = "none";
-  }
   selectAllEl.checked = items.length > 0 && items.every((item) => item.selected);
   selectAllEl.indeterminate = items.some((item) => item.selected) && !selectAllEl.checked;
   if (!items.length) {
@@ -276,7 +261,7 @@ $("resetDownloadedBtn").addEventListener("click", async () => {
   state = await send({ action: "queueClearDownloadedHistory" });
   render();
 });
-$("downloadSelectedBtn").addEventListener("click", async () => { state = await send({ action: "queueStart", mode: "selected", source: sourceForActiveTab(), format: $("jobFormat").value }); render(); });
+$("downloadSelectedBtn").addEventListener("click", async () => { state = await send({ action: "queueStart", mode: "selected", source: sourceForActiveTab() }); render(); });
 $("stopBtn").addEventListener("click", async () => { state = await send({ action: "queueStop" }); render(); });
 $("removeSelectedBtn").addEventListener("click", async () => {
   const ids = selectedItems().map((item) => item.id);
@@ -431,29 +416,18 @@ const PREVIEW_FIELDS = {
 const outputSettingsState = {
   rawMasterFolder: XDLNaming.DEFAULT_RAW_MASTER_FOLDER,
   nameTemplate: XDLNaming.DEFAULT_NAME_TEMPLATE,
-  outputFormat: "raw",
   userFolders: XDLNaming.DEFAULT_USER_FOLDERS
 };
 
 function renderNamePreview() {
   const master = XDLNaming.normalizeRawMasterFolder(outputSettingsState.rawMasterFolder);
   const template = outputSettingsState.nameTemplate;
-  const format = XDLNaming.normalizeOutputFormat(outputSettingsState.outputFormat);
   const base = XDLNaming.makePostBaseName(template, PREVIEW_FIELDS);
   const user = outputSettingsState.userFolders === false ? "" : XDLNaming.userFolderName(PREVIEW_FIELDS);
   const root = master !== "" && user ? `${master}/${user}` : master;
-  let example;
-  if (format === "raw") {
-    example = master !== ""
-      ? `Downloads/${root}/${base}/001.jpg`
-      : `Downloads/x-media/nasa_Sunrise over the Pacific…_${PREVIEW_FIELDS.id}_1.jpg (old flat layout)`;
-  } else {
-    example = `Downloads/${XDLNaming.buildArchiveFilename(
-      { nameTemplate: template, userFolders: outputSettingsState.userFolders },
-      PREVIEW_FIELDS,
-      format
-    )}`;
-  }
+  const example = master !== ""
+    ? `Downloads/${root}/${base}/001.jpg`
+    : `Downloads/x-media/nasa_Sunrise over the Pacific…_${PREVIEW_FIELDS.id}_1.jpg (old flat layout)`;
   $("namePreview").textContent = `Example file name: ${example}`;
 }
 
@@ -520,11 +494,10 @@ function buildTemplateChecks(storedTemplate) {
 }
 
 chrome.storage.sync.get(
-  { rawMasterFolder: XDLNaming.DEFAULT_RAW_MASTER_FOLDER, nameTemplate: XDLNaming.DEFAULT_NAME_TEMPLATE, outputFormat: "raw", userFolders: true, gifOutput: "gif", archiveGifs: true, archiveVideos: false, verifyDuplicates: true },
+  { rawMasterFolder: XDLNaming.DEFAULT_RAW_MASTER_FOLDER, nameTemplate: XDLNaming.DEFAULT_NAME_TEMPLATE, userFolders: true, gifOutput: "gif-max", verifyDuplicates: true },
   (stored) => {
     outputSettingsState.rawMasterFolder = String(stored.rawMasterFolder);
     outputSettingsState.nameTemplate = String(stored.nameTemplate);
-    outputSettingsState.outputFormat = XDLNaming.normalizeOutputFormat(stored.outputFormat);
     outputSettingsState.userFolders = stored.userFolders !== false;
 
     // Master folder: saved verbatim on change — the EMPTY string is
@@ -555,15 +528,16 @@ chrome.storage.sync.get(
       renderNamePreview();
     });
 
-    // Stored default format (settings card) + per-job picker (dock). The
-    // dock picker is seeded from the default but never writes it back.
-    $("defaultFormat").value = outputSettingsState.outputFormat;
-    $("jobFormat").value = outputSettingsState.outputFormat;
-    $("defaultFormat").addEventListener("change", () => {
-      outputSettingsState.outputFormat = XDLNaming.normalizeOutputFormat($("defaultFormat").value);
-      chrome.storage.sync.set({ outputFormat: outputSettingsState.outputFormat });
-      $("jobFormat").value = outputSettingsState.outputFormat;
-      renderNamePreview();
+    // Animated output: maximum-quality .gif (the only GIF mode since the
+    // v3.15 review), animated WebP, true-color APNG or the original MP4 clip.
+    // The worker reads it at download time and falls back through the other
+    // animated formats on failure (Chrome only; Firefox has no offscreen
+    // document and keeps MP4). Legacy stored "gif" values render as gif-max.
+    const gifOutputBox = $("gifOutput");
+    const gifOutputValues = ["gif-max", "webp", "apng", "mp4"];
+    gifOutputBox.value = gifOutputValues.includes(stored.gifOutput) ? stored.gifOutput : "gif-max";
+    gifOutputBox.addEventListener("change", () => {
+      chrome.storage.sync.set({ gifOutput: gifOutputBox.value });
     });
 
     initNameTemplate(outputSettingsState.nameTemplate);
