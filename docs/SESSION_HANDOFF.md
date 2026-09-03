@@ -272,7 +272,10 @@ Cookie headers.
 
 ---
 
-## 4. Current architecture (v3.11.0)
+## 4. Current architecture (v3.12.0)
+
+**Output policy:** per-post ZIP/CBZ/PDF packaging is retired. Queue downloads are always separate files: photos force `name=orig`, and videos select the highest-bitrate MP4. The old archive modules remain only for isolated offline regression fixtures and are not loaded or invoked by the shipped queue path.
+
 
 | File | Role |
 |---|---|

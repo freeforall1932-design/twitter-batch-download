@@ -1,5 +1,14 @@
 # Improvement Log
 
+## 2026-09-03 — v3.12 archive-output retirement and original-resolution downloads
+
+A codebase review confirmed that the per-post ZIP/CBZ/PDF path added substantial worker/offscreen/archive plumbing, UI state, and warning logic for a feature no longer wanted. The download purpose is now deliberately simpler: every selected item is saved as its own file. Queue startup forces `outputFormat` to `raw`, queue processing no longer invokes the archive pass, and the UI format controls now expose only separate original-resolution files. The manifests are v3.12.0.
+
+The existing media resolver remains responsible for quality: photo URLs force X's `name=orig`, while video variants select the highest bitrate. GIFs retain their existing real-GIF conversion preference when available, with MP4 fallback on conversion failure. Duplicate URL/byte verification and per-user folders remain unchanged. Archive implementation files and offline archive tests are retained temporarily as isolated repository test/compatibility material, but are no longer loaded or reachable by the shipped queue UI.
+
+Validation: JavaScript syntax checks pass and the full offline suite remains **167 pass / 0 fail**. Live Chrome output verification is still required.
+
+
 ## 2026-09-03 — Post-v3.11 code review: unknown author could create a fake user folder
 
 A review of the v3.11 changes found one misalignment that the existing tests did not cover. `namingFieldsForItem()` used the literal `"unknown"` when a queue item had naming metadata but no author. `buildRawMediaPath()` then treated that as a real user and produced `XMedia/unknown/<post>/...`, contradicting the v3.11 rule that missing authors omit the user segment and never create an `unknown` bucket.

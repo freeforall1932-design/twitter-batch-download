@@ -1910,8 +1910,7 @@ function processQueue() {
   // the raw pass on the same chain, so a group is never assembled twice.
   queueProcessing = queueProcessing
     .then(() => runQueuePass())
-    .then(() => runArchivePass())
-    .catch((error) => console.error("[X-DL BG] Queue processing error", error));
+.catch((error) => console.error("[X-DL BG] Queue processing error", error));
   return queueProcessing;
 }
 
@@ -2111,10 +2110,9 @@ async function handleQueueMessage(msg) {
     // omitted → the stored default from the settings card. Whitelisted so a
     // corrupt value degrades to raw, never to a surprise archive.
     const outputSettings = await getOutputSettings();
-    const requested = msg.format !== undefined ? msg.format : outputSettings.outputFormat;
-    state.outputFormat = globalThis.XDLNaming
-      ? globalThis.XDLNaming.normalizeOutputFormat(requested)
-      : "raw";
+    // Archive output was retired: every queue run is now a separate original
+    // resolution file. Ignore stale settings or old UI messages.
+    state.outputFormat = "raw";
     state.items.forEach((item) => {
       const sourceOk = !msg.source || (item.source || "remote") === msg.source;
       const allowed = sourceOk && (msg.mode === "all" || item.selected);

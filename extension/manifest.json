@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "X Media Downloader",
-  "version": "3.11.0",
-  "description": "Download videos and photos from X/Twitter — Side Panel batch queue or one-click on tweets",
+  "version": "3.12.0",
+  "description": "Download videos and photos from X/Twitter \u2014 Side Panel batch queue or one-click on tweets",
   "permissions": [
     "downloads",
     "storage",

@@ -112,14 +112,12 @@
       <input id="rawMasterFolder" type="text" placeholder="Empty = save loose files like before" autocomplete="off">
       <p class="hint">Files save as <code>Downloads/&lt;folder&gt;/&lt;post name&gt;/001.jpg</code>. Leave <strong>empty</strong> to switch the folder off and go back to the old flat <code>x-media/</code> layout. Slashes nest deeper (e.g. <code>XMedia/raw</code>).</p>
 
-      <label class="settings-label" for="defaultFormat">Default format for posts with media</label>
+      <label class="settings-label" for="defaultFormat">Download quality</label>
       <select id="defaultFormat">
-        <option value="raw">Separate files (raw)</option>
-        <option value="zip">One ZIP per post</option>
-        <option value="cbz">One CBZ per post</option>
-        <option value="pdf">One PDF per post</option>
+        <option value="raw">Original resolution (separate files)</option>
+        
       </select>
-      <p class="hint">ZIP/CBZ/PDF bundle a post's media (up to 4 items) into one file named after the post. PDF holds photos only — a post whose archive includes a GIF or video is saved as ZIP instead.</p>
+      <p class="hint">Photos use the original resolution available from X; videos use the highest-bitrate MP4 available.</p>
 
       <label class="settings-label" for="gifOutput">GIF posts save as</label>
       <select id="gifOutput">
@@ -132,7 +130,7 @@
       <label class="check-label settings-check"><input id="archiveVideos" type="checkbox"> Include videos in post archives (ZIP/CBZ only — archives can get large)</label>
       <label class="check-label settings-check" title="Save raw downloads as XMedia/<user>/<post name>/001.jpg… — one folder per user the media is sourced from, so a user's whole media archive lives together and media seen on the home timeline, a profile and its /media page lands in the SAME folder (the folder doubles as a visual dedupe; byte + source-URL verification still runs). Archives cannot create folders, so the username is forced into the archive file name instead."><input id="userFolders" type="checkbox" checked> One folder per user (XMedia/&lt;user&gt;/…)</label>
       <label class="check-label settings-check" title="Before saving, check the media's source URL and SHA-256 content hash against already-downloaded files. Byte-identical or same-URL media is skipped instead of saved again under a new name."><input id="verifyDuplicates" type="checkbox" checked> Skip duplicates (byte compare + source URL)</label>
-      <p class="hint">Off = GIFs/videos always save as separate files, even when photos of the same post are archived.</p>
+      
 
       <label class="settings-label">Post name is built from</label>
       <div id="nameTemplateChecks" class="template-checks"></div>
@@ -164,9 +162,7 @@
       <span>Save posts as</span>
       <select id="jobFormat" aria-label="Format for this download" title="Applies to this download only — set the default in Output settings.">
         <option value="raw">Separate files</option>
-        <option value="zip">ZIP per post</option>
-        <option value="cbz">CBZ per post</option>
-        <option value="pdf">PDF per post</option>
+        
       </select>
     </div>
     <div class="action-row">
