@@ -1,8 +1,8 @@
 // ==========================================================================
 // lib/apngEncoder.js — dependency-free animated PNG (APNG) writer (v3.14).
 //
-// GIF can only hold 256 colors per frame, which is the hard quality ceiling
-// of the balanced encoder. APNG is the "as close to the MP4 source as an
+// GIF can only hold 256 colors per frame, which is GIF's hard quality
+// ceiling. APNG is the "as close to the MP4 source as an
 // image format gets" path: true 24/32-bit color per frame (no palette, no
 // banding), exact frame pixels, and PNG's lossless compression. It trades
 // file size for fidelity — that is deliberate.

@@ -12,7 +12,7 @@
 // Output: true-color frames at Chrome's own lossy/lossless encoder quality,
 // up to 750 frames, animation looping forever — a genuine middle ground
 // between APNG (lossless, huge) and GIF (256 colors, banding): like APNG it
-// keeps full color; like GIF it stays small (the "balanced" option).
+// keeps full color, and like GIF it stays small — without the banding.
 //
 // Frames arrive as already-compressed static WebP byte strings
 // (Uint8Array), so only the (small) compressed payloads are held until

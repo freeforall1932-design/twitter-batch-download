@@ -1,10 +1,11 @@
 // ==========================================================================
 // offscreen.js — MP4→GIF / MP4→WebP / MP4→APNG conversion in a DOM context
-// (v3.15).
+// (v3.15; the balanced global-palette GIF mode was retired in the v3.15
+// review — GIF means the maximum-quality encoder).
 //
 // X serves animated_gif media as a small silent MP4 clip. This document
 // decodes the clip frame-by-frame through <video> + canvas and encodes it as
-// a real animated .gif (GIF89a, balanced or maximum-quality mode), an
+// a real animated .gif (GIF89a, maximum-quality mode), an
 // animated .webp (true color via the browser's native frame encoder, wrapped
 // into the WebP animation container by lib/webpEncoder.js) or a true-color
 // animated PNG (APNG), then returns the bytes to the service worker as
@@ -29,10 +30,11 @@
   "use strict";
 
   // Quality modes: what the "as close to MP4 as possible" trade-off means.
-  //   gif      — balanced GIF: 12 fps, ≤720 px, global palette, no dithering.
+  // (The pre-v3.15 balanced global-palette GIF mode was retired — see
+  // background.js; the offscreen still maps an unknown/legacy output to the
+  // maximum-quality GIF.)
   //   gif-max  — maximum-quality GIF: 25 fps, ≤1920 px, per-frame local
-  //              palettes + Floyd–Steinberg dithering (much closer to the
-  //              source; much larger files).
+  //              palettes + Floyd–Steinberg dithering.
   //   webp     — animated WebP: true color, 25 fps, ≤1920 px, encoded per
   //              frame by the browser's native WebP encoder (canvas.toBlob)
   //              and wrapped into the animation container. The middle
@@ -40,7 +42,6 @@
   //   apng     — true color per frame (no palette), same 25 fps / ≤1920 px
   //              caps. The closest an image format gets to the MP4 quality.
   const MODES = {
-    "gif":     { fps: 12, maxSeconds: 30, maxDimension: 720,  maxOutputBytes: 40 * 1024 * 1024, palette: undefined, dither: false },
     "gif-max": { fps: 25, maxSeconds: 30, maxDimension: 1920, maxOutputBytes: 256 * 1024 * 1024, palette: "local", dither: true },
     "webp":    { fps: 25, maxSeconds: 30, maxDimension: 1920, maxOutputBytes: 256 * 1024 * 1024, output: "webp", webpQuality: 0.9 },
     "apng":    { fps: 25, maxSeconds: 30, maxDimension: 1920, maxOutputBytes: 256 * 1024 * 1024, output: "apng" }
@@ -73,7 +74,7 @@
 
   // MP4 clip → encoded image bytes (Uint8Array).
   async function convertMp4ToImage(url, output) {
-    const mode = MODES[output] || MODES["gif"];
+    const mode = MODES[output] || MODES["gif-max"];
     const response = await fetch(url, { credentials: "omit" });
     if (!response.ok) throw new Error("GIF source fetch failed (" + response.status + ")");
     const sourceBlob = await response.blob();
@@ -179,7 +180,7 @@
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg?.action === "offscreenConvertGif") {
       const job = msg.job || {};
-      const output = (["gif", "gif-max", "webp", "apng"].includes(job.output) && job.output) || "gif";
+      const output = (["gif-max", "webp", "apng"].includes(job.output) && job.output) || "gif-max";
       const jobId = String(job.jobId || "");
       // Convert first, then answer with the chunk map so a failure never
       // leaves a job the worker would keep polling.
@@ -187,7 +188,7 @@
         .then((bytes) => {
           if (!jobId) {
             // Legacy/single-use path: one message carries the whole file
-            // (tests + small balanced conversions).
+            // (tests + small conversions).
             sendResponse({ ok: true, base64: bytesToBase64(bytes) });
             return;
           }

@@ -122,7 +122,7 @@ test("queueStart warnings stay silent for raw runs", async () => {
 
 // ---- pipelines ------------------------------------------------------------------
 
-test("raw GIF with a live offscreen document converts to .gif via the chunked relay and keeps the master-folder path", async () => {
+test("raw GIF converts to maximum-quality .gif via the chunked relay (default) and keeps the master-folder path", async () => {
   const calls = [];
   const gifBase64 = Buffer.from("GIF89a-fake-body").toString("base64");
   const half = Math.ceil(gifBase64.length / 2);
@@ -133,7 +133,7 @@ test("raw GIF with a live offscreen document converts to .gif via the chunked re
     runtimeSendMessage: (message, callback) => {
       if (message?.action === "offscreenConvertGif") {
         assert.equal(message.job.url, "https://video.twimg.com/tweet_video/gif0.mp4");
-        assert.equal(message.job.output, "gif");
+        assert.equal(message.job.output, "gif-max", "the retired balanced mode maps to the maximum-quality GIF");
         assert.ok(String(message.job.jobId).startsWith("g-"), "background allocates a job id");
         callback({ ok: true, jobId: message.job.jobId, totalChunks: 2 });
         return undefined;
@@ -303,7 +303,7 @@ test("fallback: every animated format failing keeps the original MP4 and reports
   console.warn = (...args) => warnings.push(args.join(" "));
   await runQueue(background, [gifItem()], "raw");
   console.warn = warn;
-  assert.deepEqual(attempted, ["apng", "webp", "gif-max", "gif"], "chain walks every animated format");
+  assert.deepEqual(attempted, ["apng", "webp", "gif-max"], "chain walks every animated format");
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, "https://video.twimg.com/tweet_video/gif0.mp4");
   assert.equal(calls[0].filename, "XMedia/nasa/nasa - Hello world - 111/002.mp4");
@@ -313,25 +313,25 @@ test("fallback: every animated format failing keeps the original MP4 and reports
 test("convertFallbackChain: preferred format first, other formats in fidelity order, mp4 alone", () => {
   const background = loadBackground({});
   const chain = (value) => Array.from(background.convertFallbackChain(value));
-  assert.deepEqual(chain("apng"), ["apng", "webp", "gif-max", "gif"]);
-  assert.deepEqual(chain("webp"), ["webp", "apng", "gif-max", "gif"]);
-  assert.deepEqual(chain("gif-max"), ["gif-max", "apng", "webp", "gif"]);
-  assert.deepEqual(chain("gif"), ["gif", "apng", "webp", "gif-max"]);
+  assert.deepEqual(chain("apng"), ["apng", "webp", "gif-max"]);
+  assert.deepEqual(chain("webp"), ["webp", "apng", "gif-max"]);
+  assert.deepEqual(chain("gif-max"), ["gif-max", "apng", "webp"]);
+  assert.deepEqual(chain("gif"), ["gif-max", "apng", "webp"], "legacy balanced value degrades to gif-max");
   assert.deepEqual(chain("mp4"), ["mp4"]);
-  assert.deepEqual(chain("avif"), ["gif", "apng", "webp", "gif-max"]);
+  assert.deepEqual(chain("avif"), ["gif-max", "apng", "webp"], "unknown values degrade to gif-max");
 });
 
-test("normalizeGifOutput accepts every mode and degrades unknown values to balanced gif", () => {
+test("normalizeGifOutput accepts every mode and degrades unknown/legacy values to maximum-quality gif", () => {
   const background = loadBackground({});
-  assert.equal(background.normalizeGifOutput("gif"), "gif");
+  assert.equal(background.normalizeGifOutput("gif"), "gif-max", "legacy balanced value maps to gif-max");
   assert.equal(background.normalizeGifOutput("gif-max"), "gif-max");
   assert.equal(background.normalizeGifOutput("webp"), "webp");
   assert.equal(background.normalizeGifOutput("apng"), "apng");
   assert.equal(background.normalizeGifOutput("mp4"), "mp4");
   assert.equal(background.normalizeGifOutput("WEBP"), "webp");
   assert.equal(background.normalizeGifOutput("GIF-MAX"), "gif-max");
-  assert.equal(background.normalizeGifOutput("webp2"), "gif");
-  assert.equal(background.normalizeGifOutput(undefined), "gif");
+  assert.equal(background.normalizeGifOutput("webp2"), "gif-max");
+  assert.equal(background.normalizeGifOutput(undefined), "gif-max");
 });
 
 test("raw GIF with gifOutput=mp4 keeps the original clip untouched", async () => {

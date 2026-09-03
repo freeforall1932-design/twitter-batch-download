@@ -6,7 +6,9 @@
 // decodes the MP4 frame-by-frame onto a canvas (offscreen.js) and feeds the
 // RGBA frames here, producing a real animated .gif file.
 //
-// Two quality modes (v3.14):
+// Two quality modes (v3.14): the shipped offscreen document uses ONLY
+// "max quality" (palette:"local", dither:true) since v3.15; the balanced
+// mode below is retained for the preserved archive-enabled build.
 //   balanced (default) — one GLOBAL 256-color palette from the first frame,
 //     nearest-color mapping, no dithering. Small files; can band on
 //     color-shifting scenes.

@@ -494,7 +494,7 @@ function buildTemplateChecks(storedTemplate) {
 }
 
 chrome.storage.sync.get(
-  { rawMasterFolder: XDLNaming.DEFAULT_RAW_MASTER_FOLDER, nameTemplate: XDLNaming.DEFAULT_NAME_TEMPLATE, userFolders: true, gifOutput: "gif", verifyDuplicates: true },
+  { rawMasterFolder: XDLNaming.DEFAULT_RAW_MASTER_FOLDER, nameTemplate: XDLNaming.DEFAULT_NAME_TEMPLATE, userFolders: true, gifOutput: "gif-max", verifyDuplicates: true },
   (stored) => {
     outputSettingsState.rawMasterFolder = String(stored.rawMasterFolder);
     outputSettingsState.nameTemplate = String(stored.nameTemplate);
@@ -528,13 +528,14 @@ chrome.storage.sync.get(
       renderNamePreview();
     });
 
-    // Animated output: balanced .gif, maximum-quality .gif, animated WebP
-    // (v3.15), true-color APNG or the original MP4 clip. The worker reads it
-    // at download time and falls back through the other animated formats on
-    // failure (Chrome only; Firefox has no offscreen document and keeps MP4).
+    // Animated output: maximum-quality .gif (the only GIF mode since the
+    // v3.15 review), animated WebP, true-color APNG or the original MP4 clip.
+    // The worker reads it at download time and falls back through the other
+    // animated formats on failure (Chrome only; Firefox has no offscreen
+    // document and keeps MP4). Legacy stored "gif" values render as gif-max.
     const gifOutputBox = $("gifOutput");
-    const gifOutputValues = ["gif", "gif-max", "webp", "apng", "mp4"];
-    gifOutputBox.value = gifOutputValues.includes(stored.gifOutput) ? stored.gifOutput : "gif";
+    const gifOutputValues = ["gif-max", "webp", "apng", "mp4"];
+    gifOutputBox.value = gifOutputValues.includes(stored.gifOutput) ? stored.gifOutput : "gif-max";
     gifOutputBox.addEventListener("change", () => {
       chrome.storage.sync.set({ gifOutput: gifOutputBox.value });
     });

@@ -489,27 +489,31 @@ const OUTPUT_SETTINGS_DEFAULTS = {
   //         /media page of the SAME user collapse into one folder).
   //   OFF → XMedia/<post name>/001.jpg (pre-v3.11 layout).
   userFolders: true,
-  // v3.6/v3.15 — GIF handling:
-  //   "gif"     → real .gif, balanced (small files)
-  //   "gif-max" → real .gif, maximum quality (local palettes + dithering, larger)
+  // v3.6/v3.15 — GIF handling (one GIF mode only since the v3.15 review:
+  // the balanced 12 fps/global-palette GIF was removed — WebP now covers the
+  // small/simple niche with true color, and a single-table GIF bands badly on
+  // color-shifting scenes; legacy stored "gif" values map to gif-max):
+  //   "gif-max" → real .gif, maximum quality (per-frame local palettes + dithering)
   //   "webp"    → animated WebP, true color, browser-native encoder (middle ground)
   //   "apng"    → true-color APNG (closest to MP4 quality, largest)
   //   "mp4"     → keep the original MP4 clip
-  gifOutput: "gif",
+  gifOutput: "gif-max",
   // v3.10 — duplicate verification:
   verifyDuplicates: true // byte-identical + source-URL checks before a file is saved again
 };
 
 function normalizeGifOutput(value) {
   const v = String(value || "").toLowerCase();
-  return v === "mp4" ? "mp4" : v === "gif-max" ? "gif-max" : v === "webp" ? "webp" : v === "apng" ? "apng" : "gif";
+  // The pre-v3.15 balanced mode ("gif") is retired; stored legacy values now
+  // mean the maximum-quality GIF so existing preferences degrade gracefully.
+  return v === "mp4" ? "mp4" : v === "gif" || v === "gif-max" ? "gif-max" : v === "webp" ? "webp" : v === "apng" ? "apng" : "gif-max";
 }
 
 // Animated-image fidelity order for the fallback chain (v3.15): the format the
 // user selected is tried FIRST; if its conversion fails, every other animated
-// format is retried in this order (best fidelity → balanced GIF last), and the
-// original MP4 is kept ONLY when all of them failed — never a failed item.
-const ANIMATED_OUTPUT_FIDELITY = ["apng", "webp", "gif-max", "gif"];
+// format is retried in this order (best fidelity → GIF last), and the original
+// MP4 is kept ONLY when all of them failed — never a failed item.
+const ANIMATED_OUTPUT_FIDELITY = ["apng", "webp", "gif-max"];
 
 function convertFallbackChain(output) {
   const preferred = normalizeGifOutput(output);
@@ -1612,7 +1616,7 @@ async function runQueuePass() {
 
 // ==========================================================================
 // GIF/WEBP/APNG CONVERSION (Chrome only) — X's animated_gif media is a
-// silent MP4 clip; a real .gif (balanced or maximum quality), an animated
+// silent MP4 clip; a real .gif (maximum quality), an animated
 // .webp or a true-color APNG is produced in a small offscreen document
 // (<video> + canvas + the streaming GIF89a/WebP/APNG encoders). Firefox MV2
 // has no chrome.offscreen, so on this port ensureOffscreenDocument() returns
@@ -1665,7 +1669,7 @@ function sendOffscreenRequest(action, payload, timeoutMs, timeoutError) {
   });
 }
 
-// MP4 "GIF" → real .gif (balanced or maximum quality), animated WebP or
+// MP4 "GIF" → real .gif (maximum quality), animated WebP or
 // true-color APNG, converted in the offscreen document (a service worker has
 // no <video>/canvas). Returns { ok, base64 } or { ok:false }.
 async function convertGifViaOffscreen(url, output) {
