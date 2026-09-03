@@ -9,25 +9,6 @@
 // and re-arms on every SPA route change.
 // ==========================================================================
 
-// Firefox port: MAIN world script injected via <script> tag (Firefox MV2 has
-// no world: MAIN manifest support). Chrome version uses manifest world: MAIN.
-// ==========================================================================
-
-// Firefox MAIN-world injection shim — runs before IIFE
-(function injectMainWorldForFirefox() {
-  try {
-    const isFirefox = typeof browser !== 'undefined' || navigator.userAgent.includes('Firefox');
-    if (!isFirefox) return;
-    // Avoid double injection
-    if (document.documentElement?.dataset?.xdlInjected) return;
-    const script = document.createElement('script');
-    script.src = (typeof browser !== 'undefined' ? browser : chrome).runtime.getURL('injected.js');
-    script.onload = function() { this.remove(); };
-    (document.head || document.documentElement).appendChild(script);
-    if (document.documentElement) document.documentElement.dataset.xdlInjected = '1';
-  } catch (_) {}
-})();
-
 (() => {
   if (window.__xdl_active !== undefined) {
     console.log("[X-DL] Already injected");
@@ -714,15 +695,9 @@
     if (!items || !items.length) return;
     safeSend({ action: "queueAdd", items, source: "scroll", skipDownloaded }, (response) => {
       notePassResult(response, items.length);
-      // Do not count candidates when the worker did not acknowledge them.
-      // This keeps fetch/rescan counts honest after an invalidated context.
-      const added = Number.isFinite(Number(response?.addedCount))
-        ? Math.max(0, Number(response.addedCount))
-        : 0;
+      const added = response?.addedCount ?? items.length;
       listedCount += added;
-      if (added > 0) {
-        statusText = `Listed ${listedCount} media item${listedCount === 1 ? "" : "s"} from this tab.`;
-      }
+      statusText = `Listed ${listedCount} media item${listedCount === 1 ? "" : "s"} from this tab.`;
       renderFetchDock();
     });
   }

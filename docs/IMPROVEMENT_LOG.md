@@ -1,5 +1,39 @@
 # Improvement Log
 
+## 2026-09-03 — Split archive-enabled source from the stripped shipped extension
+
+The prior archive retirement was completed physically. ZIP/CBZ/PDF runtime files (`offscreen.*`, `lib/archive.js`, `lib/zipWriter.js`, and `lib/pdfBuilder.js`) were removed from both shipped extension folders, along with the offscreen permission and archive library loads. The shipped UI and manifests now expose only separate original-resolution downloads.
+
+For users who need the former four-format implementation as source/reference, it is preserved under `source/archive-enabled/` and is explicitly not a Load unpacked target. This keeps the production extension small and prevents stale archive code from being accidentally invoked.
+
+The existing archive-specific tests now belong to that source variant and need a follow-up harness relocation; the production extension syntax checks pass.
+
+
+## 2026-09-03 — Fetch/rescan review: do not count unacknowledged queue items
+
+Reviewed the previous session's shallow fetch, mutation harvest, deep fetch, rescan, and queue dedupe paths. The ID/media-key/source-URL dedupe layers are correctly complementary: the content tab suppresses repeated submissions, while the worker remains authoritative across DOM, GraphQL, scroll, remote fill, and rescans. One reporting bug was found: `submitDomItems()` optimistically counted all candidates when `safeSend()` returned no response, including an invalidated extension context or rejected worker message. That could make fetch/rescan status claim media was listed when it was not.
+
+Fixed in both browser ports to count only a numeric `addedCount` acknowledgement; missing responses now contribute zero. Existing accepted rows, duplicate suppression, clean-slate rescans, and downloaded-item explanations are unchanged. Syntax checks and the full **167-test** suite pass.
+
+
+## 2026-09-03 — v3.12 archive-output retirement and original-resolution downloads
+
+A codebase review confirmed that the per-post ZIP/CBZ/PDF path added substantial worker/offscreen/archive plumbing, UI state, and warning logic for a feature no longer wanted. The download purpose is now deliberately simpler: every selected item is saved as its own file. Queue startup forces `outputFormat` to `raw`, queue processing no longer invokes the archive pass, and the UI format controls now expose only separate original-resolution files. The manifests are v3.12.0.
+
+The existing media resolver remains responsible for quality: photo URLs force X's `name=orig`, while video variants select the highest bitrate. GIFs retain their existing real-GIF conversion preference when available, with MP4 fallback on conversion failure. Duplicate URL/byte verification and per-user folders remain unchanged. Archive implementation files and offline archive tests are retained temporarily as isolated repository test/compatibility material, but are no longer loaded or reachable by the shipped queue UI.
+
+Validation: JavaScript syntax checks pass and the full offline suite remains **167 pass / 0 fail**. Live Chrome output verification is still required.
+
+
+## 2026-09-03 — Post-v3.11 code review: unknown author could create a fake user folder
+
+A review of the v3.11 changes found one misalignment that the existing tests did not cover. `namingFieldsForItem()` used the literal `"unknown"` when a queue item had naming metadata but no author. `buildRawMediaPath()` then treated that as a real user and produced `XMedia/unknown/<post>/...`, contradicting the v3.11 rule that missing authors omit the user segment and never create an `unknown` bucket.
+
+Fixed in both `extension/background.js` and the Firefox port: absent authors now remain an empty template field, so the naming engine falls back to `XMedia/<post>/...`. This preserves the existing legacy-row path handling and does not alter discovery error labels or filename fallbacks that legitimately use `unknown`. Syntax checks pass and the full suite remains **167 pass / 0 fail**.
+
+Still open: live Chrome output review is required before declaring the random-name issue or per-user-folder behavior verified.
+
+
 Chronological implementation record for X Media Downloader.
 
 ## 2026-09-03 — v3.11 per-user folders in the master folder + random-naming flagged PENDING REVIEW

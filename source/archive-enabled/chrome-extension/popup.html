@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 300px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #15202b;
+      color: #e7e9ea;
+      padding: 18px;
+    }
+    h1 { font-size: 17px; color: #1d9bf0; text-align: center; }
+    .subtitle {
+      font-size: 11px;
+      color: #6e767d;
+      text-align: center;
+      margin: 4px 0 15px;
+      line-height: 1.4;
+    }
+    .btn {
+      width: 100%;
+      padding: 12px;
+      border: none;
+      border-radius: 9999px;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      background: #1d9bf0;
+      color: #fff;
+      transition: opacity 0.2s;
+    }
+    .btn:hover { opacity: 0.85; }
+    .status {
+      margin-top: 13px;
+      padding: 10px 12px;
+      background: #1e2e3d;
+      border-radius: 8px;
+      font-size: 12px;
+      text-align: center;
+      color: #8b98a5;
+      line-height: 1.45;
+    }
+    .status.ok { border-left: 3px solid #00ba7c; }
+    .status.warn { border-left: 3px solid #f0c674; }
+    ol {
+      margin: 14px 0 0 18px;
+      font-size: 11.5px;
+      color: #8b98a5;
+      line-height: 1.65;
+    }
+  </style>
+</head>
+<body>
+  <h1>X Media Downloader</h1>
+  <p class="subtitle">Everything now lives in the Side Panel queue.</p>
+
+  <button class="btn" id="openPanelBtn">Open media queue</button>
+
+  <div class="status" id="status">Checking the active tab…</div>
+
+  <ol>
+    <li>Open any X profile, /media page, post, or your home timeline.</li>
+    <li>Scroll normally — media lists itself in the Side Panel.</li>
+    <li>Tick items (or Select all) and press Download selected.</li>
+  </ol>
+
+  <script src="popup.js"></script>
+</body>
+</html>

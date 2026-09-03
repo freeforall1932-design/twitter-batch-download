@@ -272,7 +272,13 @@ Cookie headers.
 
 ---
 
-## 4. Current architecture (v3.11.0)
+## 4. Current architecture (v3.12.0)
+
+**Fetch/rescan review note:** queue counts must be based on the worker's numeric `addedCount` acknowledgement. A missing response from an invalidated context is not an accepted row and must never be counted optimistically; content and worker dedupe remain separate layers.
+
+
+**Output policy:** per-post ZIP/CBZ/PDF packaging is retired. Queue downloads are always separate files: photos force `name=orig`, and videos select the highest-bitrate MP4. The old archive-enabled implementation is preserved under `source/archive-enabled/`; it is not loaded or invoked by the shipped queue path.
+
 
 | File | Role |
 |---|---|
@@ -296,6 +302,10 @@ in the document when a scan happens to run. |
 | `sidepanel.html/js/css` | Two-tab Side Panel: Scroll capture + Remote fetch. One download action, live active-tab status pill, per-row remove, skip-already-downloaded toggle, **Include quoted** switches, `Clear finished` / `Reset downloaded history` buttons. v3.5: **Output settings** card (master folder, default format, name-template checkboxes + live preview + custom-template input — the ONLY writer of the sync output settings) the dock's per-job **Save posts as** picker, v3.6 GIF/archive toggles, the `gif` badge, and the amber `queueNotices` warning box. **v3.8:** `Remove selected` next to `Download selected` (confirm-guarded, sends `queueRemove {ids}`), a `Re-listing this tab` pill state, and a busy state that disables Fetch/Auto-scroll/Rescan during a rescan while leaving **Stop** disabled (nothing to cancel). **v3.7 Scroll card:** `Fetch media` (deep fetch), `Stop`, `Auto-scroll only`, `Rescan tab`, the **Then fetch the rest silently** (`deepFetchRemote`) and **Show the Fetch button on X pages** (`showFetchButton`) switches, a `Reload tab` button that appears in the status pill when the active X tab has no live content script, and a status pill that names the fetch phase. **v3.11:** `One folder per user (XMedia/<user>/…)` checkbox in the Output settings card (default checked, syncs `userFolders`) and re-renders the live name preview (`Downloads/XMedia/nasa/<post>/001.jpg`) on change. |
 | `popup.html/js` | Side Panel launcher + capture status line. No scroll/download loop. |
 | `tests/` | `background.test.js`, `content.test.js`, plus v3.5: `naming.test.js`, `zip-writer.test.js`, `pdf-builder.test.js` (verbatim port), `downloader.test.js` (real worker in a VM: master-folder + archive pipelines), v3.6: `gif-encoder.test.js` (round-trip decoder) + `media-kinds.test.js` (quality, kind rules, warnings, mixed-post pipelines), v3.6.1: `archive-lib.test.js` (shared-engine byte parity) + 4 background regressions (abort on Stop, `stopped` classification, attempt-budget reset, storage-write recovery), v3.6.3: `injected.test.js` (media-marker walk + replay-buffer bound) + 4 background/naming regressions (deterministic fallback, `queueChanged` throttle, shared `resolveTweetMedia` rules, path agreement), `helpers/load-background.js`. |
+
+### Post-v3.11 review note
+
+The per-user path must treat a missing owning author as no user segment, never as a literal `unknown` folder. `namingFieldsForItem()` and the legacy-row path both preserve that distinction; `unknown` remains valid only for unrelated discovery/error or legacy filename fallback labels.
 
 ### Design decisions that are deliberate — do not "simplify" these away
 
