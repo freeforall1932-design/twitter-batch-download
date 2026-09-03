@@ -25,7 +25,7 @@ Self-hosted against your signed-in X session. No third-party accounts, API keys,
 - **Include quoted** — Media inside a quoted post's card (the "mentioned post" box with thumbnail and text) lists too, attributed to the quoted post's author, with a `quote` badge. On by default; switchable per tab.
 - **Rate-limit handling** — Throttle + exponential backoff; Side Panel shows a retry countdown on 429/503.
 - **Master folder + per-user + per-post folders (v3.5 layout, v3.11 per-user)** — Downloads save as `Downloads/XMedia/<user>/<post name>/001.jpg…` — one folder **per user** the media is sourced from (the owning post's author), so media seen on the home timeline, a profile and its `/media` page of the same user all land in the same folder (it doubles as visual dedupe on top of the byte + source-URL checks). The master folder is configurable in the Side Panel's **Output settings**; **One folder per user** (`userFolders`) can be switched off to restore `Downloads/XMedia/<post name>/001.jpg…`, and emptying the master folder restores the old flat `Downloads/x-media/{username}_{post text}_{tweetId}_{index}.{ext}` layout exactly. Slashes nest deeper (`XMedia/raw`). Since v3.12 every item is saved as its **own file** — per-post ZIP/CBZ/PDF bundles are no longer exposed by the shipped UI or worker.
-- **Separate original-resolution files only (v3.12)** — The queue downloads each selected media item independently: original-resolution photos (`name=orig`), highest-bitrate MP4 videos, and GIFs as their real `.gif` files when the offscreen conversion is available (the v3.12 shipped build no longer ships the offscreen document, so GIFs fall back to the original MP4 clip). The former per-post **ZIP / CBZ / PDF** output (≤4 items of one post, media-kind rules, archive toggles and warnings) was retired from the shipped build and is preserved for reference — **not** a Load-unpacked target — under [`source/archive-enabled/`](source/archive-enabled/README.md). The old multi-GB whole-batch ZIP stays removed.
+- **Separate original-resolution files only (v3.12, GIF conversion restored v3.13)** — The queue downloads each selected media item independently: original-resolution photos (`name=orig`), highest-bitrate MP4 videos, and GIFs as their real `.gif` files (converted from X's silent MP4 clips in a small GIF-only offscreen document — Chrome; the Firefox port keeps the MP4 clip). The former per-post **ZIP / CBZ / PDF** output (≤4 items of one post, media-kind rules, archive toggles and warnings) was retired from the shipped build and is preserved for reference — **not** a Load-unpacked target — under [`source/archive-enabled/`](source/archive-enabled/README.md). The old multi-GB whole-batch ZIP stays removed.
 - **Naming scheme checkboxes (v3.5)** — The post name is built from tokens (`{user}`, `{name}`, `{text}`, `{id}`, `{date}`; default `{user} - {text} - {id}`) picked with checkboxes and a live example preview; hand-typed custom templates keep working through a manual input. Degenerate names fall back to the post id; Windows-reserved names are prefixed.
 - **Live session capture** — MAIN-world observer learns current GraphQL operation IDs and safe request headers from the open X tab.
 - **No third-party services** — Calls go to X only, using your browser session.
@@ -70,7 +70,7 @@ Open **Output settings** (between the toolbar and the list):
 
 - **Master folder for saved files** — default `XMedia`; raw files save as `Downloads/XMedia/<user>/<post name>/001.jpg…`. Leave it **empty** to switch the folder off (old flat `x-media/` layout). Requires Chrome's *"Ask where to save each file"* to be off for folders to auto-create.
 - **Format (v3.12)** — always **separate original-resolution files**; per-post ZIP/CBZ/PDF bundles were retired with the archive path (see `source/archive-enabled/`).
-- **GIF posts save as** (v3.6) — real `.gif` files (converted, keeps the animation and loops forever) or the original MP4 clips. Conversion needs the offscreen document that v3.12 no longer ships, so the `.gif` option falls back to the MP4 clip in the current build.
+- **GIF posts save as** (v3.6, working again in v3.13) — real `.gif` files (converted in the offscreen document, keeps the animation and loops forever) or the original MP4 clips. Firefox port: conversion is unavailable (no `chrome.offscreen`), so the MP4 clip is kept.
 - **Post name is built from** — tick the tokens; the example preview updates live. Untick everything and names fall back to the post id. A hand-typed custom template shows a manual input instead.
 
 ## How it works
@@ -81,7 +81,7 @@ Open **Output settings** (between the toolbar and the list):
 4. **Single tweet** — `TweetResultByRestId` for action-bar / DOM bulk.
 5. **Downloads** — `chrome.downloads` with concurrency 1–2, retries, and a safer filename ladder if Chrome rejects a path. Paths honor the **Output settings** (master folder + name template); relative subpaths only, never absolute, never `..`.
 6. **Downloads (v3.12)** — every selected item is saved as its own file; no archive pass runs and the worker ignores stale `outputFormat` values (it always forces raw). The former per-post ZIP/CBZ/PDF assembly (offscreen document + `<a download>` anchor, worker data-URL fallback, media-kind rules) is preserved only in `source/archive-enabled/` — see its README.
-7. **GIF conversion (v3.6)** — X serves `animated_gif` media as a small silent MP4 clip. The shipped worker asks the offscreen document to convert it back into a real GIF89a (`lib/gifEncoder.js`, median-cut palette + LZW, bounded: ≤30 s, ≤360 frames, ≤720 px); the offscreen document is no longer shipped in v3.12, so this conversion is unavailable in the current Chrome build and GIFs fall back to the original MP4 clip. The conversion pipeline remains in `source/archive-enabled/`.
+7. **GIF conversion (v3.6, GIF-only offscreen since v3.13)** — X serves `animated_gif` media as a small silent MP4 clip. The worker asks a small GIF-only offscreen document (chrome.runtime only) to convert it into a real GIF89a (`lib/gifEncoder.js`, median-cut palette + LZW, bounded: ≤30 s, ≤360 frames, ≤720 px, ≤40 MB); the bytes come back as base64 and save via a `data:` URL so they still land inside the master folder. No offscreen API → the original MP4 is kept, never a failed item. Firefox port: no offscreen → MP4 kept.
 
 ## Permissions
 
@@ -92,6 +92,7 @@ Open **Output settings** (between the toolbar and the list):
 | `storage` | Queue, discovery state, settings |
 | `activeTab` + `scripting` | Buttons, bundle metadata, messaging |
 | `sidePanel` | Batch queue UI |
+| `offscreen` | Convert X's silent MP4 "GIF" clips into real animated `.gif` files (MV3 workers have no `<video>`/canvas). GIF-only — no archive assembly |
 
 **Host permissions:** `x.com`, `twitter.com`, `video.twimg.com`, `pbs.twimg.com`, `api.x.com`.
 
@@ -107,11 +108,12 @@ No data is sent to third-party extension backends.
 │   ├── injected.js            #   MAIN-world GraphQL/header capture
 │   ├── content.js             #   Capture forwarder, action bar, DOM bulk
 │   ├── sidepanel.html/js/css  #   Batch queue UI + Output settings card
+│   ├── offscreen.html/js      #   GIF-only document: MP4 clip → real .gif (chrome.runtime ONLY)
 │   ├── lib/                   #   naming.js, dedupe.js, gifEncoder.js (shared with tests)
 │   ├── popup.html/js          #   Side Panel launcher + capture status
 │   └── icon48.png / icon128.png
 ├── source/archive-enabled/    # Preserved pre-v3.12 archive build (NOT a Load-unpacked target)
-├── firefox-extension/         # Firefox port of the same v3.12 build
+├── firefox-extension/         # Firefox port of the same raw-only build (no offscreen)
 ├── tests/                     # Node unit tests + sanitized fixtures
 ├── scripts/
 │   └── package-release.sh     # Zip extension/ → releases/ (packaging only, no build)
@@ -134,7 +136,7 @@ never loaded by the browser.
 
 ```bash
 for f in extension/*.js extension/lib/*.js; do node --check "$f"; done
-node --test tests/*.test.js   # 168 tests (offline: fixtures + window-less VM pipelines;
+node --test tests/*.test.js   # 169 tests (offline: fixtures + window-less VM pipelines;
                               # the archive suites pin source/archive-enabled/)
 node --test tests/downloader.test.js
 ```

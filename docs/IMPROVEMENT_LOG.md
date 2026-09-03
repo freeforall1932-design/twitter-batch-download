@@ -1,5 +1,22 @@
 # Improvement Log
 
+## 2026-09-03 — v3.13 leanness pass: dead archive code stripped, GIF conversion restored (GIF-only offscreen)
+
+Asked to confirm the shipped folders were "lean, no bloat from the disabled feature, ready to test". File/permission level was already lean; the dead archive code still INSIDE the shipped scripts was not. This pass removes it and restores the one useful capability that the v3.12 strip had silently broken.
+
+**Removed from the shipped Chrome `extension/` + `firefox-extension/` builds:**
+
+- `background.js` (both ports): the whole dead archive section — `runArchivePass`, `buildArchiveInWorker`, `sendArchiveJobToOffscreen`, `archiveGroups`, `effectiveGroupFormat`, `archiveEntryExtension`, `archivedKinds` (~230 lines), plus the archive branches in `buildRunNotices` (function removed), `runQueuePass` and `queueStart`, and the `archiveGifs`/`archiveVideos` settings. Stale comments referencing the archive pass were corrected.
+- `sidepanel.html/js/css` (both ports): vestigial `defaultFormat`/`jobFormat` selects (one option each), the archive branch in the name preview, `queueNotices` box + render logic + CSS, archive mentions in the `userFolders` tooltip, and storage keys `outputFormat`/`archiveGifs`/`archiveVideos`.
+
+**Restored (the part worth keeping):**
+
+- GIF conversion now genuinely works again on Chrome: a small **GIF-only** offscreen document (`extension/offscreen.html` + `offscreen.js`, ~200 lines) decodes X's silent MP4 clip (≤30 s / ≤360 frames / ≤720 px / ≤40 MB) and returns a real GIF89a to the worker as base64; the `offscreen` permission is back in the Chrome manifest. No archive/Blob/anchor/dedupe code — the offscreen document exposes only `chrome.runtime` and handles only `offscreenConvertGif`.
+- The Side Panel "GIF posts save as" select is now actually wired (it existed in the HTML but was never persisted by `sidepanel.js`).
+- Firefox port has no `chrome.offscreen` (MV2), so it keeps the MP4 clip — documented limitation, unchanged.
+
+**Tests (169 pass / 0 fail, ~4 s):** the two archive-specific tests living in shipped-worker suites were moved to `tests/archive-background.test.js` (with the other archive coverage pinned to `source/archive-enabled/`); a new regression pins that the shipped worker ignores a stale `format:"zip"` and saves separate files; the existing raw-GIF offscreen test now covers the restored shipped path. `lib/naming.js` keeps `buildArchiveFilename`/format helpers deliberately — they are the shared naming engine used by the preserved archive variant and its tests, and keeping them byte-identical prevents drift. Manifests 3.12.0 → **3.13.0** (both ports). Syntax checks pass for every shipped script; packaging smoke passes; no release zip cut yet (pending user review).
+
 ## 2026-09-03 — Follow-up: archive-specific tests retargeted to `source/archive-enabled/`
 
 The split left the archive-specific historical suites pointing at the stripped

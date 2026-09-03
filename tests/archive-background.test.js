@@ -325,6 +325,95 @@ test("kind rules: a GIF or video in the archive degrades PDF to ZIP for that pos
   assert.equal(background.effectiveGroupFormat(withGif, "cbz"), "cbz", "ZIP/CBZ both allowed for motion media");
 });
 
+test("buildRunNotices only warns about media kinds actually packed into the archive", () => {
+  const background = loadBackground({ extensionRoot: ARCHIVE_ROOT });
+  // Items that share a tweetId belong to the same post, so media kinds combine.
+  const queued = (id, kind) => ({
+    id, tweetId: "tw-mix", type: kind === "gif" ? "video" : kind, isGif: kind === "gif", status: "queued"
+  });
+
+  // A post with photos + a video while video archiving is OFF: the archive is a
+  // clean photo-only ZIP and the video stays a separate raw MP4. This must NOT
+  // raise the "mix ... not a single-format post" warning.
+  const photoVideoPost = [
+    queued("p1", "photo"),
+    queued("v1", "video")
+  ];
+  const off = background.buildRunNotices(
+    { items: photoVideoPost },
+    { archiveGifs: true, archiveVideos: false },
+    "zip"
+  );
+  assert.ok(!off.some((notice) => /mix/i.test(notice)), `no mix warning expected: ${off}`);
+
+  // Same post with videos opted in: now the archive genuinely mixes photo/video
+  // entries, so the warning is correct.
+  const on = background.buildRunNotices(
+    { items: photoVideoPost },
+    { archiveGifs: true, archiveVideos: true },
+    "zip"
+  );
+  assert.ok(on.some((notice) => /mix/i.test(notice)), "mix warning expected when video is archived");
+  assert.ok(on.some((notice) => /include video files packed/i.test(notice)), "video archive warning expected");
+
+  // A post mixing photo + GIF (GIFs archive by default) raises the mix warning.
+  const photoGifPost = [
+    queued("p2", "photo"),
+    queued("g1", "gif")
+  ];
+  const gifOn = background.buildRunNotices(
+    { items: photoGifPost },
+    { archiveGifs: true, archiveVideos: false },
+    "zip"
+  );
+  assert.ok(gifOn.some((notice) => /mix/i.test(notice)), "photo+GIF is a genuinely mixed archive");
+
+  // A single-format post (photos only) never warns.
+  const photosOnly = [
+    queued("p3", "photo"),
+    queued("p4", "photo")
+  ];
+  const singleFormat = background.buildRunNotices(
+    { items: photosOnly },
+    { archiveGifs: true, archiveVideos: false },
+    "zip"
+  );
+  assert.equal(singleFormat.length, 0, "a photos-only post never warns");
+});
+
+test("an already-verified archive group is skipped before assembly (no new file)", async () => {
+  const calls = [];
+  const background = loadBackground({
+    extensionRoot: ARCHIVE_ROOT,
+    download: capturingDownload(calls),
+    // fetch is never used: the group is rejected before the offscreen/worker
+    // assembly path can fetch a single byte.
+    fetch: async () => { throw new Error("must not fetch"); },
+    stored: {
+      downloadedMediaRecordsV1: [
+        { id: "500-m1", mediaKey: "m1", url: "https://pbs.twimg.com/media/m1.jpg", urlKey: "https://pbs.twimg.com/media/m1.jpg", hash: "h1", filename: "XMedia/nasa - post - 500/001.jpg" },
+        { id: "500-m2", mediaKey: "m2", url: "https://pbs.twimg.com/media/m2.jpg", urlKey: "https://pbs.twimg.com/media/m2.jpg", hash: "h2", filename: "XMedia/nasa - post - 500/002.jpg" }
+      ]
+    }
+  });
+
+  await background.handleQueueMessage({
+    action: "queueAdd",
+    source: "scroll",
+    items: [
+      { id: "500-m1", mediaKey: "m1", url: "https://pbs.twimg.com/media/m1.jpg", type: "photo", tweetId: "500", author: "@nasa", displayName: "NASA", text: "post", mediaIndex: 0 },
+      { id: "500-m2", mediaKey: "m2", url: "https://pbs.twimg.com/media/m2.jpg", type: "photo", tweetId: "500", author: "@nasa", displayName: "NASA", text: "post", mediaIndex: 1 }
+    ]
+  });
+  await background.handleQueueMessage({ action: "queueStart", mode: "all", source: "scroll", format: "zip" });
+  await background.processQueue();
+
+  assert.equal(calls.length, 0, "a fully verified group must not reach the save path");
+  const state = await background.handleQueueMessage({ action: "queueGet" });
+  assert.ok(state.items.every((item) => item.status === "completed"));
+  assert.ok(state.items.every((item) => item.duplicateReason === "archive_duplicate"));
+});
+
 test("kind rules: archive entries are named per kind — NNN.gif when converting, NNN.mp4 otherwise", () => {
   const background = loadBackground({ extensionRoot: ARCHIVE_ROOT });
   assert.equal(background.archiveEntryExtension(baseItem(), {}), "jpg");

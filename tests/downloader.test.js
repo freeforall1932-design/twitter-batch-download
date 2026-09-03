@@ -163,6 +163,23 @@ test("raw mode: userFolders:false restores the pre-v3.11 master layout", async (
   ]);
 });
 
+test("raw mode: a stale format from old UI state still degrades to separate files", async () => {
+  const calls = [];
+  const background = loadBackground({ download: capturingDownload(calls) });
+  // Pre-v3.12 UIs sent "zip"/"cbz"/"pdf" per job; the v3.12+ worker must
+  // ignore them and save every item as its own original-resolution file.
+  await background.handleQueueMessage({ action: "queueAdd", items: photoItems(2) });
+  await background.handleQueueMessage({ action: "queueSelectVisible", filter: "all", selected: true });
+  const started = await background.handleQueueMessage({ action: "queueStart", mode: "selected", format: "zip" });
+  await background.processQueue();
+
+  assert.equal(started.outputFormat, "raw", "stale archive format ignored");
+  assert.deepEqual(calls.map((call) => call.filename), [
+    "XMedia/nasa/nasa - Hello world - 111/001.jpg",
+    "XMedia/nasa/nasa - Hello world - 111/002.jpg"
+  ]);
+});
+
 test("single-post downloadFile message honors master folder + template when item metadata is present", async () => {
   const background = loadBackground({ download: capturingDownload([]) });
   const [item] = photoItems(1);

@@ -42,23 +42,10 @@ main { padding:14px 14px 156px; } .hidden { display:none !important; }
 .template-checks .check-label { color:var(--text); font-weight:400; font-size:12px; }
 .name-preview { color:#9fd6ff; word-break:break-all; }
 .download-dock .concurrency-control + .concurrency-control { margin-top:6px; }
-.download-dock #jobFormat { padding:5px 7px; font-size:11px; }
 
-/* v3.6 — GIF badge + archive-run warnings */
+/* v3.6 — GIF badge */
 .type-badge.gif { margin-left: 4px; background: #3d2f14; color: #f5c065; }
 .settings-check { display: block; margin: 6px 0; }
-.queue-notices {
-  margin: 6px 0 0;
-  padding: 8px 10px;
-  border: 1px solid #6b5516;
-  border-radius: 8px;
-  background: #2a2410;
-  color: #f5c065;
-  font-size: 12px;
-  line-height: 1.4;
-}
-.queue-notices p { margin: 0 0 4px; }
-.queue-notices p:last-child { margin-bottom: 0; }
 
 /* v3.7 — Fetch controls in the Scroll capture card */
 .spaced-row { margin-top:8px; }
