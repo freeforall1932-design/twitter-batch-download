@@ -1472,11 +1472,18 @@ function mergeQueueItems(state, candidates, orderedFrontIds = null, options = {}
   const knownKeys = new Set(state.items.map((item) => item.mediaKey).filter(Boolean));
   const alreadyDownloaded = options.alreadyDownloaded || null;
   const additions = [];
+  // Counted separately from `added` so a rescan can tell the user WHY nothing
+  // came back: "already downloaded" is a setting they can change, "already in
+  // the list" is not a problem at all. Without this the two look identical.
+  let skippedDownloaded = 0;
   for (const candidate of candidates || []) {
     if (!candidate?.id || !candidate.url || knownIds.has(candidate.id)) continue;
     const mediaKey = candidate.mediaKey || null;
     if (mediaKey && knownKeys.has(mediaKey)) continue;
-    if (alreadyDownloaded && (alreadyDownloaded.has(candidate.id) || (mediaKey && alreadyDownloaded.has(mediaKey)))) continue;
+    if (alreadyDownloaded && (alreadyDownloaded.has(candidate.id) || (mediaKey && alreadyDownloaded.has(mediaKey)))) {
+      skippedDownloaded += 1;
+      continue;
+    }
     knownIds.add(candidate.id);
     if (mediaKey) knownKeys.add(mediaKey);
     additions.push({ ...candidate, selected: false, status: "discovered", downloadId: null, attempts: 0, bytesReceived: 0, totalBytes: 0 });
@@ -1484,7 +1491,7 @@ function mergeQueueItems(state, candidates, orderedFrontIds = null, options = {}
 
   if (!orderedFrontIds) {
     state.items.unshift(...additions);
-    return additions.length;
+    return { added: additions.length, skippedDownloaded };
   }
 
   // A profile scan receives pages newest-first. Rebuild the scanned portion in
@@ -1505,7 +1512,7 @@ function mergeQueueItems(state, candidates, orderedFrontIds = null, options = {}
   const orderedItems = orderedIds.map((id) => itemById.get(id));
   const remainingItems = state.items.filter((item) => !orderedIdSet.has(item.id));
   state.items = [...orderedItems, ...remainingItems];
-  return additions.length;
+  return { added: additions.length, skippedDownloaded };
 }
 
 async function addQueueItems(items, options = {}) {
@@ -1516,9 +1523,9 @@ async function addQueueItems(items, options = {}) {
     ? Boolean(options.skipDownloaded)
     : state.skipDownloaded !== false;
   const alreadyDownloaded = skipDownloaded ? await getDownloadedIds() : null;
-  const addedCount = mergeQueueItems(state, normalizedItems, options.orderedFrontIds || null, { alreadyDownloaded });
+  const merged = mergeQueueItems(state, normalizedItems, options.orderedFrontIds || null, { alreadyDownloaded });
   await saveQueueState();
-  return { state: publicQueueState(), addedCount };
+  return { state: publicQueueState(), addedCount: merged.added, skippedDownloaded: merged.skippedDownloaded };
 }
 
 async function handleQueueMessage(msg) {
@@ -1529,7 +1536,7 @@ async function handleQueueMessage(msg) {
       source: msg.source || null,
       skipDownloaded: msg.skipDownloaded
     });
-    return { ...result.state, addedCount: result.addedCount };
+    return { ...result.state, addedCount: result.addedCount, skippedDownloaded: result.skippedDownloaded };
   }
   const state = await getQueueState();
   if (msg.action === "queueGet") return publicQueueState();
@@ -2308,10 +2315,10 @@ async function handleLocalTimelineCapture(message) {
   // changes capture nothing. Any GraphQL payload that parses into media counts.
   const capture = message.capture || {};
   const json = capture.json;
-  if (!json || typeof json !== "object") return { ok: true, addedCount: 0, tweetIds: [] };
+  if (!json || typeof json !== "object") return { ok: true, addedCount: 0, skippedDownloaded: 0, tweetIds: [] };
   const tweets = [];
   collectTweets(json, tweets);
-  if (!tweets.length) return { ok: true, addedCount: 0, tweetIds: [] };
+  if (!tweets.length) return { ok: true, addedCount: 0, skippedDownloaded: 0, tweetIds: [] };
 
   const targetHandle = inferHandleFromUrl(message.pageUrl || "");
   const mediaFilter = message.mediaFilter === "photo" || message.mediaFilter === "video"
@@ -2332,12 +2339,17 @@ async function handleLocalTimelineCapture(message) {
     if (tweet.rest_id) tweetIds.push(String(tweet.rest_id));
     items.push(...parsed.map((item) => ({ ...item, source: "scroll" })));
   }
-  if (!items.length) return { ok: true, addedCount: 0, tweetIds };
+  if (!items.length) return { ok: true, addedCount: 0, skippedDownloaded: 0, tweetIds };
   const result = await addQueueItems(items, {
     source: "scroll",
     skipDownloaded: message.skipDownloaded !== false
   });
-  return { ok: true, addedCount: result.addedCount, tweetIds };
+  return {
+    ok: true,
+    addedCount: result.addedCount,
+    skippedDownloaded: result.skippedDownloaded,
+    tweetIds
+  };
 }
 
 // ==========================================================================

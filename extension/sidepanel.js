@@ -6,7 +6,17 @@ let discovery = { running: false, pages: 0, found: 0, status: "Ready to discover
 let activeTab = "scroll";
 let countdownTimer = null;
 let localStatusTimer = null;
+let rescanRunning = false;
 let autoScrollRunning = false;
+let deepFetchRunning = false;
+let needsTabReload = false;
+let reloadTabId = null;
+const FETCH_PHASES = {
+  shallow: "reading what this tab already loaded",
+  scroll: "scrolling the timeline",
+  remote: "silently fetching the rest",
+  done: "finished"
+};
 
 function sourceForActiveTab() { return activeTab === "scroll" ? "scroll" : "remote"; }
 function send(message) {
@@ -17,12 +27,15 @@ function sendToActiveXTab(message) {
     chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
       const url = tab?.url || "";
       if (!tab?.id || (!url.includes("x.com") && !url.includes("twitter.com"))) {
-        resolve({ ok: false, error: "Open an X/Twitter tab to capture media.", noTab: true });
+        resolve({ ok: false, error: "Open an X/Twitter tab to capture media.", noTab: true, tabId: tab?.id || null });
         return;
       }
       chrome.tabs.sendMessage(tab.id, message, (response) => {
-        if (chrome.runtime.lastError) resolve({ ok: false, error: "Refresh this X tab so capture can start.", needsRefresh: true, url });
-        else resolve({ ...(response || {}), ok: response?.ok !== false, url });
+        // A tab that was open before the extension loaded/reloaded has no live
+        // content script — the only fix is a page reload, so the panel now
+        // offers that as a button instead of only telling the user to do it.
+        if (chrome.runtime.lastError) resolve({ ok: false, error: "This X tab predates the extension — reload it so capture can start.", needsRefresh: true, url, tabId: tab.id });
+        else resolve({ ...(response || {}), ok: response?.ok !== false, url, tabId: tab.id });
       });
     });
   });
@@ -101,6 +114,12 @@ function render() {
   $("downloadSelectedBtn").textContent = selected.length
     ? `Download ${selected.length} selected`
     : "Download selected";
+  // The other half of "rescan, then pick what to delete": ticking rows can
+  // remove them, not only download them.
+  $("removeSelectedBtn").disabled = selected.length === 0;
+  $("removeSelectedBtn").textContent = selected.length
+    ? `Remove ${selected.length} selected`
+    : "Remove selected";
   $("stopBtn").disabled = !state.running;
   $("discoverBtn").disabled = discovery.running;
   $("stopDiscoveryBtn").disabled = !discovery.running;
@@ -155,7 +174,9 @@ function scrollSettings() {
     mediaFilter: $("localCaptureFilter").value,
     scrollSpeed: $("localScrollSpeed").value,
     skipDownloaded: $("skipDownloaded").checked,
-    includeQuoted: $("scrollIncludeQuoted").checked
+    includeQuoted: $("scrollIncludeQuoted").checked,
+    deepFetchRemote: $("deepFetchRemote").checked,
+    showFetchButton: $("showFetchButton").checked
   };
 }
 
@@ -167,29 +188,56 @@ function setTabStatus(kind, title, detail) {
 
 // Replaces the old manual "Watch current tab" button: capture is always on in
 // every X tab, so the panel only needs to report what it currently sees.
+function setLocalBusy(busy, options = {}) {
+  // A rescan is a short read-only pass, so it blocks starting anything else but
+  // has nothing to cancel: Stop stays reserved for the engines that move the
+  // page or crawl it.
+  const working = busy || Boolean(options.rescanning);
+  $("fetchNowBtn").disabled = working;
+  $("startLocalScrollBtn").disabled = working;
+  $("rescanTabBtn").disabled = working;
+  $("stopLocalScrollBtn").disabled = !busy;
+}
+
+function setReloadTab(needed, tabId) {
+  needsTabReload = Boolean(needed);
+  reloadTabId = needsTabReload ? (tabId || reloadTabId) : null;
+  $("reloadTabBtn").classList.toggle("hidden", !needsTabReload);
+}
+
 async function pollLocalStatus() {
   if (activeTab !== "scroll") return;
   const response = await sendToActiveXTab({ action: "scrollStatus" });
   if (response?.noTab) {
     setTabStatus("warn", "No X tab active", response.error);
     autoScrollRunning = false;
+    deepFetchRunning = false;
+    setReloadTab(false);
   } else if (response?.needsRefresh) {
-    setTabStatus("warn", "Refresh needed", response.error);
+    setTabStatus("warn", "Reload needed", response.error);
     autoScrollRunning = false;
+    deepFetchRunning = false;
+    setReloadTab(true, response.tabId);
   } else if (response?.text) {
     let host = "";
     try { host = new URL(response.url || "").pathname || "/"; } catch (_) { host = "/"; }
     autoScrollRunning = Boolean(response.running);
+    deepFetchRunning = Boolean(response.fetching);
+    rescanRunning = Boolean(response.rescanning);
+    const busy = autoScrollRunning || deepFetchRunning;
+    setReloadTab(false);
     setTabStatus(
-      response.running ? "active" : "ok",
-      response.running ? "Auto-scrolling this tab" : "Capturing this tab",
+      busy || rescanRunning ? "active" : "ok",
+      deepFetchRunning
+        ? `Fetching this tab — ${FETCH_PHASES[response.fetchPhase] || "working"}`
+        : busy ? "Auto-scrolling this tab"
+          : rescanRunning ? "Re-listing this tab" : "Capturing this tab",
       `${host} · ${response.postsOnScreen || 0} posts on screen${response.pendingVideos ? ` · resolving ${response.pendingVideos} video posts` : ""}`
     );
     $("localHint").textContent = response.text;
     $("localHint").classList.remove("error");
   }
-  $("startLocalScrollBtn").disabled = autoScrollRunning;
-  $("stopLocalScrollBtn").disabled = !autoScrollRunning;
+  setLocalBusy(autoScrollRunning || deepFetchRunning, { rescanning: rescanRunning });
 }
 
 queueEl.addEventListener("change", (event) => { if (event.target.matches(".item-select")) updateSelection(event.target.dataset.id, event.target.checked); });
@@ -228,6 +276,13 @@ $("resetDownloadedBtn").addEventListener("click", async () => {
 });
 $("downloadSelectedBtn").addEventListener("click", async () => { state = await send({ action: "queueStart", mode: "selected", source: sourceForActiveTab(), format: $("jobFormat").value }); render(); });
 $("stopBtn").addEventListener("click", async () => { state = await send({ action: "queueStop" }); render(); });
+$("removeSelectedBtn").addEventListener("click", async () => {
+  const ids = selectedItems().map((item) => item.id);
+  if (!ids.length) return;
+  if (!confirm(`Remove ${ids.length} selected item${ids.length === 1 ? "" : "s"} from this list? Nothing already downloaded is deleted from disk — press Rescan tab to bring them back.`)) return;
+  state = await send({ action: "queueRemove", ids });
+  render();
+});
 
 document.querySelectorAll(".tab").forEach((button) => button.addEventListener("click", async () => {
   activeTab = button.dataset.tab;
@@ -244,28 +299,69 @@ document.querySelectorAll("[data-concurrency]").forEach((button) => button.addEv
 
 async function pushScrollSettings() {
   const settings = scrollSettings();
-  await chrome.storage.local.set({ scrollMediaFilter: settings.mediaFilter, scrollSpeed: settings.scrollSpeed, scrollIncludeQuoted: settings.includeQuoted });
+  await chrome.storage.local.set({
+    scrollMediaFilter: settings.mediaFilter,
+    scrollSpeed: settings.scrollSpeed,
+    scrollIncludeQuoted: settings.includeQuoted,
+    deepFetchRemote: settings.deepFetchRemote,
+    showFetchButton: settings.showFetchButton
+  });
   await sendToActiveXTab({ action: "scrollSettings", ...settings });
 }
 $("localCaptureFilter").addEventListener("change", pushScrollSettings);
 $("localScrollSpeed").addEventListener("change", pushScrollSettings);
 $("scrollIncludeQuoted").addEventListener("change", pushScrollSettings);
 
+// Deep fetch — the same command the in-page Fetch button runs.
+$("fetchNowBtn").addEventListener("click", async () => {
+  const response = await sendToActiveXTab({ action: "scrollFetch", ...scrollSettings() });
+  const problem = response.error || (response.ok === false ? response.reason : "");
+  $("localHint").textContent = problem
+    || "Fetching — reading this tab, scrolling the timeline, then silently filling any gaps.";
+  $("localHint").classList.toggle("error", Boolean(problem));
+  if (response.needsRefresh) setReloadTab(true, response.tabId);
+  deepFetchRunning = Boolean(response.fetching);
+  autoScrollRunning = Boolean(response.running);
+  setLocalBusy(deepFetchRunning || autoScrollRunning);
+  pollLocalStatus();
+});
 $("startLocalScrollBtn").addEventListener("click", async () => {
   const response = await sendToActiveXTab({ action: "scrollStart", ...scrollSettings() });
   $("localHint").textContent = response.error || response.reason || response.text || "Auto-scroll started.";
   $("localHint").classList.toggle("error", Boolean(response.error));
   autoScrollRunning = Boolean(response.running);
-  $("startLocalScrollBtn").disabled = autoScrollRunning;
-  $("stopLocalScrollBtn").disabled = !autoScrollRunning;
+  setLocalBusy(autoScrollRunning || deepFetchRunning);
+});
+// Shallow pass only: no scrolling, no remote fill. Finally gives the
+// long-documented scrollRescan command a real sender.
+$("rescanTabBtn").addEventListener("click", async () => {
+  const response = await sendToActiveXTab({ action: "scrollRescan" });
+  $("localHint").textContent = response.error || "Re-listing this tab…";
+  $("localHint").classList.toggle("error", Boolean(response.error));
+  if (response.needsRefresh) setReloadTab(true, response.tabId);
+  // The pass finishes on its own clock (video posts can take a few seconds to
+  // resolve); the 1.5 s status poll replaces the hint with its result note.
+  rescanRunning = Boolean(response.rescanning);
+  setLocalBusy(autoScrollRunning || deepFetchRunning, { rescanning: rescanRunning });
 });
 $("stopLocalScrollBtn").addEventListener("click", async () => {
   const response = await sendToActiveXTab({ action: "scrollStop" });
-  $("localHint").textContent = response.text || "Auto-scroll stopped.";
+  $("localHint").textContent = response.text || "Stopped.";
   autoScrollRunning = false;
-  $("startLocalScrollBtn").disabled = false;
-  $("stopLocalScrollBtn").disabled = true;
+  deepFetchRunning = false;
+  setLocalBusy(false);
 });
+$("reloadTabBtn").addEventListener("click", () => {
+  if (!reloadTabId) {
+    // No remembered tab id (e.g. the panel opened on a non-X tab): reload the
+    // active one, which is what the user is looking at.
+    chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => { if (tab?.id) chrome.tabs.reload(tab.id); });
+    return;
+  }
+  chrome.tabs.reload(reloadTabId);
+});
+$("deepFetchRemote").addEventListener("change", pushScrollSettings);
+$("showFetchButton").addEventListener("change", pushScrollSettings);
 
 $("useCurrentBtn").addEventListener("click", () => chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => { $("targetInput").value = tab?.url || ""; }));
 $("clearTargetBtn").addEventListener("click", () => { $("targetInput").value = ""; $("targetInput").focus(); });
@@ -285,7 +381,7 @@ chrome.tabs.onActivated.addListener(() => { pushScrollSettings(); pollLocalStatu
 chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
   if (changeInfo.status === "complete" || changeInfo.url) { pushScrollSettings(); pollLocalStatus(); }
 });
-chrome.storage.local.get(["batchTarget", "batchLimit", "includeRetweets", "includeQuoted", "sidePanelActiveTab", "scrollMediaFilter", "scrollSpeed", "skipDownloaded", "scrollIncludeQuoted"], (saved) => {
+chrome.storage.local.get(["batchTarget", "batchLimit", "includeRetweets", "includeQuoted", "sidePanelActiveTab", "scrollMediaFilter", "scrollSpeed", "skipDownloaded", "scrollIncludeQuoted", "deepFetchRemote", "showFetchButton"], (saved) => {
   activeTab = saved.sidePanelActiveTab || "scroll";
   if (saved.batchTarget) $("targetInput").value = saved.batchTarget;
   if (saved.batchLimit) $("discoveryLimit").value = saved.batchLimit;
@@ -296,6 +392,10 @@ chrome.storage.local.get(["batchTarget", "batchLimit", "includeRetweets", "inclu
   if (saved.scrollSpeed) $("localScrollSpeed").value = saved.scrollSpeed;
   if (typeof saved.skipDownloaded === "boolean") $("skipDownloaded").checked = saved.skipDownloaded;
   if (typeof saved.scrollIncludeQuoted === "boolean") $("scrollIncludeQuoted").checked = saved.scrollIncludeQuoted;
+  // Both default ON: the silent fill is what makes a profile complete without
+  // endless scrolling, and the in-page button is the point of v3.7.
+  if (typeof saved.deepFetchRemote === "boolean") $("deepFetchRemote").checked = saved.deepFetchRemote;
+  if (typeof saved.showFetchButton === "boolean") $("showFetchButton").checked = saved.showFetchButton;
   render();
   pushScrollSettings();
   pollLocalStatus();

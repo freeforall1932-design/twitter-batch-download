@@ -2,6 +2,441 @@
 
 Chronological implementation record for X Media Downloader.
 
+## 2026-09-03 — v3.9 virtualization-proof capture (posts that leave the DOM are no longer lost)
+
+**Branch:** `arena/01a065c5-twitter-batch-download` · **Manifest 3.8.0 → 3.9.0** ·
+**Tests 140 → 150**
+
+**Session input (verbatim intent):** "Don't forget to add function that filter the
+same post will not be added into list so there won't be duplication when it's
+rescan or listen fetch when I scroll the website normally also did the previous
+fetch already fill the gap of not adding the existing post into the list since if
+I scroll and the page load only the 'new' post was added the existing post before
+that was not added and not listed at all."
+
+Two questions in one: *is dedupe airtight?* and *did the earlier work already fix
+the "only new posts get listed" gap?* The answers turned out to be **yes** and
+**no** — and the second one was a real, measurable data-loss bug.
+
+### Part 1 — dedupe was already airtight (proved, not assumed)
+
+Three layers already existed and each is now pinned by a test:
+
+| Layer | Key | Catches |
+|---|---|---|
+| content.js `listedMediaIds` / `listedMediaKeys` | `tweetId-mediaKey`, CDN leaf | re-sending a post this tab already listed (every scan, every harvest, every rescan) |
+| content.js per-article `seenUrls` + `mediaEntryToItem` dedupe context | URL / id+key | the same photo twice inside one post, and GraphQL items vs DOM items |
+| background `mergeQueueItems` | `knownIds` **and** `knownKeys` across the whole live queue | the same media arriving from the DOM *and* from GraphQL with different id shapes, and — since v3.7 — from the scroll list *and* the remote fill |
+
+Measured across every harness configuration below: **0 duplicate ids**. New tests:
+`harvesting the same post twice lists it exactly once`, `the same photo at
+different sizes lists once` (X swaps `name=small` → `900x900` → `orig`; the CDN
+leaf is the identity, not the query string), `a rescan after a rescan adds nothing
+new`, `the same media is one row across the scroll and remote lists`,
+`queueRemove drops several rows at once`, `a removed row is allowed back, and says
+why when it is not`.
+
+### Part 2 — the gap was real: capture was scan-only, and X virtualizes
+
+`scanVisibleMedia()` reads `article[data-testid="tweet"]` **from the live DOM**,
+driven by a coalesced 150 ms MutationObserver scan plus a 2.5 s interval scan. X
+removes articles that scroll off-screen, so a post inserted *and* removed between
+two scans was never in the DOM at any instant a scan ran — it was never listed at
+all. That is precisely the reported symptom: the newly rendered posts at the
+bottom got added, the ones that had already scrolled past did not.
+
+**Measured** (throwaway jsdom harness, 120-post fake timeline = 103 photo posts /
+207 photos + 17 video posts, articles trimmed to a fixed window as new ones
+arrive, so nothing is in the DOM for long):
+
+| Scroll pattern | Photos listed **before** | **after** | Unique photo posts | Videos | Duplicate ids |
+|---|---|---|---|---|---|
+| window 20, batch/300 ms (normal) | — | **207 / 207** | **103 / 103** | 17 / 17 | 0 |
+| window 6, batch/40 ms (fast auto-scroll) | **81** | **204** | **39 → 101** | **1 → 17** | 0 |
+| window 3, batch/10 ms (extreme) | — | 199 | 99 | 17 | 0 |
+
+So on a fast pass roughly **60% of the media was being silently dropped**, and
+**16 of 17 videos** with it. The GraphQL replay path cushions this in real use
+(a timeline response lists its posts whether or not they are still rendered), but
+it cannot cover a view X served from cache without a network call — which is
+exactly the case v3.7's per-post video resolve was added for.
+
+### The fix — harvest the mutation records themselves
+
+`harvestMutationArticles(mutations)` runs inside the MutationObserver callback,
+before the coalesced scan is even scheduled, and reads articles out of
+**`addedNodes` and `removedNodes`**:
+
+- `addedNodes` catches a post the instant it arrives — earlier than any scan, and
+  `img.src` is already the CDN URL even before the image decodes.
+- `removedNodes` is the guaranteed last chance, and the reason this works even in
+  the hardest case: X (or a fast auto-scroll) can insert and trim in the **same
+  task**, so the node is never in the document at any point a scan could observe.
+  A mutation record still holds it, and a detached subtree stays fully queryable.
+- Containers are walked (`node.querySelectorAll`) and non-element nodes skipped,
+  so a fragment of ten articles is one harvest and a whitespace text node cannot
+  throw.
+
+It cannot create duplicates: `makeDomQueueItems` marks `listedMediaIds` /
+`listedMediaKeys` as it builds each item, so an article harvested on the way in
+and again on the way out lists once — and the worker's id+mediaKey dedupe is the
+second line of defence. `submitDomItems()` was factored out of `scanVisibleMedia`
+so the harvest and the scan share one submission path and their counting, status
+text and dock refresh cannot drift apart.
+
+**Videos came along for free, and they were the bigger win.** A harvested video
+post has no usable direct URL, so it goes into `pendingVideoTweets` for the
+bounded per-post resolve. Before this change a video post that virtualized away
+was never even *queued* for resolving, which is why the fast-scroll run listed 1
+video instead of 17. The harness confirms all 17 now resolve (`pendingVideos`
+drains 12 → 6 → 0, 15 `getTweetMedia` calls + 2 from the replay buffer).
+
+### Two harness artifacts I fixed instead of "fixing" the extension
+
+Both looked like extension bugs and neither was:
+
+1. The fake page built tweet ids as `1800000000000000000 + index`, which is past
+   `Number.MAX_SAFE_INTEGER` — every post collapsed to one id, so "unique photo
+   posts" read 1. Base lowered to `1800000000000000`.
+2. The fake `getTweetMedia` returned `…/720x1280/fake.mp4` for **every** video, so
+   all 17 shared the media key `fake` and correctly deduped into one row. Real X
+   leaves are unique per video, so the fake was wrong, not the dedupe.
+
+The tempting "fix" — stop deduping videos by media key — would have made reposted
+and quoted videos list twice. **Do not weaken production dedupe to satisfy an
+unrealistic fixture**; fix the fixture. (Recorded because the measurement was
+misleading for a moment and the wrong conclusion was one edit away.)
+
+### Small honesty fix found on the way
+
+`scrollRescan` answered `rescanning: true` even when it refused a second
+concurrent rescan, so the panel would claim work that was not happening. The
+handler now reports `ok: false` + the guard's reason. Pinned by
+`a rescan after a rescan adds nothing new`.
+
+### Validation
+
+- `node --test tests/*.test.js` → **150 pass / 0 fail** (+10). The test shim
+  gained `emitMutations(records)` (delivers `{addedNodes, removedNodes}` to every
+  observing MutationObserver), `nodeType: 1`, `matches()` and `remove()` on its
+  elements — the harvest path reads all four.
+- Real-DOM jsdom harness (throwaway, NOT committed): the three scroll patterns in
+  the table above, plus re-runs of the interactive dock smoke, the rescan/restore
+  smoke and the full hybrid deep fetch — `shallow(15) → scroll → discoveryStart
+  @nasa → 24 media found → "Fetch complete — 15 listed from this tab. @nasa
+  silent fill: 24 media found → Remote fetch tab."` All zero errors.
+- `node --check` on every shipped script in both folders; `firefox-extension/`
+  re-synced (diff back to exactly the 17 + 55 pre-existing compat lines); both
+  manifests **3.9.0**; `releases/x-media-downloader-v3.9.0.zip` cut and verified.
+
+### Still open (live X)
+
+- One signed-in pass of a **fast** auto-scroll on a long profile: the count in the
+  panel should now match what the timeline actually contained. Compare against
+  the post count X shows on the profile's `/media` tab — that is the only ground
+  truth available.
+- Confirm the harvest does not list **placeholder/skeleton** articles as media on
+  a real timeline (they yield no items in the harness because they have no
+  `tweetPhoto`/`videoPlayer` node, but real X skeletons are worth one look).
+- Watch CPU on a very long scroll: the harvest runs per mutation batch. It is
+  bounded by `listedMediaIds` (each article yields items at most once) but has
+  never been profiled against a real 1000-post timeline.
+- Deliberately NOT done: no `scroll`-event listener (mutation records already
+  fire on every virtualization change, and a scroll handler would double the
+  work), and no change to the 150 ms coalescing or the 2.5 s interval scan.
+
+## 2026-09-03 — v3.8 Rescan restores deleted rows (+ Remove selected)
+
+**Branch:** `arena/01a065c5-twitter-batch-download` · **Manifest 3.7.0 → 3.8.0** ·
+**Tests 135 → 140**
+
+**Session input (verbatim intent):** "Can you also add rescan function it's like
+fetch but re adding the post into the list say I delete the list then I'll press
+fetch or make a new button and it will rescan the available post into my queue
+list that I can pick which one to delete manually."
+
+### Diagnosis — Rescan already existed and still could not do this
+
+v3.7 shipped a **Rescan tab** button wired to `scrollRescan`, so the button the
+user asked for was already there — but pressing it after deleting rows did
+*nothing*, which is why it read as missing. Capture keeps a per-tab memory of
+what it has already sent (`listedMediaIds`, `listedMediaKeys`,
+`resolvedVideoTweets`) so a scan that runs on every DOM mutation does not
+re-post the whole timeline each time. That memory is a **performance guard with
+no expiry**: it lived for the tab's lifetime and had no way to be cleared from
+the UI. The worker side was never the problem — `mergeQueueItems` dedupes
+against `state.items` only, so a row the user removed was always welcome back.
+The block was entirely in the content script.
+
+`lastReplaySeq` had the same shape of problem: v3.7 made replay incremental, so
+an explicit rescan only asked for responses *newer* than the last one handled.
+X virtualizes timelines — posts that scrolled out of the DOM exist **only** in
+the MAIN-world replay buffer — so an incremental rescan could not restore them
+even with the dedupe sets cleared.
+
+### What changed
+
+1. **`forgetListedMedia()` (content.js)** clears both dedupe sets, the video
+   resolve sets and attempt budget, and resets `lastReplaySeq` to 0 so the whole
+   buffer is re-delivered. Called by exactly two things: **Rescan tab** and the
+   start of a **deep fetch** (dock button or panel `Fetch media`) — the user
+   described both ("I delete the list then I'll press fetch"). Automatic passes
+   (load, route change) deliberately stay incremental; a busy timeline would
+   otherwise re-clone ~8 MB of buffered GraphQL on every mutation tick.
+   **Rule: automatic passes are incremental, explicit clicks start clean.**
+2. **`shallowFetchPass(reason, { fresh })`** carries the flag, so the same code
+   path serves both behaviours instead of a second scan implementation.
+3. **`startRescan()` + `rescanNote()`** — the rescan is async (video posts can
+   take seconds to resolve) so the handler answers immediately with
+   `rescanning: true` and the panel's existing 1.5 s status poll replaces the
+   hint with the outcome. The note always states a result, including the
+   uninteresting ones: `Rescan — 15 media items re-listed into the queue.`,
+   `Rescan — nothing new; the items already in the queue are unchanged.`, or
+   `Rescan — nothing re-listed: N items are already downloaded. Untick "Skip
+   already downloaded" to list them again.` Silence after a click is what makes
+   a working feature look broken.
+4. **`skippedDownloaded` reporting (background.js)** — `mergeQueueItems` now
+   returns `{ added, skippedDownloaded }` instead of a bare count, propagated
+   through `addQueueItems`, the `queueAdd` response and the
+   `localTimelineCapture` response. "Nothing came back" previously could not
+   distinguish *already in your list* (fine) from *held back by a setting*
+   (actionable).
+5. **`Remove selected` (Side Panel)** — the other half of "pick which one to
+   delete manually". Ticking rows only fed **Download selected** before; the new
+   button sends the existing `queueRemove` with an `ids` array (the worker
+   already accepted it — no new command, so the contract test stays green).
+   Confirm-guarded, and its copy says files on disk are untouched and Rescan
+   brings rows back.
+6. **Panel busy state** — `rescanning` disables Fetch/Auto-scroll/Rescan while a
+   pass runs but leaves **Stop** disabled: a rescan is a short read-only pass
+   with nothing to cancel, and offering a Stop that does nothing is worse than
+   not offering one. The status pill gained a `Re-listing this tab` state.
+
+### A bug the first implementation had (kept as a lesson)
+
+The first cut kept one shared `passTally` object that each pass zeroed at its
+start. It reported "nothing new" immediately after re-listing a whole page: an
+automatic load pass (`armLoadFetch()` fires at 900/2200/4000 ms) landed inside
+the rescan's `await sleep()` and wiped the numbers before the note was written.
+Overlapping passes are normal, not exotic — the fix is that the counters are
+**cumulative and never reset**, and each pass reports the delta between its own
+start and end snapshots. Same reason a rescan now records its outcome in its own
+`lastRescan` field rather than in `lastPass` (which honestly means "whatever pass
+ran most recently", and that is usually not the rescan).
+
+### Validation
+
+- `node --test tests/*.test.js` → **140 pass / 0 fail** (+5 new, 1 rewritten).
+  New: rescan re-lists deleted rows (same ids come back), rescan asks for the
+  whole replay buffer (`since: 0`), Fetch media also starts clean, a rescan that
+  adds nothing names the setting that held items back (`lastRescan` record
+  included), a rescan that restores says how many. The v3.7 incremental-replay
+  test was **rewritten** to drive a *route change* instead of a rescan — the
+  incremental property belongs to automatic passes now, and asserting it through
+  `scrollRescan` would have pinned the wrong behaviour.
+- `tests/content.test.js` shim gained `setQueueResponder(fn)` so a test can stand
+  in for the worker's dedupe/skip decision (`addedCount: 0` + `skippedDownloaded`)
+  instead of the optimistic "takes everything" default.
+- **Real-DOM smoke (throwaway, NOT committed):** the harness fake worker was
+  corrected to dedupe against its live queue (it used a permanent `seen` set, so
+  it simulated the *old* behaviour and could never have shown this bug). Running
+  the real `content.js` + `sidepanel.js` in jsdom: load lists 15 with no
+  scrolling → **Clear list** → Rescan restores all 15 with identical ids →
+  a second rescan reports "nothing new" and creates no duplicates → delete one
+  row → rescan restores exactly 1 → dock **Fetch media** after a clear re-lists
+  15 → panel renders 3 seeded rows, ticking one enables **Remove 1 selected**,
+  clicking removes exactly that row and leaves the other two. Zero runtime
+  errors.
+- `dbg2.js` re-run to confirm no regression in the v3.7 hybrid flow:
+  shallow(15) → scroll → `discoveryStart @nasa` → 24 media found →
+  `Fetch complete — 15 listed from this tab. @nasa silent fill: 24 media found →
+  Remote fetch tab.`
+- `node --check` on every shipped script in both folders; `firefox-extension/`
+  re-synced (sidepanel.js/html/css/injected.js copied — identical at HEAD;
+  content.js rebuilt as its compat prefix + shared body; background.js re-patched
+  because it carries intentional `_executeScriptCompat` swaps). Remaining diff is
+  exactly the pre-existing 55 + 17 compat lines. Both manifests **3.8.0**;
+  `releases/x-media-downloader-v3.8.0.zip` re-cut and offline-verified.
+
+### Still open (live X)
+
+- One signed-in pass: delete rows from the queue, press **Rescan tab**, confirm
+  they return on a real profile (including posts scrolled out of view, which only
+  exist in the replay buffer — the 40-entry / ~8 MB bound caps how far back that
+  reaches). Confirm **Remove selected** on a multi-selection and that a rescan
+  during a running fetch is refused cleanly rather than racing it.
+- Deliberately NOT done: no "undo remove", no trash/history of removed rows, and
+  no change to how the two lists stay separate. Rescan is the undo.
+
+## 2026-09-03 — v3.7 Fetch button: auto shallow fetch on tab open, in-page Fetch dock, hybrid deep fetch
+
+**Branch:** `arena/01a065c5-twitter-batch-download` · **Manifest 3.6.3 → 3.7.0** ·
+**Tests 125 → 135**
+
+**Session input (verbatim intent):** "when I open new tab into someone profile it
+doesn't automatically fetch until I scroll down and it load — can you add fetch
+button, look up my other repo rule34 one, there's already deployed fetch function
+although it's broken, or just make it from scratch specifically for Twitter/x
+website. This button should trigger automatic fetch as if I was scrolling and the
+page load. Or should I just reload the page again to trigger my extension? Can you
+look up the logic code in extension and see if there's any missing logic or broken
+code after previous session."
+
+Decisions the user made up front (asked before writing code): the button lives
+**both** in-page and in the Side Panel; a **shallow** fetch fires by itself on tab
+open/route change while the deep one stays a click; and the deep fetch is
+**hybrid** — scroll first, then silently page the profile.
+
+### Diagnosis — why a new profile tab looked dead until you scrolled
+
+Capture has been always-on since v3.2, but it was purely **reactive**: it listed
+whatever X had already rendered or already fetched, and nothing in the extension
+ever made X load *more*. X renders roughly one screenful of a profile and only
+requests the next batch when the viewport approaches the bottom, so a freshly
+opened tab legitimately had nothing more to give — the only driver was the Side
+Panel's **Start auto-scroll**, which requires the panel to be open and attached to
+that tab. Open a profile in a new tab without the panel and nothing ever scrolls.
+
+Four real defects made that worse (all found in this audit, all fixed below):
+a dead extension context wedged the video resolver forever, a route change only
+ran two of its three intended scans, one failed video resolve blacklisted that
+post for the rest of the tab's life, and a replay re-cloned the entire buffered
+GraphQL payload across worlds every time.
+
+### Sister repo check — `freeforall1932-design/rule34video`
+
+Read its deployed fetch: `panel-queue.js startCrawl()` →
+`adapter.describe(route)` (learn total pages) → `adapter.fetchPage(route, page)`
+per page over a `1-99` / `all` range, with `videoAdapter.fetchText()` scraping
+paginated HTML and `worldAdapter.request()` POSTing a JSON search API — i.e. a
+**remote paginated crawler**, not a scroll driver. That pattern does not port to
+X (no paginated HTML listings), but this repo already has its X-native twin:
+`background.js runProfileDiscovery()` cursor-pages `UserMedia` GraphQL with
+live-captured query IDs/features. So instead of importing the rule34 code, v3.7
+**reuses the existing discovery engine** as the second phase of the new deep
+fetch — the rule34 idea, expressed in the only way X allows.
+
+### What was built
+
+1. **Two-level fetch in `content.js`.**
+   - `shallowFetchPass()` — no page movement: `requestReplay()` (pull whatever
+     GraphQL the tab already buffered), `scanVisibleMedia()` (DOM photos +
+     queue video posts), then await the rate-bounded per-post video resolve.
+     Runs **by itself** on load (`shallowFetchPass("load")` + `armLoadFetch()`
+     at 900/2200/4000 ms) and on every SPA route change. This is the piece a
+     new profile tab was missing.
+   - `startDeepFetch()` — shallow → `autoScrollLoop()` (the existing,
+     live-tested engine) → `runRemoteFill()`. Click-only, never automatic.
+2. **In-page Fetch dock** (`.xdl-fetch-dock`, bottom-right) replacing the
+   auto-scroll-only badge: one widget that starts a fetch, shows the phase
+   (`Reading this view` / `Scrolling the timeline` / `Silently fetching @handle`)
+   with a live listed-count, turns its main button into **Stop** while running,
+   and has an **×** to dismiss it for that tab. A *running* fetch always shows
+   the dock even when the button is switched off, so the user can never lose
+   control of a tab the extension is scrolling.
+3. **Silent gap-fill (`runRemoteFill`).** After the scroll, the profile handle
+   is read from the URL (`remoteFillTarget()` — profiles and `/media`,
+   `/with_replies`, `/highlights` only; never a single post, never `home`/
+   `search`/`i`) and `discoveryStart` is sent to the worker with the panel's own
+   limit/repost/quoted settings. The run is polled (`discoveryGet`, 1 s) so the
+   dock shows progress, and Stop sends `discoveryStop`. Rows land in the
+   **Remote fetch** list — the two lists stay separate by standing decision.
+4. **Side Panel Scroll-capture card:** `Fetch media` (primary), `Stop`,
+   `Auto-scroll only`, `Rescan tab`, plus two switches — **Then fetch the rest
+   silently** (`deepFetchRemote`) and **Show the Fetch button on X pages**
+   (`showFetchButton`) — and a **Reload tab** button that appears in the status
+   pill when the active X tab has no live content script. The status pill now
+   reports the fetch phase; `scrollStatus` grew `fetching`, `fetchPhase`,
+   `fetchNote`, `fetchTarget`, `deepFetchRemote`, `showFetchButton`,
+   `dockHidden`, and `scans`.
+
+### Bugs found in the audit (each fixed + regression-tested)
+
+1. **`safeSend()` never released awaiting callers when the context was dead.**
+   `if (!chrome.runtime?.id) return;` skipped the callback, so after an
+   extension reload/update on an already-open X tab, `initEnv()`/`getTweetMedia()`
+   promises hung forever and `drainPendingVideoTweets` wedged with
+   `resolvingVideos` stuck `true` — no video post in that tab was ever listed
+   again until the page was reloaded. That is precisely the user's "should I
+   just reload the page again to trigger my extension?" symptom; the answer is
+   now no. Fixed: the callback always fires (`null`), plus `runtimeAlive()` and
+   a `withTimeout()` budget (90 s, covering the slowest legitimate path — an
+   offscreen GIF conversion) on every `sendMessage` round trip.
+2. **A route change only ran two of its three staged scans.**
+   `scheduleScan(700); scheduleScan(1800);` — `scheduleScan` coalesces (correct
+   for the MutationObserver), so the second call was silently dropped and a view
+   X rendered in stages lost its last pass. Fixed with an uncoalesced
+   `scheduleScanAt(delay)`; `scans` in the status payload makes it observable.
+3. **One failed video resolve blacklisted the post for the tab's lifetime.**
+   `resolvedVideoTweets.add(tweetId)` happened *before* the fetch and was never
+   rolled back on error, so a rate-limited or transient failure meant that
+   post's video never listed. Fixed with a bounded retry budget
+   (`VIDEO_RESOLVE_ATTEMPTS = 2`, `videoResolveAttempts` map) — recoverable, but
+   never a per-scan hammer.
+4. **Stop + immediate restart could leave two loops scrolling one tab.**
+   `autoScrollRunning` was a shared boolean, so the loop that was supposed to be
+   stopping re-read the *new* run's `true` and kept going. Fixed with per-run
+   tokens (`autoScrollRunId` / `deepFetchRunId`, the same pattern as the
+   worker's `discoveryRunSerial`); a superseded run returns without touching
+   shared state, and `stopCapture()` cancels an in-flight silent fill itself
+   (the abandoned poll loop can no longer report the Stop).
+5. **Every replay re-cloned the whole buffer across worlds.** `requestReplay()`
+   asked for everything (up to 40 entries / ~8 MB) each time, and v3.7 makes
+   replays frequent. `injected.js` entries now carry a monotonic `seq`; the
+   content script tracks `lastReplaySeq` and asks `xdlRequestReplay {since}`,
+   and `replayAll(since)` sends only newer entries (`xdlReplayDone` reports
+   `{count, lastSeq}`). A caller with no cursor still gets everything, so an
+   older content script against a newer MAIN world keeps working.
+6. **`scrollRescan` was a documented hook with no sender.** The panel's new
+   **Rescan tab** button sends it, and `tests/background.test.js`'s contract
+   test now checks *content.js* handlers for reachability too (its stale
+   `allowedUnreachable` exception for `scrollRescan` is gone).
+7. **Dead state:** `window.__xdl_active` was set to `false` and never updated —
+   now `true` once init completes (the guard tests `!== undefined`).
+8. **`profileHandleFromUrl` could throw on a non-http origin.** It passed
+   `window.location.origin` as the URL base; on `file:`/`about:` documents that
+   is the literal string `"null"`, and the WHATWG constructor parses the base
+   first, so even an absolute input threw (caught → silent "not a profile").
+   Base removed. Found by the jsdom harness, kept fixed because a swallowed
+   throw is how features go quietly missing.
+
+### Validation
+
+- `node --test tests/*.test.js` → **135 pass / 0 fail** (+10: fresh-tab shallow
+  fetch, staged-scan count, incremental replay, dock click → deep fetch, dock
+  switch/× behaviour, panel `scrollFetch` + Stop, `scrollRescan`, dead-context
+  recovery, plus the injected `since` replay test). The dead-context test was
+  verified to **fail against the old `safeSend`** before being kept.
+- `tests/content.test.js` shim upgraded (still backwards compatible): element
+  `addEventListener` now records and `el.emit(type)` dispatches, `dataset` is a
+  real proxy over `data-*` attributes (content.js writes `dataset.role` and
+  queries `[data-role="main"]`), `loadContentScript({href})` can start on a
+  profile URL, and `runTimeouts(rounds)` drives delayed passes.
+- **Real-DOM smoke (throwaway, NOT committed):** the actual `extension/content.js`
+  and `extension/sidepanel.js` were run inside jsdom against a fake X profile
+  page with a mock background. Result: zero runtime errors; the dock renders and
+  reports a live count; clicking it walks shallow → scroll → remote →
+  "Fetch complete — 15 listed from this tab. @nasa silent fill: 24 media found →
+  Remote fetch tab."; Stop, the × dismissal, both switches, `Rescan`, and every
+  new panel element id all behave. jsdom's only complaint was its unimplemented
+  `window.scrollBy`.
+- `node --check` on every shipped script in both folders; `firefox-extension/`
+  re-synced (byte-identical except its intentional MAIN-world `<script>` shim
+  and manifest), both manifests at **3.7.0**; `scripts/package-release.sh`
+  re-cut (`releases/x-media-downloader-v3.7.0.zip`).
+
+### Still open (live X, cannot be done offline)
+
+- One signed-in pass of the Fetch button on a real profile: fresh-tab shallow
+  fetch listing without scrolling, the dock's three phases, Stop mid-scroll and
+  mid-fill, the silent fill's rows appearing in the Remote fetch list, and the
+  rate-limit wording if X pushes back on the extra crawl.
+- WORKLIST P0 items 12 / 14 / 15 (quote card, v3.5–v3.6 output, `{name}`) are
+  unchanged and still pending; v3.7 adds item 16.
+- Deliberately NOT done: auto-starting the *deep* fetch on tab open (the user
+  chose shallow-auto + click-for-deep), merging the two lists, and any change to
+  `background.js` — the whole feature rides the existing `discovery*` contract.
+
 ## 2026-09-03 — Firefox port — separate folder, feasibility analysis, MV2 manifest
 
 **Branch:** `arena/01a064df-twitter-batch-download` · **Session input:** create separate folder for Firefox extension, port chrome extension folder into Firefox compatible, check codebase if possible and what would be needed, after reading 3 documents, add task into work list first.

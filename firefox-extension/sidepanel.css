@@ -59,3 +59,10 @@ main { padding:14px 14px 156px; } .hidden { display:none !important; }
 }
 .queue-notices p { margin: 0 0 4px; }
 .queue-notices p:last-child { margin-bottom: 0; }
+
+/* v3.7 — Fetch controls in the Scroll capture card */
+.spaced-row { margin-top:8px; }
+.fetch-options { display:flex; flex-direction:column; gap:6px; margin:11px 1px 0; }
+.fetch-options .check-label { white-space:normal; color:var(--muted); font-size:11px; font-weight:600; line-height:1.35; }
+#reloadTabBtn { align-self:center; margin-left:auto; white-space:nowrap; }
+#localHint strong { color:var(--text); }
