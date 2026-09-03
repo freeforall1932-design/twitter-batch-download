@@ -511,7 +511,10 @@ async function getOutputSettings() {
 // Template fields for one queue item's owning post.
 function namingFieldsForItem(item) {
   return {
-    user: String(item?.author || "").replace(/^@/, "") || "unknown",
+    // An absent author is genuinely unknown: do not turn it into a
+    // literal "unknown" user folder. The raw-path builder deliberately omits
+    // that segment when no owning author is available.
+    user: String(item?.author || "").replace(/^@/, "").trim(),
     name: item?.displayName || "",
     text: item?.text || "",
     id: item?.tweetId || "",

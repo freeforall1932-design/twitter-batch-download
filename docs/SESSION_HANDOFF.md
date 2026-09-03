@@ -297,6 +297,10 @@ in the document when a scan happens to run. |
 | `popup.html/js` | Side Panel launcher + capture status line. No scroll/download loop. |
 | `tests/` | `background.test.js`, `content.test.js`, plus v3.5: `naming.test.js`, `zip-writer.test.js`, `pdf-builder.test.js` (verbatim port), `downloader.test.js` (real worker in a VM: master-folder + archive pipelines), v3.6: `gif-encoder.test.js` (round-trip decoder) + `media-kinds.test.js` (quality, kind rules, warnings, mixed-post pipelines), v3.6.1: `archive-lib.test.js` (shared-engine byte parity) + 4 background regressions (abort on Stop, `stopped` classification, attempt-budget reset, storage-write recovery), v3.6.3: `injected.test.js` (media-marker walk + replay-buffer bound) + 4 background/naming regressions (deterministic fallback, `queueChanged` throttle, shared `resolveTweetMedia` rules, path agreement), `helpers/load-background.js`. |
 
+### Post-v3.11 review note
+
+The per-user path must treat a missing owning author as no user segment, never as a literal `unknown` folder. `namingFieldsForItem()` and the legacy-row path both preserve that distinction; `unknown` remains valid only for unrelated discovery/error or legacy filename fallback labels.
+
 ### Design decisions that are deliberate — do not "simplify" these away
 
 These each fix a specific reproduced live failure. Reverting any of them

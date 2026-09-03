@@ -1,5 +1,14 @@
 # Improvement Log
 
+## 2026-09-03 — Post-v3.11 code review: unknown author could create a fake user folder
+
+A review of the v3.11 changes found one misalignment that the existing tests did not cover. `namingFieldsForItem()` used the literal `"unknown"` when a queue item had naming metadata but no author. `buildRawMediaPath()` then treated that as a real user and produced `XMedia/unknown/<post>/...`, contradicting the v3.11 rule that missing authors omit the user segment and never create an `unknown` bucket.
+
+Fixed in both `extension/background.js` and the Firefox port: absent authors now remain an empty template field, so the naming engine falls back to `XMedia/<post>/...`. This preserves the existing legacy-row path handling and does not alter discovery error labels or filename fallbacks that legitimately use `unknown`. Syntax checks pass and the full suite remains **167 pass / 0 fail**.
+
+Still open: live Chrome output review is required before declaring the random-name issue or per-user-folder behavior verified.
+
+
 Chronological implementation record for X Media Downloader.
 
 ## 2026-09-03 — v3.11 per-user folders in the master folder + random-naming flagged PENDING REVIEW
