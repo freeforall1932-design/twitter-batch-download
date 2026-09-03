@@ -1,11 +1,19 @@
 // ==========================================================================
-// offscreen.js — MP4→GIF conversion in a DOM context (v3.13, GIF-only).
+// offscreen.js — MP4→GIF / MP4→APNG conversion in a DOM context (v3.14).
 //
 // X serves animated_gif media as a small silent MP4 clip. This document
-// decodes the clip frame-by-frame through <video> + canvas and feeds the
-// frames to the streaming GIF89a encoder (lib/gifEncoder.js), then returns
-// the bytes to the service worker as base64 so chrome.downloads can save
-// them as a data: URL WITH the master-folder subpath.
+// decodes the clip frame-by-frame through <video> + canvas and encodes it as
+// either a real animated .gif (GIF89a, balanced or maximum-quality mode) or a
+// true-color animated PNG (APNG), then returns the bytes to the service
+// worker as base64 so chrome.downloads can save them as a data: URL WITH the
+// master-folder subpath (the anchor mechanism cannot carry folders).
+//
+// Transfer: max-quality GIFs and APNGs can exceed the size of a single
+// chrome.runtime message, so conversion is two-phase and chunked —
+//   offscreenConvertGif { job: { url, output, jobId } } → { ok, jobId, totalChunks }
+//   offscreenConvertGifChunk { jobId, index }              → { ok, base64, index, last }
+// The bytes stay in a per-jobId buffer in THIS document until the worker has
+// pulled every chunk (then the entry is dropped; a stale job is expired).
 //
 // HARD RULE (verified on real Chrome in the sister repo): offscreen
 // documents expose ONLY chrome.runtime. Never call chrome.storage,
@@ -17,11 +25,22 @@
 (() => {
   "use strict";
 
-  const GIF_FPS = 12;                 // matches typical X GIF frame pacing
-  const GIF_MAX_SECONDS = 30;         // X GIFs are short clips
-  const GIF_MAX_FRAMES = 360;         // 30s × 12fps hard cap
-  const GIF_MAX_DIMENSION = 720;      // longest side; X GIF sources are ≤720 in practice
-  const GIF_MAX_OUTPUT_BYTES = 40 * 1024 * 1024; // relayed as base64 — keep messages bounded
+  // Quality modes: what the "as close to MP4 as possible" trade-off means.
+  //   gif      — balanced GIF: 12 fps, ≤720 px, global palette, no dithering.
+  //   gif-max  — maximum-quality GIF: 25 fps, ≤1920 px, per-frame local
+  //              palettes + Floyd–Steinberg dithering (much closer to the
+  //              source; much larger files).
+  //   apng     — true color per frame (no palette), same 25 fps / ≤1920 px
+  //              caps. The closest an image format gets to the MP4 quality.
+  const MODES = {
+    "gif":     { fps: 12, maxSeconds: 30, maxDimension: 720,  maxOutputBytes: 40 * 1024 * 1024, palette: undefined, dither: false },
+    "gif-max": { fps: 25, maxSeconds: 30, maxDimension: 1920, maxOutputBytes: 256 * 1024 * 1024, palette: "local", dither: true },
+    "apng":    { fps: 25, maxSeconds: 30, maxDimension: 1920, maxOutputBytes: 256 * 1024 * 1024, output: "apng" }
+  };
+
+  const CHUNK_BYTES = 3 * 1024 * 1024;          // 3 MB binary → ~4 MB base64 per message
+  const JOB_TTL_MS = 15 * 60 * 1000;            // stale buffers are expired
+  const jobBuffers = new Map();                 // jobId → { bytes, totalChunks, timer }
 
   function eventWithin(target, event, errorEvent, timeoutMs, label) {
     return new Promise((resolve, reject) => {
@@ -44,8 +63,9 @@
     await done;
   }
 
-  // MP4 clip → animated GIF bytes (Uint8Array).
-  async function convertMp4ToGif(url) {
+  // MP4 clip → encoded image bytes (Uint8Array).
+  async function convertMp4ToImage(url, output) {
+    const mode = MODES[output] || MODES["gif"];
     const response = await fetch(url, { credentials: "omit" });
     if (!response.ok) throw new Error("GIF source fetch failed (" + response.status + ")");
     const sourceBlob = await response.blob();
@@ -59,14 +79,14 @@
       video.src = objectUrl;
       await metadataReady;
 
-      const duration = Math.min(Number(video.duration) || 0, GIF_MAX_SECONDS);
+      const duration = Math.min(Number(video.duration) || 0, mode.maxSeconds);
       if (!(duration > 0) || !video.videoWidth || !video.videoHeight) {
         throw new Error("GIF source video is not decodable");
       }
-      const scale = Math.min(1, GIF_MAX_DIMENSION / Math.max(video.videoWidth, video.videoHeight));
+      const scale = Math.min(1, mode.maxDimension / Math.max(video.videoWidth, video.videoHeight));
       const width = Math.max(1, Math.round(video.videoWidth * scale));
       const height = Math.max(1, Math.round(video.videoHeight * scale));
-      const frameCount = Math.min(GIF_MAX_FRAMES, Math.max(1, Math.round(duration * GIF_FPS)));
+      const frameCount = Math.min(Math.round(mode.maxSeconds * mode.fps), Math.max(1, Math.round(duration * mode.fps)));
       const frameStep = duration / frameCount;
 
       const canvas = document.createElement("canvas");
@@ -75,19 +95,36 @@
       const ctx = canvas.getContext("2d", { willReadFrequently: true });
       if (!ctx) throw new Error("GIF conversion needs a 2d canvas");
 
-      // Streaming encode: each frame is quantized + LZW-compressed
-      // immediately, so only one RGBA buffer is alive at a time.
-      const encoder = XDLGif.createEncoder({ width, height, loop: 0 });
-      for (let i = 0; i < frameCount; i++) {
-        await seekVideo(video, Math.min(i * frameStep, Math.max(0, duration - 0.05)));
-        ctx.drawImage(video, 0, 0, width, height);
-        encoder.addFrame(ctx.getImageData(0, 0, width, height).data, frameStep * 1000);
+      let bytes;
+      if (mode.output === "apng") {
+        // True color: raw RGBA frames, no quantization.
+        const encoder = XDLAPng.createApng({ width, height, loop: 0, frames: frameCount });
+        for (let i = 0; i < frameCount; i++) {
+          await seekVideo(video, Math.min(i * frameStep, Math.max(0, duration - 0.05)));
+          ctx.drawImage(video, 0, 0, width, height);
+          await encoder.addFrame(ctx.getImageData(0, 0, width, height).data, frameStep * 1000);
+        }
+        bytes = encoder.finish();
+      } else {
+        // Streaming encode: each frame is quantized + LZW-compressed
+        // immediately, so only one RGBA buffer is alive at a time.
+        const encoder = XDLGif.createEncoder({
+          width, height, loop: 0,
+          ...(mode.palette ? { palette: mode.palette, dither: mode.dither } : {})
+        });
+        for (let i = 0; i < frameCount; i++) {
+          await seekVideo(video, Math.min(i * frameStep, Math.max(0, duration - 0.05)));
+          ctx.drawImage(video, 0, 0, width, height);
+          encoder.addFrame(ctx.getImageData(0, 0, width, height).data, frameStep * 1000);
+        }
+        bytes = encoder.finish();
       }
-      const gifBytes = encoder.finish();
-      if (gifBytes.length > GIF_MAX_OUTPUT_BYTES) {
-        throw new Error("Converted GIF exceeds the size bound (" + gifBytes.length + " bytes)");
+      if (bytes.length > mode.maxOutputBytes) {
+        throw new Error(
+          `Converted ${mode.output === "apng" ? "APNG" : "GIF"} exceeds the size bound (${bytes.length} bytes; max ${mode.maxOutputBytes})`
+        );
       }
-      return gifBytes;
+      return bytes;
     } finally {
       video.removeAttribute("src");
       video.load();
@@ -95,7 +132,7 @@
     }
   }
 
-  // Chunked so 40 MB of bytes never blows the call stack through apply/spread.
+  // Chunked so large outputs never blow the call stack through apply/spread.
   function bytesToBase64(bytes) {
     const chunks = [];
     const CHUNK = 0x8000;
@@ -108,15 +145,55 @@
     return btoa(chunks.join(""));
   }
 
+  function startJob(jobId, bytes, mode) {
+    const totalChunks = Math.max(1, Math.ceil(bytes.length / CHUNK_BYTES));
+    const timer = setTimeout(() => jobBuffers.delete(jobId), JOB_TTL_MS);
+    jobBuffers.set(jobId, { bytes, totalChunks, timer });
+    return totalChunks;
+  }
+
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg?.action === "offscreenConvertGif") {
-      // Raw-mode GIF conversion: the bytes travel back to the worker as
-      // base64 so chrome.downloads can save them as a data: URL WITH the
-      // master-folder subpath (the anchor mechanism cannot carry folders).
-      convertMp4ToGif(String(msg.job?.url || ""))
-        .then((bytes) => sendResponse({ ok: true, base64: bytesToBase64(bytes) }))
+      const job = msg.job || {};
+      const output = (["gif", "gif-max", "apng"].includes(job.output) && job.output) || "gif";
+      const jobId = String(job.jobId || "");
+      // Convert first, then answer with the chunk map so a failure never
+      // leaves a job the worker would keep polling.
+      convertMp4ToImage(String(job.url || ""), output)
+        .then((bytes) => {
+          if (!jobId) {
+            // Legacy/single-use path: one message carries the whole file
+            // (tests + small balanced conversions).
+            sendResponse({ ok: true, base64: bytesToBase64(bytes) });
+            return;
+          }
+          const totalChunks = startJob(jobId, bytes, output);
+          sendResponse({ ok: true, jobId, totalChunks });
+        })
         .catch((error) => sendResponse({ ok: false, error: String(error?.message || error) }));
       return true; // async response
+    }
+
+    if (msg?.action === "offscreenConvertGifChunk") {
+      const job = jobBuffers.get(String(msg.jobId || ""));
+      if (!job) {
+        sendResponse({ ok: false, error: "GIF job not found (expired or never started)" });
+        return true;
+      }
+      const index = Number(msg.index);
+      if (!Number.isInteger(index) || index < 0 || index >= job.totalChunks) {
+        sendResponse({ ok: false, error: "GIF chunk index out of range" });
+        return true;
+      }
+      const start = index * CHUNK_BYTES;
+      const slice = job.bytes.subarray(start, Math.min(start + CHUNK_BYTES, job.bytes.length));
+      const last = index === job.totalChunks - 1;
+      if (last) {
+        clearTimeout(job.timer);
+        jobBuffers.delete(String(msg.jobId || ""));
+      }
+      sendResponse({ ok: true, base64: bytesToBase64(slice), index, last });
+      return true;
     }
     return undefined;
   });

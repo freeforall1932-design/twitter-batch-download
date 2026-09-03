@@ -489,14 +489,19 @@ const OUTPUT_SETTINGS_DEFAULTS = {
   //         /media page of the SAME user collapse into one folder).
   //   OFF → XMedia/<post name>/001.jpg (pre-v3.11 layout).
   userFolders: true,
-  // v3.6 — GIF handling:
-  gifOutput: "gif",     // "gif" = convert X's silent MP4 "GIFs" to real .gif files; "mp4" = keep the source clip
+  // v3.6/v3.14 — GIF handling:
+  //   "gif"     → real .gif, balanced (small files)
+  //   "gif-max" → real .gif, maximum quality (local palettes + dithering, larger)
+  //   "apng"    → true-color APNG (closest to MP4 quality, larger)
+  //   "mp4"     → keep the original MP4 clip
+  gifOutput: "gif",
   // v3.10 — duplicate verification:
   verifyDuplicates: true // byte-identical + source-URL checks before a file is saved again
 };
 
 function normalizeGifOutput(value) {
-  return String(value || "").toLowerCase() === "mp4" ? "mp4" : "gif";
+  const v = String(value || "").toLowerCase();
+  return v === "mp4" ? "mp4" : v === "gif-max" ? "gif-max" : v === "apng" ? "apng" : "gif";
 }
 
 // A corrupt/legacy stored value must degrade to the shipped defaults, never
@@ -599,12 +604,15 @@ function rawPathForItem(item, settings, extOverride) {
 // (no offscreen API, conversion error, oversized result) degrades to the
 // original MP4 rather than failing the item.
 async function prepareRawDownload(item, settings) {
-  if (mediaKindOfItem(item) === "gif" && normalizeGifOutput(settings?.gifOutput) === "gif") {
-    const converted = await convertGifViaOffscreen(item.url);
+  const output = normalizeGifOutput(settings?.gifOutput);
+  if (mediaKindOfItem(item) === "gif" && output !== "mp4") {
+    const converted = await convertGifViaOffscreen(item.url, output);
     if (converted?.ok && converted.base64) {
-      return { url: `data:image/gif;base64,${converted.base64}`, filename: rawPathForItem(item, settings, "gif") };
+      const ext = output === "apng" ? "apng" : "gif";
+      const mime = output === "apng" ? "image/apng" : "image/gif";
+      return { url: `data:${mime};base64,${converted.base64}`, filename: rawPathForItem(item, settings, ext) };
     }
-    console.warn("[X-DL BG] GIF conversion unavailable, keeping the MP4 source:", converted?.error || "offscreen document unavailable");
+    console.warn("[X-DL BG] GIF/APNG conversion unavailable, keeping the MP4 source:", converted?.error || "offscreen document unavailable");
   }
   return { url: item.url, filename: rawPathForItem(item, settings) };
 }
@@ -1586,17 +1594,18 @@ async function runQueuePass() {
 }
 
 // ==========================================================================
-// GIF CONVERSION (Chrome only) — X's animated_gif media is a silent MP4
-// clip; a real .gif is produced in a GIF-only offscreen document
-// (<video> + canvas + the streaming GIF89a encoder). Firefox MV2 has no
-// chrome.offscreen, so on this port ensureOffscreenDocument() returns false
-// and the item degrades to its original MP4 — never a failed item.
+// GIF/APNG CONVERSION (Chrome only) — X's animated_gif media is a silent
+// MP4 clip; a real .gif (balanced or maximum quality) or a true-color APNG
+// is produced in a small offscreen document (<video> + canvas + the
+// streaming GIF89a/APNG encoders). Firefox MV2 has no chrome.offscreen, so
+// on this port ensureOffscreenDocument() returns false and the item degrades
+// to its original MP4 — never a failed item.
 // ==========================================================================
 // The offscreen document exposes ONLY chrome.runtime (a storage/downloads
 // call there crashes the document), so the job carries just the URL and the
-// GIF bytes travel back as base64. chrome.downloads honors the filename
-// argument for data: URLs, so converted GIFs still land inside the master
-// folder.
+// encoded bytes travel back as base64 (chunked when large). chrome.downloads
+// honors the filename argument for data: URLs, so converted files still land
+// inside the master folder.
 
 const OFFSCREEN_DOCUMENT_PATH = "offscreen.html";
 
@@ -1641,9 +1650,31 @@ function sendOffscreenRequest(action, payload, timeoutMs, timeoutError) {
 
 // MP4 "GIF" → real .gif, converted in the offscreen document (a service
 // worker has no <video>/canvas). Returns { ok, base64 } or { ok:false }.
-async function convertGifViaOffscreen(url) {
+async function convertGifViaOffscreen(url, output) {
   if (!(await ensureOffscreenDocument())) return { ok: false, error: "Offscreen document unavailable" };
-  return sendOffscreenRequest("offscreenConvertGif", { job: { url } }, 120000, "GIF conversion timed out");
+  const jobId = `g-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const started = await sendOffscreenRequest(
+    "offscreenConvertGif",
+    { job: { url, output, jobId } },
+    600000,
+    "GIF conversion timed out"
+  );
+  if (!started?.ok) return started;
+  const chunks = [];
+  const total = Number(started.totalChunks) || 1;
+  for (let i = 0; i < total; i++) {
+    const chunk = await sendOffscreenRequest(
+      "offscreenConvertGifChunk",
+      { jobId, index: i },
+      60000,
+      "GIF chunk transfer timed out"
+    );
+    if (!chunk?.ok || typeof chunk.base64 !== "string") {
+      return { ok: false, error: chunk?.error || "GIF chunk transfer failed" };
+    }
+    chunks.push(chunk.base64);
+  }
+  return { ok: true, base64: chunks.join("") };
 }
 
 function processQueue() {

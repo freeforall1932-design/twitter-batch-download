@@ -122,17 +122,29 @@ test("queueStart warnings stay silent for raw runs", async () => {
 
 // ---- pipelines ------------------------------------------------------------------
 
-test("raw GIF with a live offscreen document converts to .gif and keeps the master-folder path", async () => {
+test("raw GIF with a live offscreen document converts to .gif via the chunked relay and keeps the master-folder path", async () => {
   const calls = [];
   const gifBase64 = Buffer.from("GIF89a-fake-body").toString("base64");
+  const half = Math.ceil(gifBase64.length / 2);
+  const chunks = [gifBase64.slice(0, half), gifBase64.slice(half)];
   const background = loadBackground({
     download: capturingDownload(calls),
     offscreen: { createDocument: async () => {}, hasDocument: async () => true },
     runtimeSendMessage: (message, callback) => {
-      if (message?.action !== "offscreenConvertGif") return Promise.resolve();
-      assert.equal(message.job.url, "https://video.twimg.com/tweet_video/gif0.mp4");
-      callback({ ok: true, base64: gifBase64 });
-      return undefined;
+      if (message?.action === "offscreenConvertGif") {
+        assert.equal(message.job.url, "https://video.twimg.com/tweet_video/gif0.mp4");
+        assert.equal(message.job.output, "gif");
+        assert.ok(String(message.job.jobId).startsWith("g-"), "background allocates a job id");
+        callback({ ok: true, jobId: message.job.jobId, totalChunks: 2 });
+        return undefined;
+      }
+      if (message?.action === "offscreenConvertGifChunk") {
+        const index = Number(message.index);
+        assert.ok(index < 2, "chunk index stays in range");
+        callback({ ok: true, base64: chunks[index], index, last: index === 1 });
+        return undefined;
+      }
+      return Promise.resolve();
     }
   });
   await runQueue(background, [gifItem()], "raw");
@@ -140,6 +152,88 @@ test("raw GIF with a live offscreen document converts to .gif and keeps the mast
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, `data:image/gif;base64,${gifBase64}`);
   assert.equal(calls[0].filename, "XMedia/nasa/nasa - Hello world - 111/002.gif");
+});
+
+test("raw GIF with gifOutput=gif-max converts to .gif and keeps the .gif extension", async () => {
+  const calls = [];
+  const gifBase64 = Buffer.from("GIF89a-max-body").toString("base64");
+  const background = loadBackground({
+    download: capturingDownload(calls),
+    syncStored: { gifOutput: "gif-max" },
+    offscreen: { createDocument: async () => {}, hasDocument: async () => true },
+    runtimeSendMessage: (message, callback) => {
+      if (message?.action === "offscreenConvertGif") {
+        assert.equal(message.job.output, "gif-max");
+        callback({ ok: true, jobId: message.job.jobId, totalChunks: 1 });
+        return undefined;
+      }
+      if (message?.action === "offscreenConvertGifChunk") {
+        callback({ ok: true, base64: gifBase64, index: 0, last: true });
+        return undefined;
+      }
+      return Promise.resolve();
+    }
+  });
+  await runQueue(background, [gifItem()], "raw");
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, `data:image/gif;base64,${gifBase64}`);
+  assert.equal(calls[0].filename, "XMedia/nasa/nasa - Hello world - 111/002.gif");
+});
+
+test("raw GIF with gifOutput=apng converts to a true-color APNG with .apng extension", async () => {
+  const calls = [];
+  const apngBase64 = Buffer.from("896504470d0a1a0a-apng-body").toString("base64");
+  const background = loadBackground({
+    download: capturingDownload(calls),
+    syncStored: { gifOutput: "apng" },
+    offscreen: { createDocument: async () => {}, hasDocument: async () => true },
+    runtimeSendMessage: (message, callback) => {
+      if (message?.action === "offscreenConvertGif") {
+        assert.equal(message.job.output, "apng");
+        callback({ ok: true, jobId: message.job.jobId, totalChunks: 1 });
+        return undefined;
+      }
+      if (message?.action === "offscreenConvertGifChunk") {
+        callback({ ok: true, base64: apngBase64, index: 0, last: true });
+        return undefined;
+      }
+      return Promise.resolve();
+    }
+  });
+  await runQueue(background, [gifItem()], "raw");
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, `data:image/apng;base64,${apngBase64}`);
+  assert.equal(calls[0].filename, "XMedia/nasa/nasa - Hello world - 111/002.apng");
+});
+
+test("convertGifViaOffscreen degrades when a chunk pull fails", async () => {
+  const background = loadBackground({
+    offscreen: { createDocument: async () => {}, hasDocument: async () => true },
+    runtimeSendMessage: (message, callback) => {
+      if (message?.action === "offscreenConvertGif") {
+        callback({ ok: true, jobId: message.job.jobId, totalChunks: 2 });
+        return undefined;
+      }
+      callback({ ok: false, error: "GIF job not found" });
+      return undefined;
+    }
+  });
+  const result = await background.convertGifViaOffscreen("https://video.twimg.com/tweet_video/gif0.mp4", "gif-max");
+  assert.equal(result.ok, false);
+  assert.match(String(result.error), /GIF job not found|chunk transfer failed/);
+});
+
+test("normalizeGifOutput accepts every mode and degrades unknown values to balanced gif", () => {
+  const background = loadBackground({});
+  assert.equal(background.normalizeGifOutput("gif"), "gif");
+  assert.equal(background.normalizeGifOutput("gif-max"), "gif-max");
+  assert.equal(background.normalizeGifOutput("apng"), "apng");
+  assert.equal(background.normalizeGifOutput("mp4"), "mp4");
+  assert.equal(background.normalizeGifOutput("GIF-MAX"), "gif-max");
+  assert.equal(background.normalizeGifOutput("webp"), "gif");
+  assert.equal(background.normalizeGifOutput(undefined), "gif");
 });
 
 test("raw GIF with gifOutput=mp4 keeps the original clip untouched", async () => {

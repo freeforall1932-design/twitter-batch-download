@@ -1,5 +1,23 @@
 # Improvement Log
 
+## 2026-09-03 — v3.14 output quality modes: maximum-quality GIF + true-color APNG
+
+User asked for converted GIFs to get "as close to the original MP4 source as an image format allows", even at the cost of size, and chose **both** quality paths rather than one. The "GIF posts save as" setting in Output settings now offers four choices (balanced `.gif` stays the default):
+
+- **Real .gif — balanced** (unchanged default): 12 fps, ≤720 px, one global 256-color palette, no dithering, 40 MB cap.
+- **Real .gif — maximum quality** (`gif-max`): 25 fps, ≤1920 px, **per-frame local 256-color tables** + Floyd–Steinberg error diffusion (5-bit/channel lookup so the dither pass is O(pixels)), 256 MB cap. Much closer to the source; files are much larger.
+- **APNG — true color** (`apng`): identical caps to max GIF but **no palette at all** — every frame stays full RGBA (24/32-bit), filter-0 scanlines, per-frame deflate via `CompressionStream`, correct `acTL`/`fcTL`/`fdAT` sequence numbers and CRCs. Visually the closest an image format gets to the MP4. New dependency-free `extension/lib/apngEncoder.js` (UMD, no chrome APIs).
+- **Original MP4 clips** (unchanged).
+
+**Mechanics:**
+
+- `extension/offscreen.js` grew a `MODES` map and a **chunked two-message relay**: `offscreenConvertGif { job: { url, output, jobId } } → { ok, jobId, totalChunks }`, then `offscreenConvertGifChunk { jobId, index } → { ok, base64, index, last }` (3 MB binary per chunk ≈ 4 MB base64), per-job buffer with 15-minute TTL. The legacy single-message `{ ok, base64 }` path is kept for no-jobId callers/tests. Background `convertGifViaOffscreen(url, output)` joins the chunks and the worker still sends the file to `chrome.downloads` as a `data:` URL, so the master folder + per-user subfolders survive for `.gif` **and** `.apng` filenames.
+- Workers (both ports) normalize `gifOutput` to `gif | gif-max | apng | mp4` (unknown/legacy values degrade to the balanced default) and pass the mode through to the offscreen job; every failure still degrades to the original MP4, never a failed item.
+- `offscreen.html` now loads `lib/apngEncoder.js`; `sidepanel.html/js` (both ports, byte-identical) expose the four options and persist them via `storage.sync`.
+- Firefox port behavior is intentionally unchanged: no `chrome.offscreen` in MV2, so the MP4 clip is kept regardless of the setting (UI hint still documents this).
+
+**Tests (183 pass / 0 fail, ~4 s):** new `tests/apng-encoder.test.js` (6 tests — chunk CRC verification, strict fcTL/fdAT sequence checks, zlib inflate of filter-0 scanlines, byte-exact true-color gradient round-trip, acTL count+CRC patch, CRC reference vector) validated against PIL's real APNG decoder; `tests/gif-encoder.test.js` gained a local-palette reader + 4 max-quality tests (per-frame tables, dither pattern engagement, LZW growth under dither, solid-frame exactness); `tests/media-kinds.test.js` covers the chunked relay end-to-end plus `gif-max`/`apng` extension+MIME choices and chunk-failure degradation. Two encoder bugs found and fixed by the new tests: the GIF local-palette guard re-wrote the header on every frame (multi-header corrupt file), and the APNG acTL patch initially missed the signature (wrong part offsets) and included the PNG length field in the recomputed CRC. Manifests 3.13.0 → **3.14.0** (both ports); workflows (both copies) now also trigger on `firefox-extension/**` and `source/archive-enabled/**`. Syntax checks pass for every shipped script; no release zip cut yet (pending user review).
+
 ## 2026-09-03 — v3.13 leanness pass: dead archive code stripped, GIF conversion restored (GIF-only offscreen)
 
 Asked to confirm the shipped folders were "lean, no bloat from the disabled feature, ready to test". File/permission level was already lean; the dead archive code still INSIDE the shipped scripts was not. This pass removes it and restores the one useful capability that the v3.12 strip had silently broken.

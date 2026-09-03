@@ -6,12 +6,18 @@
 // decodes the MP4 frame-by-frame onto a canvas (offscreen.js) and feeds the
 // RGBA frames here, producing a real animated .gif file.
 //
+// Two quality modes (v3.14):
+//   balanced (default) — one GLOBAL 256-color palette from the first frame,
+//     nearest-color mapping, no dithering. Small files; can band on
+//     color-shifting scenes.
+//   max quality         — palette:"local", dither:true: each frame gets its
+//     OWN 256-color table (from that frame's pixels) + Floyd–Steinberg error
+//     diffusion, plus a 5-bit/channel lookup table so the dithering pass
+//     stays O(pixels). Much closer to the MP4 source; files are much larger.
+//
 // Design (memory-conscious — frames are compressed as they arrive, RGBA
 // buffers are never accumulated):
-//   - Global 256-color palette built once, from the FIRST frame, by median
-//     cut over a pixel sample. Later frames map through a nearest-color
-//     cache. (Same trade-off gif.js makes with a single global palette:
-//     stable colors across frames and one palette write.)
+//   - Median-cut palette (256 colors, sampled) per frame or global.
 //   - Standard GIF LZW with CLEAR/EOI codes, 8-bit min code size.
 //   - NETSCAPE2.0 loop extension (loop forever by default).
 //   - No transparency, disposal "do not dispose" — X GIFs are opaque video.
@@ -112,6 +118,90 @@
     };
   }
 
+  // 5-bit/channel lookup table → nearest palette index, built once per frame.
+  // This is what makes the per-pixel dithering pass O(1) (32768 entries × ≤256
+  // colors ≈ 8M distance checks, ~10 ms) instead of O(pixels × palette).
+  function makeLut(palette) {
+    const { table, colorCount } = palette;
+    const lut = new Uint8Array(32 * 32 * 32);
+    for (let r5 = 0; r5 < 32; r5++) {
+      for (let g5 = 0; g5 < 32; g5++) {
+        for (let b5 = 0; b5 < 32; b5++) {
+          const r = Math.min(255, r5 * 8 + 4);
+          const g = Math.min(255, g5 * 8 + 4);
+          const b = Math.min(255, b5 * 8 + 4);
+          let best = 0, bestDist = Infinity;
+          for (let i = 0; i < colorCount; i++) {
+            const dr = r - table[i * 3];
+            const dg = g - table[i * 3 + 1];
+            const db = b - table[i * 3 + 2];
+            const dist = dr * dr + dg * dg + db * db;
+            if (dist < bestDist) { bestDist = dist; best = i; }
+          }
+          lut[(r5 << 10) | (g5 << 5) | b5] = best;
+        }
+      }
+    }
+    return lut;
+  }
+
+  // Floyd–Steinberg error diffusion over the lookup table. Only two error
+  // rows are alive (current + next) so RAM stays O(width), and errors are
+  // distributed 7/16 right, 3/16 down-left, 5/16 down, 1/16 down-right.
+  function mapRgbaWithDither(rgba, palette, width, height) {
+    const lut = makeLut(palette);
+    const { table, colorCount } = palette;
+    if (colorCount === 0) throw new Error("Palette is empty.");
+    const indices = new Uint8Array(width * height);
+    let curErr = new Float32Array(width * 3);
+    let nextErr = new Float32Array(width * 3);
+    const clamp255 = (v) => (v < 0 ? 0 : v > 255 ? 255 : v);
+
+    for (let y = 0; y < height; y++) {
+      const rowStart = y * width;
+      for (let x = 0; x < width; x++) {
+        const src = (rowStart + x) << 2;
+        const e = x * 3;
+        const r0 = rgba[src];
+        const g0 = rgba[src + 1];
+        const b0 = rgba[src + 2];
+        const r = clamp255(Math.round(r0 + curErr[e]));
+        const g = clamp255(Math.round(g0 + curErr[e + 1]));
+        const b = clamp255(Math.round(b0 + curErr[e + 2]));
+        const idx = lut[((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3)];
+        indices[rowStart + x] = idx;
+        const er = r0 - table[idx * 3];
+        const eg = g0 - table[idx * 3 + 1];
+        const eb = b0 - table[idx * 3 + 2];
+        if (x + 1 < width) {
+          curErr[e + 3] += er * (7 / 16);
+          curErr[e + 4] += eg * (7 / 16);
+          curErr[e + 5] += eb * (7 / 16);
+        }
+        if (y + 1 < height) {
+          if (x > 0) {
+            nextErr[e - 3] += er * (3 / 16);
+            nextErr[e - 2] += eg * (3 / 16);
+            nextErr[e - 1] += eb * (3 / 16);
+          }
+          nextErr[e] += er * (5 / 16);
+          nextErr[e + 1] += eg * (5 / 16);
+          nextErr[e + 2] += eb * (5 / 16);
+          if (x + 1 < width) {
+            nextErr[e + 3] += er * (1 / 16);
+            nextErr[e + 4] += eg * (1 / 16);
+            nextErr[e + 5] += eb * (1 / 16);
+          }
+        }
+      }
+      const tmp = curErr;
+      curErr = nextErr;    // errors accumulated for this new row become current
+      nextErr = tmp;       // recycle the old buffer as the next row's accumulator
+      nextErr.fill(0);
+    }
+    return indices;
+  }
+
   // ---- LZW (GIF variant) ---------------------------------------------------
 
   function lzwEncode(indices, minCodeSize, out) {
@@ -168,9 +258,10 @@
 
   // ---- encoder -------------------------------------------------------------
 
-  // Streaming encoder: palette from frame 1, every addFrame() compresses and
-  // discards its RGBA input immediately.
-  //   const enc = createEncoder({ width, height, loop: 0 });
+  // Streaming encoder. Every addFrame() compresses and discards its RGBA
+  // input immediately.
+  //   Balanced   → createEncoder({ width, height, loop: 0 })
+  //   Max quality→ createEncoder({ width, height, loop: 0, palette: "local", dither: true })
   //   enc.addFrame(rgbaUint8ClampedArray, delayMs); …
   //   const bytes = enc.finish(); // Uint8Array starting "GIF89a"
   function createEncoder(options) {
@@ -182,8 +273,11 @@
     const width = Math.floor(rawWidth);
     const height = Math.floor(rawHeight);
     const loop = options && Number.isFinite(options.loop) ? Math.max(0, options.loop) : 0;
+    const localPalette = !!(options && options.palette === "local");
+    const dither = !!(options && options.dither);
 
     const out = []; // plain byte array; assembled into Uint8Array at finish()
+    let headerWritten = false;
     let palette = null;
     let mapColor = null;
     let frames = 0;
@@ -195,10 +289,15 @@
       // "GIF89a"
       out.push(0x47, 0x49, 0x46, 0x38, 0x39, 0x61);
       push16(width); push16(height);
-      // Global color table flag + 8 bits/channel + table size exponent.
-      const sizeExp = Math.round(Math.log2(palette.tableSize)) - 1;
-      out.push(0x80 | 0x70 | sizeExp, 0x00, 0x00);
-      for (const byte of palette.table) out.push(byte);
+      if (localPalette) {
+        // No global table — every frame carries its own local color table.
+        out.push(0x00, 0x00, 0x00);
+      } else {
+        // Global color table flag + 8 bits/channel + table size exponent.
+        const sizeExp = Math.round(Math.log2(palette.tableSize)) - 1;
+        out.push(0x80 | 0x70 | sizeExp, 0x00, 0x00);
+        for (const byte of palette.table) out.push(byte);
+      }
       // NETSCAPE2.0 application extension: animation loop count.
       out.push(0x21, 0xff, 0x0b);
       for (const ch of "NETSCAPE2.0") out.push(ch.charCodeAt(0));
@@ -208,22 +307,46 @@
     function addFrame(rgba, delayMs) {
       if (finished) throw new Error("GIF encoder already finished.");
       if (!rgba || rgba.length < width * height * 4) throw new Error("GIF frame buffer is too small.");
-      if (!palette) {
-        palette = buildPalette(rgba);
-        mapColor = makeColorMapper(palette);
+      if (!headerWritten) {
+        // Balanced mode keeps ONE global palette (built from the first
+        // frame); local mode keeps palette null and builds a table per
+        // frame. Either way the GIF header is written exactly once — the
+        // old `if (!palette)` guard re-wrote the header on every frame in
+        // local mode, producing a corrupt multi-header file.
+        palette = localPalette ? null : buildPalette(rgba);
+        mapColor = localPalette ? null : makeColorMapper(palette);
         writeHeader();
+        headerWritten = true;
       }
+      // Local-palette mode: build THIS frame's table from this frame's pixels.
+      const framePalette = localPalette ? buildPalette(rgba) : palette;
       // Graphic control extension: delay in centiseconds, no transparency.
       const delayCs = Math.max(2, Math.round((Number(delayMs) || 100) / 10));
       out.push(0x21, 0xf9, 0x04, 0x04 /* disposal=1 (leave) */); push16(delayCs); out.push(0x00, 0x00);
-      // Image descriptor: full frame, global palette.
-      out.push(0x2c); push16(0); push16(0); push16(width); push16(height); out.push(0x00);
+      // Image descriptor: full frame. Local mode sets the LCT flag and writes
+      // the frame's own table above the LZW data; balanced mode uses the
+      // single global table (LCT flag 0).
+      let descriptorPacked = 0x00;
+      if (localPalette) {
+        const sizeExp = Math.round(Math.log2(framePalette.tableSize)) - 1;
+        descriptorPacked = 0x80 | sizeExp;
+      }
+      out.push(0x2c); push16(0); push16(0); push16(width); push16(height); out.push(descriptorPacked);
+      if (localPalette) {
+        for (const byte of framePalette.table) out.push(byte);
+      }
       // Map RGBA → palette indices, then LZW-compress.
       const totalPixels = width * height;
-      const indices = new Uint8Array(totalPixels);
-      for (let p = 0, i = 0; p < totalPixels; p++, i += 4) {
-        indices[p] = mapColor(rgba[i], rgba[i + 1], rgba[i + 2]);
-      }
+      const indices = dither
+        ? mapRgbaWithDither(rgba, framePalette, width, height)
+        : (() => {
+            const mapper = localPalette ? makeColorMapper(framePalette) : mapColor;
+            const ids = new Uint8Array(totalPixels);
+            for (let p = 0, i = 0; p < totalPixels; p++, i += 4) {
+              ids[p] = mapper(rgba[i], rgba[i + 1], rgba[i + 2]);
+            }
+            return ids;
+          })();
       out.push(0x08); // LZW min code size (256-color palette)
       lzwEncode(indices, 8, out);
       frames++;
