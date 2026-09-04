@@ -4,6 +4,29 @@ const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
+test("no worker registers a global filename-determination listener", () => {
+  // `downloads` permission is needed for our own saves, but
+  // onDeterminingFilename would make the worker a participant in every
+  // browser download, including downloads started by another extension.
+  // Keep this as a source-level guard across the shipped Chrome/Firefox
+  // workers and the archived Chrome variant; a listener must never be added
+  // merely because the worker started.
+  const workerPaths = [
+    "extension/background.js",
+    "firefox-extension/background.js",
+    "source/archive-enabled/chrome-extension/background.js",
+    "source/archive-enabled/firefox-extension/background.js"
+  ];
+  for (const relativePath of workerPaths) {
+    const source = fs.readFileSync(path.join(__dirname, "..", relativePath), "utf8");
+    assert.doesNotMatch(
+      source,
+      /(?:chrome|browser)\.downloads\.onDeterminingFilename|\bonDeterminingFilename\b/,
+      `${relativePath} must not join Chrome's global filename-naming chain`
+    );
+  }
+});
+
 function loadBackground(options = {}) {
   const stored = { ...(options.stored || {}) };
   // chrome.storage.sync — output settings written by the Side Panel settings
