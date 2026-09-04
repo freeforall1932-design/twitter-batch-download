@@ -1,3 +1,15 @@
+## 2026-09-04 — Cross-extension filename-authority audit: no leak found
+
+This audit started from the reported Chrome symptom where another downloader was blamed for determining a different filename, including an empty filename (`""`). The dangerous API is `chrome.downloads.onDeterminingFilename`: merely registering it makes an extension participate in naming every browser download, regardless of host permissions.
+
+A full-tree search found **zero** `onDeterminingFilename` registrations, `suggest()` filename handlers, or filename-authority maps in the shipped Chrome worker, Firefox worker, or preserved archive-enabled workers. The `downloads` permission is present only because this product starts downloads. The only downloads event listener is `chrome.downloads.onChanged`, which tracks progress/completion/retries and downloaded-history records; it does not participate in filename determination. Downloads are named directly in the `chrome.downloads.download({ filename })` call after `rawPathForItem()` / the existing naming engine builds the configured path.
+
+No production filename/listener change was made: adding `onDeterminingFilename` here would create the exact global cross-extension risk being audited and is unnecessary for this architecture. Existing `{user}`, `{text}`, `{id}`, `{name}`, and `{date}` templates remain the supported way to identify the account and post comment; comments continue to be sanitized and bounded for filesystem safety.
+
+A regression test was added to `tests/background.test.js`, checking all Chrome/Firefox worker variants and the preserved archive source for accidental filename-determination registration. Full offline validation: **195 tests passed**, syntax checks passed, and `git diff --check` passed. This audit does not claim anything about other downloader repositories; each must be checked independently.
+
+Commit: `e39a576 test: guard against global filename listener`.
+
 # Improvement Log
 
 ## 2026-09-03 — v3.15 animated-WebP mode + animated-format fallback chain
