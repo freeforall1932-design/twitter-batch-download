@@ -1,6 +1,6 @@
 # Development Worklist
 
-_Last audited: 2026-09-04._
+_Last audited: 2026-09-08 (v3.16.1 review pass)._
 
 ## Current audit — filename authority / cross-extension interference
 
@@ -12,7 +12,7 @@ _Last audited: 2026-09-04._
 
 ## Review status
 
-The post-v3.15 codebase was re-reviewed for missing/misaligned download logic, duplicated worker variants, listener lifetime, stale filename authority, and packaging/test regressions. No additional production defect was confirmed in this offline pass. Real X/Chrome behavior remains a manual verification item, especially capture completeness and animated output.
+The post-v3.16 tree was re-reviewed for missing logic, Chrome↔Firefox drift, and crash paths. Popup removal is complete. Closed in **v3.16.1**: Firefox MAIN-world inject now retries at `document_start` (same hole as `injectStyles`); `queueChanged` and `storage.local.get` no longer assume a Promise (Firefox callback APIs); video-resolve listed-count matches `submitDomItems` (ack only); `setPanelBehavior` throw falls through to `onClicked`. Remaining work is live-X P0 (quote card, output/naming, Fetch/Rescan/v3.9 capture, garbled-name PENDING REVIEW, release zip), not the toolbar path. Live Firefox about:debugging is still pending.
 
 # Development Worklist
 
@@ -70,7 +70,7 @@ No manual API key / password / cookie paste. Self-hosted against the signed-in X
 | Fetch button / deep fetch | **New (v3.7), needs live-X** | In-page `.xdl-fetch-dock` (Fetch media / Stop / ×) + Side Panel `Fetch media`. Shallow pass (replay + DOM rescan + video resolve, no page movement) runs automatically on tab open and every route change; deep fetch = shallow → existing auto-scroll engine → optional silent `discoveryStart` fill of the same profile (rows land in the Remote fetch list; profiles only, never a single post). Run tokens make Stop authoritative; `scrollStop` stops both engines. |
 | Capture robustness audit (v3.7) | **Done, regression-tested** | Fixed: `safeSend` hung awaiting callers on a dead context (wedged the video resolver until a page reload), a route change dropped its 1800 ms staged scan, one failed video resolve blacklisted that post for the tab's life (now a 2-attempt budget), Stop + restart could leave two scroll loops, every replay re-cloned the whole MAIN-world buffer (now `seq`/`since` incremental), `scrollRescan` had no sender, `window.__xdl_active` dead state, `profileHandleFromUrl` threw on a non-http origin. |
 | Per-tweet action bar | Expanded (Rank A) | `Download` **and** `Add to queue` on every media post, plus toasts. Reimplemented locally, not copied. |
-| Popup DOM auto-scroll bulk | **Removed** | The popup's competing scroll+download loop is deleted; the popup is now an Open-Side-Panel launcher with a live capture status line. |
+| Popup DOM auto-scroll bulk | **Removed (v3.16: popup gone)** | The competing scroll+download loop was deleted in v3.2. v3.16 deleted the leftover launcher popup: toolbar click opens the Side Panel/sidebar directly. |
 | ZIP export (whole-batch) | **Removed — stays removed** | The multi-GB whole-batch archive path stays deleted. v3.5's per-post archive (≤4 images, offscreen-assembled) is a different, explicitly requested feature and must not grow into batch archiving. |
 | Third-party tier/license | Absent | Do not add. |
 | Skip already-downloaded (Rank S "Ignore saved") | Done, extended (v3.10) | `downloadedMediaIdsV1` (legacy ids) is kept in sync with `downloadedMediaRecordsV1` (`{id, mediaKey, url, urlKey, hash, size, filename, at}`), so a re-listed item is held back by id, mediaKey, canonical source URL **or** byte hash. Toggle in the toolbar; resettable — Reset clears both stores. |
@@ -86,7 +86,7 @@ No manual API key / password / cookie paste. Self-hosted against the signed-in X
 
 - Keep **Scroll capture** as the default Side Panel tab. It should feel like the Rank S sidebar pattern: user scrolls X normally, media appears in the side list, user reviews/selects/downloads.
 - Keep **Remote fetch** as a secondary/advanced tab. It is useful, but should not be the first impression because background crawling can trip X rate limits more easily than human scrolling.
-- The popup is no longer the ideal primary UX. Keep it as a fallback until Side Panel scroll capture proves stable, then simplify it to mostly “Open Side Panel.”
+- The popup is gone (v3.16). Click the toolbar icon to open the Side Panel queue.
 - Do not unify the two tab histories yet. The user explicitly preferred separate scroll-captured and remote-fetched lists/queues.
 - Highest-value next improvements are live-test diagnostics, clearer active-tab status, and more robust capture/listing from real X timeline responses.
 

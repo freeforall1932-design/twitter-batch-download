@@ -831,8 +831,13 @@
       if (items.length) {
         safeSend({ action: "queueAdd", items, source: "scroll", skipDownloaded }, (response) => {
           notePassResult(response, items.length);
-          listedCount += response?.addedCount ?? items.length;
-          statusText = `Listed ${listedCount} media item${listedCount === 1 ? "" : "s"} from this tab.`;
+          const added = Number.isFinite(Number(response?.addedCount))
+            ? Math.max(0, Number(response.addedCount))
+            : 0;
+          listedCount += added;
+          if (added > 0) {
+            statusText = `Listed ${listedCount} media item${listedCount === 1 ? "" : "s"} from this tab.`;
+          }
           renderFetchDock();
         });
       }

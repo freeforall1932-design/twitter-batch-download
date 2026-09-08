@@ -1,3 +1,27 @@
+## 2026-09-08 — v3.16.1 review pass (Firefox GraphQL inject, callback-safe worker APIs)
+
+Post-v3.16 review for missing logic, Chrome↔Firefox drift, and crash paths. Toolbar/popup removal itself was complete. Four real defects were closed:
+
+1. **Firefox MAIN-world inject was one-shot.** `injectMainWorldForFirefox()` ran at `document_start` and swallowed a missing `<html>`/`<head>` instead of retrying. Chrome `injectStyles()` already retried via MutationObserver + `DOMContentLoaded`; GraphQL capture on Firefox could stay silently dead on that tab. The shim now retries the same way.
+2. **`sendMessage().catch()` on a callback-only API.** Firefox `chrome.runtime.sendMessage` may return `undefined`. Calling `.catch` threw inside `broadcastQueueChanged` after a successful queue save. Both workers now use `notifyQueueChanged()` (thenable-only `.catch`, try/catch).
+3. **`await chrome.storage.local.get(...)` on callback-only storage.** Same Firefox shape: the await resolved to `undefined`, then reading the missing result threw and the queue never loaded after a restart. New `storageLocalGet()` dual-style helper (callback + Promise) on both workers, used for queue / downloaded-history / discovery loads.
+4. **Video-resolve listed-count was still optimistic.** `submitDomItems()` already counted only a numeric `addedCount`. `resolvePendingVideoTweets` still used `response?.addedCount ?? items.length`, so a dead worker made the dock claim videos were listed. Both ports now share the honest count.
+
+Also: `setPanelBehavior` success is the only path that skips `onClicked`; a throw falls through to the click fallback. `_extApi` remaining unused is intentional (chrome alias when `chrome` is missing). Remaining product work is still live-X P0 (quote card, output/naming, Fetch/Rescan/v3.9 capture, garbled-name PENDING REVIEW, release zip). Manifests **3.16.0 → 3.16.1**.
+
+## 2026-09-08 — v3.16 toolbar click opens the Side Panel (popup removed)
+
+The leftover popup was only a launcher: click the icon, read a status line, click **Open media queue**, then the Side Panel finally appeared. That extra hop ran every time the user wanted to wake the extension.
+
+**What changed**
+
+- Chrome: dropped `action.default_popup`. The worker calls `chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })` so the toolbar icon opens `sidepanel.html` directly. Fallback: `action.onClicked` → `sidePanel.open({ windowId })` when `setPanelBehavior` is missing.
+- Firefox: dropped `browser_action.default_popup`. Toolbar click is the user gesture (`browserAction.onClicked` → `sidebarAction.open()`). View → Sidebar still works.
+- Deleted `popup.html` / `popup.js` from both shipped folders. Status, capture, fetch, and output settings already live in the Side Panel; nothing from the popup needed to be merged.
+- Manifests **3.15.0 → 3.16.0**. Contract test senders no longer include `popup.js`. New regression: neither manifest declares a popup, popup files are gone, Chrome worker sets `openPanelOnActionClick`.
+
+Reload the extension after updating so the toolbar action rebinds.
+
 ## 2026-09-04 — Cross-extension filename-authority audit: no leak found
 
 This audit started from the reported Chrome symptom where another downloader was blamed for determining a different filename, including an empty filename (`""`). The dangerous API is `chrome.downloads.onDeterminingFilename`: merely registering it makes an extension participate in naming every browser download, regardless of host permissions.

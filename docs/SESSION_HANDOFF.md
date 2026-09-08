@@ -1,10 +1,14 @@
 # Session Handoff — X Media Downloader
 
-**Prepared:** 2026-09-04 · **Extension version:** 3.15.0 · **Branch:** `arena/01a06aa4-twitter-batch-download`
+**Prepared:** 2026-09-08 · **Extension version:** 3.16.1 · **Branch:** `arena/01a08160-twitter-batch-download`
 
 ## Current session result
 
-This session audited the extension for the cross-extension filename leak described by the Chrome symptom: another downloader was blamed for determining a different filename, including `""`. A full-tree inventory found no `chrome.downloads.onDeterminingFilename`, `browser.downloads.onDeterminingFilename`, filename `suggest()` handler, or pending filename-authority map in this repository's shipped workers or preserved archive source. The `downloads` permission is used only to start downloads. The sole downloads event listener is `chrome.downloads.onChanged` for progress, completion, retry, and history bookkeeping.
+v3.16.1 is the review pass after removing the leftover popup. Toolbar binding itself was complete. Four defects closed: Firefox MAIN-world `injected.js` inject retries when `<html>` is missing at `document_start`; `notifyQueueChanged()` / `storageLocalGet()` tolerate callback-only Firefox `chrome.*` APIs; video-resolve listed-count is ack-only like `submitDomItems`; `setPanelBehavior` throw falls through to `onClicked`. Manifests **3.16.0 → 3.16.1**. Reload after updating.
+
+Previous: v3.16 removes the leftover launcher popup. Clicking the toolbar icon opens the Side Panel (Chrome `setPanelBehavior({ openPanelOnActionClick: true })`) or Firefox sidebar (`browserAction.onClicked` → `sidebarAction.open()`). `popup.html` / `popup.js` are deleted from both shipped folders; status and Open media queue already lived in the Side Panel. Manifests **3.15.0 → 3.16.0**.
+
+Previous session audited the extension for the cross-extension filename leak described by the Chrome symptom: another downloader was blamed for determining a different filename, including `""`. A full-tree inventory found no `chrome.downloads.onDeterminingFilename`, `browser.downloads.onDeterminingFilename`, filename `suggest()` handler, or pending filename-authority map in this repository's shipped workers or preserved archive source. The `downloads` permission is used only to start downloads. The sole downloads event listener is `chrome.downloads.onChanged` for progress, completion, retry, and history bookkeeping.
 
 The product already builds names directly into `chrome.downloads.download({ filename })`. Its existing template system (`{user}`, `{name}`, `{text}`, `{id}`, `{date}`) is the correct way to identify the account and post comment; the default is `{user} - {text} - {id}`, with bounded/sanitized comment text and the `XMedia/<user>/<post>/001.ext` folder layout. No runtime listener was added, because doing so would create the global naming-chain risk this audit was intended to prevent.
 
@@ -279,7 +283,7 @@ A user should be able to:
 10. Use per-post action-bar buttons — **Download** (immediate) and
    **Add to queue** (batch) — as a convenience surface.
 
-The popup is only a Side Panel launcher plus a capture status line.
+Clicking the toolbar icon opens the Side Panel directly — there is no popup hop.
 
 ---
 
@@ -304,7 +308,7 @@ Cookie headers.
 
 ---
 
-## 4. Current architecture (v3.15.0)
+## 4. Current architecture (v3.16.0)
 
 **Fetch/rescan review note:** queue counts must be based on the worker's numeric `addedCount` acknowledgement. A missing response from an invalidated context is not an accepted row and must never be counted optimistically; content and worker dedupe remain separate layers.
 
@@ -332,8 +336,8 @@ submits through `submitDomItems()`, the path it now shares with
 `scanVisibleMedia()`. Capture therefore no longer depends on a post still being
 in the document when a scan happens to run. |
 | `sidepanel.html/js/css` | Two-tab Side Panel: Scroll capture + Remote fetch. One download action, live active-tab status pill, per-row remove, skip-already-downloaded toggle, **Include quoted** switches, `Clear finished` / `Reset downloaded history` buttons. v3.5: **Output settings** card (master folder, name-template checkboxes + live preview + custom-template input — the ONLY writer of the sync output settings) and the `gif` badge. **v3.8:** `Remove selected` next to `Download selected` (confirm-guarded, sends `queueRemove {ids}`), a `Re-listing this tab` pill state, and a busy state that disables Fetch/Auto-scroll/Rescan during a rescan while leaving **Stop** disabled (nothing to cancel). **v3.7 Scroll card:** `Fetch media` (deep fetch), `Stop`, `Auto-scroll only`, `Rescan tab`, the **Then fetch the rest silently** (`deepFetchRemote`) and **Show the Fetch button on X pages** (`showFetchButton`) switches, a `Reload tab` button that appears in the status pill when the active X tab has no live content script, and a status pill that names the fetch phase. **v3.11:** `One folder per user (XMedia/<user>/…)` checkbox in the Output settings card (default checked, syncs `userFolders`) and re-renders the live name preview (`Downloads/XMedia/nasa/<post>/001.jpg`) on change. **v3.13:** the archive machinery was removed (default-format/job-format picks, archive preview branch, `queueNotices` box + CSS); the GIF select is now actually wired to `storage.sync.gifOutput` (Chrome), and the format picker/notices are gone since output is always separate files. **v3.14/v3.15:** the select offers `gif-max` / `webp` / `apng` / MP4 (default `gif-max` — the balanced GIF option was removed in the v3.15 review, legacy `gif` values render as `gif-max`), persisted via `storage.sync`; the hint explains the quality-vs-size trade-off AND the fallback order (APNG → WebP → GIF → MP4); Firefox copy stays byte-identical. |
-| `popup.html/js` | Side Panel launcher + capture status line. No scroll/download loop. |
-| `tests/` | `background.test.js`, `content.test.js`, plus v3.5: `naming.test.js`, `downloader.test.js` (real v3.13 worker in a VM — **raw-mode** master folder/name-template paths + stale-format regression), v3.6: `gif-encoder.test.js` (round-trip decoder) + `media-kinds.test.js` (quality, GIF identity, raw-GIF conversion via offscreen), v3.6.1: `archive-lib.test.js` (shared-engine byte parity) + 4 background regressions (abort on Stop, `stopped` classification, attempt-budget reset, storage-write recovery), v3.6.3: `injected.test.js` (media-marker walk + replay-buffer bound) + 4 background/naming regressions (deterministic fallback, `queueChanged` throttle, shared `resolveTweetMedia` rules, path agreement), `helpers/load-background.js` (gains `extensionRoot` for the archive worker). **v3.12 follow-up:** `zip-writer.test.js`/`pdf-builder.test.js`/`archive-lib.test.js` import `source/archive-enabled/chrome-extension/lib/*` and `archive-background.test.js` pins the preserved archive worker (archive pipelines, kind rules, warnings, archive-group dedupe). **v3.13:** the two archive-specific tests that were in shipped-worker suites moved to `archive-background.test.js`; shipped suites keep raw-mode + GIF conversion coverage only (169 total). **v3.14:** new `apng-encoder.test.js` (6 tests — per-chunk CRC, fcTL/fdAT sequence checks, zlib inflate, byte-exact true-color gradient, acTL count+CRC patch, CRC vector), 4 max-quality GIF tests (local palettes, dither pattern, LZW growth, solid-frame exactness) and media-kinds chunked-relay/`gif-max`/`apng`/chunk-failure/normalize tests. **v3.15:** `webp-encoder.test.js` (7 tests — RIFF/VP8X/ANIM/ANMF structure + exact durations/frames, alpha propagation, VP8L path, real reference-encoded fixture, rejection guards) and media-kinds webp conversion / fallback-chain tests (chain now `apng → webp → gif-max`; legacy/unknown outputs normalize to `gif-max`); full suite **194 / 0 fail**. |
+| toolbar action | **v3.16:** no popup. Chrome `sidePanel.setPanelBehavior({ openPanelOnActionClick: true })`; Firefox `browserAction.onClicked` → `sidebarAction.open()`. |
+| `tests/` | `background.test.js`, `content.test.js`, plus v3.5: `naming.test.js`, `downloader.test.js` (real v3.13 worker in a VM — **raw-mode** master folder/name-template paths + stale-format regression), v3.6: `gif-encoder.test.js` (round-trip decoder) + `media-kinds.test.js` (quality, GIF identity, raw-GIF conversion via offscreen), v3.6.1: `archive-lib.test.js` (shared-engine byte parity) + 4 background regressions (abort on Stop, `stopped` classification, attempt-budget reset, storage-write recovery), v3.6.3: `injected.test.js` (media-marker walk + replay-buffer bound) + 4 background/naming regressions (deterministic fallback, `queueChanged` throttle, shared `resolveTweetMedia` rules, path agreement), `helpers/load-background.js` (gains `extensionRoot` for the archive worker). **v3.12 follow-up:** `zip-writer.test.js`/`pdf-builder.test.js`/`archive-lib.test.js` import `source/archive-enabled/chrome-extension/lib/*` and `archive-background.test.js` pins the preserved archive worker (archive pipelines, kind rules, warnings, archive-group dedupe). **v3.13:** the two archive-specific tests that were in shipped-worker suites moved to `archive-background.test.js`; shipped suites keep raw-mode + GIF conversion coverage only (169 total). **v3.14:** new `apng-encoder.test.js` (6 tests — per-chunk CRC, fcTL/fdAT sequence checks, zlib inflate, byte-exact true-color gradient, acTL count+CRC patch, CRC vector), 4 max-quality GIF tests (local palettes, dither pattern, LZW growt), 4 max-quality GIF tests (local palettes, dither pattern, LZW growth, solid-frame exactness) and media-kinds chunked-relay/`gif-max`/`apng`/chunk-failure/normalize tests. **v3.15:** `webp-encoder.test.js` (7 tests — RIFF/VP8X/ANIM/ANMF structure + exact durations/frames, alpha propagation, VP8L path, real reference-encoded fixture, rejection guards) and media-kinds webp conversion / fallback-chain tests (chain now `apng → webp → gif-max`; legacy/unknown outputs normalize to `gif-max`); full suite **194 / 0 fail**. |
 
 ### Post-v3.11 review note
 
@@ -355,8 +359,9 @@ re-breaks a bug the user already reported:
    rate-limit testing risks 429s.
 5. **One download action.** `Select all` + `Download selected` replaced the
    redundant `Download all in tab`.
-6. **The popup has no scroll/download loop.** Two engines fought over the page
-   and the popup blocked scrolling on each download.
+6. **No popup.** Two engines used to fight over the page (popup scroll+download
+   vs Side Panel capture). v3.2 deleted the popup loop; v3.16 deleted the
+   leftover launcher popup so the toolbar icon opens the Side Panel directly.
 7. **Stylesheet injection must never throw.** `content.js` runs at
    `document_start`, where `document.head` — and sometimes `document.documentElement`
    — do not exist yet. `injectStyles()` falls back through both parents and, if
@@ -512,6 +517,8 @@ re-breaks a bug the user already reported:
   `fetchAsArrayBuffer`.
 - Popup bulk commands `start` / `stop` / `getStatus`, and the whole
   `localCapture*` command family (`localCaptureWatch/Start/Stop/Status`).
+- `popup.html` / `popup.js` (v3.16) — the leftover launcher popup. The toolbar
+  icon now opens the Side Panel/sidebar directly.
 - The Side Panel `Watch current tab` button and the auto-scroll item limit.
 - The auto-scroll-only in-page badge (`.xdl-autoscroll-badge` +
   `showAutoScrollBadge`/`updateAutoScrollBadge`/`hideAutoScrollBadge`) — folded
