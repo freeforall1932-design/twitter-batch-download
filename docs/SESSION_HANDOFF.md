@@ -1,10 +1,12 @@
 # Session Handoff — X Media Downloader
 
-**Prepared:** 2026-09-08 · **Extension version:** 3.16.0 · **Branch:** `arena/01a08160-twitter-batch-download`
+**Prepared:** 2026-09-08 · **Extension version:** 3.16.1 · **Branch:** `arena/01a08160-twitter-batch-download`
 
 ## Current session result
 
-v3.16 removes the leftover launcher popup. Clicking the toolbar icon opens the Side Panel (Chrome `setPanelBehavior({ openPanelOnActionClick: true })`) or Firefox sidebar (`browserAction.onClicked` → `sidebarAction.open()`). `popup.html` / `popup.js` are deleted from both shipped folders; status and Open media queue already lived in the Side Panel. Manifests **3.15.0 → 3.16.0**.
+v3.16.1 is the review pass after removing the leftover popup. Toolbar binding itself was complete. Four defects closed: Firefox MAIN-world `injected.js` inject retries when `<html>` is missing at `document_start`; `notifyQueueChanged()` / `storageLocalGet()` tolerate callback-only Firefox `chrome.*` APIs; video-resolve listed-count is ack-only like `submitDomItems`; `setPanelBehavior` throw falls through to `onClicked`. Manifests **3.16.0 → 3.16.1**. Reload after updating.
+
+Previous: v3.16 removes the leftover launcher popup. Clicking the toolbar icon opens the Side Panel (Chrome `setPanelBehavior({ openPanelOnActionClick: true })`) or Firefox sidebar (`browserAction.onClicked` → `sidebarAction.open()`). `popup.html` / `popup.js` are deleted from both shipped folders; status and Open media queue already lived in the Side Panel. Manifests **3.15.0 → 3.16.0**.
 
 Previous session audited the extension for the cross-extension filename leak described by the Chrome symptom: another downloader was blamed for determining a different filename, including `""`. A full-tree inventory found no `chrome.downloads.onDeterminingFilename`, `browser.downloads.onDeterminingFilename`, filename `suggest()` handler, or pending filename-authority map in this repository's shipped workers or preserved archive source. The `downloads` permission is used only to start downloads. The sole downloads event listener is `chrome.downloads.onChanged` for progress, completion, retry, and history bookkeeping.
 

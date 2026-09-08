@@ -13,19 +13,40 @@
 // no world: MAIN manifest support). Chrome version uses manifest world: MAIN.
 // ==========================================================================
 
-// Firefox MAIN-world injection shim — runs before IIFE
+// Firefox MAIN-world injection shim — runs before IIFE.
+// document_start can fire before <html> exists (same hole injectStyles()
+// already covers). Swallowing that once and never retrying left GraphQL
+// capture silently dead on the tab.
 (function injectMainWorldForFirefox() {
+  const isFirefox = typeof browser !== "undefined" || (typeof navigator !== "undefined" && /Firefox/i.test(navigator.userAgent || ""));
+  if (!isFirefox) return;
+  function inject() {
+    try {
+      if (document.documentElement?.dataset?.xdlInjected) return true;
+      const parent = document.head || document.documentElement;
+      if (!parent) return false;
+      const script = document.createElement("script");
+      script.src = (typeof browser !== "undefined" ? browser : chrome).runtime.getURL("injected.js");
+      script.onload = function () { this.remove(); };
+      parent.appendChild(script);
+      if (document.documentElement) document.documentElement.dataset.xdlInjected = "1";
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+  if (inject()) return;
+  const retry = () => {
+    if (inject()) {
+      observer.disconnect();
+      document.removeEventListener?.("DOMContentLoaded", retry);
+    }
+  };
+  const observer = new MutationObserver(retry);
   try {
-    const isFirefox = typeof browser !== 'undefined' || navigator.userAgent.includes('Firefox');
-    if (!isFirefox) return;
-    // Avoid double injection
-    if (document.documentElement?.dataset?.xdlInjected) return;
-    const script = document.createElement('script');
-    script.src = (typeof browser !== 'undefined' ? browser : chrome).runtime.getURL('injected.js');
-    script.onload = function() { this.remove(); };
-    (document.head || document.documentElement).appendChild(script);
-    if (document.documentElement) document.documentElement.dataset.xdlInjected = '1';
-  } catch (_) {}
+    observer.observe(document, { childList: true });
+  } catch (_) { /* Document-target observe is unavailable in some shims */ }
+  document.addEventListener("DOMContentLoaded", retry, { once: true });
 })();
 
 (() => {
@@ -848,8 +869,13 @@
       if (items.length) {
         safeSend({ action: "queueAdd", items, source: "scroll", skipDownloaded }, (response) => {
           notePassResult(response, items.length);
-          listedCount += response?.addedCount ?? items.length;
-          statusText = `Listed ${listedCount} media item${listedCount === 1 ? "" : "s"} from this tab.`;
+          const added = Number.isFinite(Number(response?.addedCount))
+            ? Math.max(0, Number(response.addedCount))
+            : 0;
+          listedCount += added;
+          if (added > 0) {
+            statusText = `Listed ${listedCount} media item${listedCount === 1 ? "" : "s"} from this tab.`;
+          }
           renderFetchDock();
         });
       }

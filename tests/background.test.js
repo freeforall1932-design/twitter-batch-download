@@ -21,6 +21,10 @@ test("toolbar click opens the side panel with no popup hop", () => {
   assert.match(chromeBg, /openPanelOnActionClick:\s*true/);
   assert.match(firefoxBg, /sidebarAction/);
   assert.match(firefoxBg, /bindToolbarToSidePanel/);
+
+  const firefoxContent = fs.readFileSync(path.join(__dirname, "..", "firefox-extension", "content.js"), "utf8");
+  assert.match(firefoxContent, /function injectMainWorldForFirefox/);
+  assert.match(firefoxContent, /MutationObserver\(retry\)/, "Firefox MAIN inject must retry when <html> is not ready at document_start");
 });
 
 test("no worker registers a global filename-determination listener", () => {
@@ -99,7 +103,7 @@ function loadBackground(options = {}) {
       scripting: { executeScript: async () => [] },
       storage: {
         local: {
-          get: async (key) => ({ [key]: stored[key] }),
+          get: options.localGet || (async (key) => ({ [key]: stored[key] })),
           set: options.localSet || (async (values) => { Object.assign(stored, values); })
         },
         sync: {
@@ -832,6 +836,41 @@ test("a rejected storage write cannot poison later queue saves", async () => {
     Array.from(background.__stored.batchDownloadQueueV1.items, (item) => item.id),
     ["b", "a"]
   );
+});
+
+test("queueChanged notify is safe when sendMessage returns no Promise", async () => {
+  const sends = [];
+  const background = loadBackground({
+    runtimeSendMessage: (message) => {
+      sends.push(message);
+      return undefined;
+    }
+  });
+  await background.getQueueState();
+  await background.saveQueueState();
+  assert.equal(sends.length, 1);
+  assert.equal(sends[0].action, "queueChanged");
+});
+
+test("queue state loads when storage.local.get is callback-only", async () => {
+  const stored = {
+    batchDownloadQueueV1: {
+      items: [{ id: "cb", url: "https://example.test/cb", filename: "cb.jpg", status: "discovered" }],
+      concurrency: 2,
+      running: false,
+      stopped: false
+    }
+  };
+  const background = loadBackground({
+    stored,
+    localGet: (key, callback) => {
+      const value = { [key]: stored[key] };
+      if (typeof callback === "function") callback(value);
+      return undefined;
+    }
+  });
+  const state = await background.handleQueueMessage({ action: "queueGet" });
+  assert.equal(state.items[0].id, "cb");
 });
 
 test("queueChanged broadcasts are throttled during a burst of saves", async () => {

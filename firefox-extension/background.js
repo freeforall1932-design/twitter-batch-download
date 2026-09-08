@@ -1129,10 +1129,20 @@ const QUEUE_CHANGED_TICK_MS = 250;
 let queueChangedTimer = null;
 let queueChangedPending = false;
 
+function notifyQueueChanged() {
+  // Chrome MV3 returns a Promise; Firefox chrome.* may be callback-only and
+  // return undefined. Calling `.catch` on undefined threw and aborted the
+  // save that just succeeded.
+  try {
+    const maybe = chrome.runtime.sendMessage({ action: "queueChanged" });
+    if (maybe && typeof maybe.catch === "function") maybe.catch(() => {});
+  } catch (_) { /* no listener yet is normal */ }
+}
+
 function broadcastQueueChanged() {
   // Leading edge: emit immediately so the Side Panel stays responsive.
   if (!queueChangedTimer) {
-    chrome.runtime.sendMessage({ action: "queueChanged" }).catch(() => {});
+    notifyQueueChanged();
     queueChangedTimer = setTimeout(() => {
       queueChangedTimer = null;
       // Trailing edge: anything a burst of writes stacked inside the window is
@@ -1140,7 +1150,7 @@ function broadcastQueueChanged() {
       // carries no payload, so the Side Panel just re-reads the freshest state.
       if (queueChangedPending) {
         queueChangedPending = false;
-        chrome.runtime.sendMessage({ action: "queueChanged" }).catch(() => {});
+        notifyQueueChanged();
       }
     }, QUEUE_CHANGED_TICK_MS);
     return;
@@ -1198,11 +1208,26 @@ function rebuildDownloadedIndexes() {
   }
 }
 
+function storageLocalGet(key) {
+  // Chrome MV3 returns a Promise; Firefox chrome.* may be callback-only.
+  // `await chrome.storage.local.get(key)` on undefined then threw when reading
+  // the missing result, so the queue never loaded after a restart.
+  return new Promise((resolve) => {
+    try {
+      const done = (values) => resolve(values || {});
+      const maybe = chrome.storage.local.get(key, done);
+      if (maybe && typeof maybe.then === "function") maybe.then(done, () => done({}));
+    } catch (_) {
+      resolve({});
+    }
+  });
+}
+
 async function getDownloadedRecords() {
   if (downloadedRecords) return downloadedRecords;
   const [recordStore, legacyStore] = await Promise.all([
-    chrome.storage.local.get(DOWNLOADED_RECORDS_KEY),
-    chrome.storage.local.get(DOWNLOADED_STORAGE_KEY)
+    storageLocalGet(DOWNLOADED_RECORDS_KEY),
+    storageLocalGet(DOWNLOADED_STORAGE_KEY)
   ]);
   const list = Array.isArray(recordStore[DOWNLOADED_RECORDS_KEY]) ? recordStore[DOWNLOADED_RECORDS_KEY] : [];
   downloadedRecords = list.filter(isDownloadedRecord);
@@ -1533,7 +1558,7 @@ async function reconcileQueueAfterRestart(state) {
 
 async function getQueueState() {
   if (queueState) return queueState;
-  const stored = await chrome.storage.local.get(QUEUE_STORAGE_KEY);
+  const stored = await storageLocalGet(QUEUE_STORAGE_KEY);
   queueState = { ...QUEUE_DEFAULT, ...(stored[QUEUE_STORAGE_KEY] || {}) };
   queueState.concurrency = queueState.concurrency === 1 ? 1 : 2;
   // Service workers can stop while Chrome downloads continue (or before a
@@ -1736,8 +1761,8 @@ function bindToolbarToSidePanel() {
     try {
       const maybe = chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
       if (maybe && typeof maybe.catch === "function") maybe.catch(() => {});
-    } catch (_) { /* older Chrome may not return a Promise */ }
-    return;
+      return;
+    } catch (_) { /* API present but unusable — fall through to onClicked */ }
   }
   const action = chrome.action || chrome.browserAction;
   if (!action?.onClicked) return;
@@ -1989,7 +2014,7 @@ async function getDiscoveryState() {
   if (discoveryState) return discoveryState;
   if (!discoveryStateLoading) {
     discoveryStateLoading = (async () => {
-      const stored = await chrome.storage.local.get(DISCOVERY_STORAGE_KEY);
+      const stored = await storageLocalGet(DISCOVERY_STORAGE_KEY);
       discoveryState = { ...DEFAULT_DISCOVERY, ...(stored[DISCOVERY_STORAGE_KEY] || {}) };
       // A worker cannot safely resume an unknown in-flight request after suspension.
       if (discoveryState.running) discoveryState = { ...discoveryState, running: false, stopRequested: true, activeRunId: null, status: "Discovery paused when the extension restarted." };

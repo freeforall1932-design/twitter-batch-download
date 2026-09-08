@@ -1,6 +1,6 @@
 # Development Worklist
 
-_Last audited: 2026-09-04._
+_Last audited: 2026-09-08 (v3.16.1 review pass)._
 
 ## Current audit — filename authority / cross-extension interference
 
@@ -12,7 +12,7 @@ _Last audited: 2026-09-04._
 
 ## Review status
 
-The post-v3.15 codebase was re-reviewed for missing/misaligned download logic, duplicated worker variants, listener lifetime, stale filename authority, and packaging/test regressions. No additional production defect was confirmed in this offline pass. Real X/Chrome behavior remains a manual verification item, especially capture completeness and animated output.
+The post-v3.16 tree was re-reviewed for missing logic, Chrome↔Firefox drift, and crash paths. Popup removal is complete. Closed in **v3.16.1**: Firefox MAIN-world inject now retries at `document_start` (same hole as `injectStyles`); `queueChanged` and `storage.local.get` no longer assume a Promise (Firefox callback APIs); video-resolve listed-count matches `submitDomItems` (ack only); `setPanelBehavior` throw falls through to `onClicked`. Remaining work is live-X P0 (quote card, output/naming, Fetch/Rescan/v3.9 capture, garbled-name PENDING REVIEW, release zip), not the toolbar path. Live Firefox about:debugging is still pending.
 
 # Development Worklist
 
