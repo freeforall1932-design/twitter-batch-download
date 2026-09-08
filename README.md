@@ -30,7 +30,7 @@ Self-hosted against your signed-in X session. No third-party accounts, API keys,
 - **Live session capture** — MAIN-world observer learns current GraphQL operation IDs and safe request headers from the open X tab.
 - **No third-party services** — Calls go to X only, using your browser session.
 
-The popup is just a launcher for the Side Panel — all capture, review, and downloading happens there.
+Click the toolbar icon to open the Side Panel queue — all capture, review, and downloading happens there.
 
 ## Installation
 
@@ -38,7 +38,7 @@ The popup is just a launcher for the Side Panel — all capture, review, and dow
 2. Open `chrome://extensions/` and enable **Developer mode**.
 3. **Load unpacked** → select the **`extension/`** folder (it contains `manifest.json` at its root).
 4. Sign in to [x.com](https://x.com) in that Chrome profile.
-5. Open the extension popup → **Open media queue** (Side Panel), or use the on-post buttons.
+5. Click the toolbar icon to open the Side Panel queue, or use the on-post buttons.
 
 You must be logged in to X. The extension uses your existing session — no API keys or passwords.
 
@@ -46,7 +46,7 @@ You must be logged in to X. The extension uses your existing session — no API 
 
 ### Scroll capture (primary)
 
-1. Open the Side Panel (popup → **Open media queue**). It stays on **Scroll capture**.
+1. Click the toolbar icon to open the Side Panel. It stays on **Scroll capture**.
 2. Open any X view — home timeline, a profile, a profile's `/media` tab, or a single post. Its first batch lists itself within a couple of seconds (v3.7 shallow fetch); no scrolling and no reload needed.
 3. Scroll normally, at whatever speed you like. Media appears in the panel as you go — including posts you scroll straight past, which are captured on the way out rather than only while they are on screen. Switching views inside the same tab works without reloading.
 4. Want the whole view without scrolling? Press **Fetch media** — on the page (floating button, bottom-right) or in the Side Panel. It reads the tab, scrolls the timeline to the end at the speed you picked, then (if **Then fetch the rest silently** is on) pages the same profile through the Remote fetch engine; those extra rows land in the **Remote fetch** list. The page button turns into **Stop** while it runs, and the panel's **Stop** cancels both phases.
@@ -107,10 +107,9 @@ No data is sent to third-party extension backends.
 │   ├── background.js          #   Auth, GraphQL, queue, discovery, downloads (raw only)
 │   ├── injected.js            #   MAIN-world GraphQL/header capture
 │   ├── content.js             #   Capture forwarder, action bar, DOM bulk
-│   ├── sidepanel.html/js/css  #   Batch queue UI + Output settings card
+│   ├── sidepanel.html/js/css  #   Batch queue UI + Output settings card (opens from the toolbar icon)
 │   ├── offscreen.html/js      #   MP4 clip → .gif / .webp / APNG conversion document (chrome.runtime ONLY)
 │   ├── lib/                   #   naming.js, dedupe.js, gifEncoder.js, webpEncoder.js, apngEncoder.js (shared with tests)
-│   ├── popup.html/js          #   Side Panel launcher + capture status
 │   └── icon48.png / icon128.png
 ├── source/archive-enabled/    # Preserved pre-v3.12 archive build (NOT a Load-unpacked target)
 ├── firefox-extension/         # Firefox port of the same raw-only build (no offscreen)

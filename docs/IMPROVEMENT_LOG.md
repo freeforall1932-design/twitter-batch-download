@@ -1,3 +1,16 @@
+## 2026-09-08 — v3.16 toolbar click opens the Side Panel (popup removed)
+
+The leftover popup was only a launcher: click the icon, read a status line, click **Open media queue**, then the Side Panel finally appeared. That extra hop ran every time the user wanted to wake the extension.
+
+**What changed**
+
+- Chrome: dropped `action.default_popup`. The worker calls `chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })` so the toolbar icon opens `sidepanel.html` directly. Fallback: `action.onClicked` → `sidePanel.open({ windowId })` when `setPanelBehavior` is missing.
+- Firefox: dropped `browser_action.default_popup`. Toolbar click is the user gesture (`browserAction.onClicked` → `sidebarAction.open()`). View → Sidebar still works.
+- Deleted `popup.html` / `popup.js` from both shipped folders. Status, capture, fetch, and output settings already live in the Side Panel; nothing from the popup needed to be merged.
+- Manifests **3.15.0 → 3.16.0**. Contract test senders no longer include `popup.js`. New regression: neither manifest declares a popup, popup files are gone, Chrome worker sets `openPanelOnActionClick`.
+
+Reload the extension after updating so the toolbar action rebinds.
+
 ## 2026-09-04 — Cross-extension filename-authority audit: no leak found
 
 This audit started from the reported Chrome symptom where another downloader was blamed for determining a different filename, including an empty filename (`""`). The dangerous API is `chrome.downloads.onDeterminingFilename`: merely registering it makes an extension participate in naming every browser download, regardless of host permissions.

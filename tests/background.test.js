@@ -4,6 +4,25 @@ const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
+test("toolbar click opens the side panel with no popup hop", () => {
+  const chromeManifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "extension", "manifest.json"), "utf8"));
+  const firefoxManifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "firefox-extension", "manifest.json"), "utf8"));
+  assert.equal(chromeManifest.action.default_popup, undefined, "Chrome action must not declare a popup");
+  assert.equal(chromeManifest.side_panel.default_path, "sidepanel.html");
+  assert.equal(firefoxManifest.browser_action.default_popup, undefined, "Firefox browser_action must not declare a popup");
+  assert.equal(firefoxManifest.sidebar_action.default_panel, "sidepanel.html");
+  assert.equal(fs.existsSync(path.join(__dirname, "..", "extension", "popup.html")), false);
+  assert.equal(fs.existsSync(path.join(__dirname, "..", "extension", "popup.js")), false);
+  assert.equal(fs.existsSync(path.join(__dirname, "..", "firefox-extension", "popup.html")), false);
+  assert.equal(fs.existsSync(path.join(__dirname, "..", "firefox-extension", "popup.js")), false);
+
+  const chromeBg = fs.readFileSync(path.join(__dirname, "..", "extension", "background.js"), "utf8");
+  const firefoxBg = fs.readFileSync(path.join(__dirname, "..", "firefox-extension", "background.js"), "utf8");
+  assert.match(chromeBg, /openPanelOnActionClick:\s*true/);
+  assert.match(firefoxBg, /sidebarAction/);
+  assert.match(firefoxBg, /bindToolbarToSidePanel/);
+});
+
 test("no worker registers a global filename-determination listener", () => {
   // `downloads` permission is needed for our own saves, but
   // onDeterminingFilename would make the worker a participant in every
@@ -1480,7 +1499,7 @@ test("every runtime action the UI sends has a handler, and every handler is reac
   const read = (name) => fs.readFileSync(path.join(__dirname, "..", "extension", name), "utf8");
   const background = read("background.js");
   const content = read("content.js");
-  const senders = ["content.js", "sidepanel.js", "popup.js"].map(read).join("\n");
+  const senders = ["content.js", "sidepanel.js"].map(read).join("\n");
 
   const actions = (source, pattern) => new Set(
     [...source.matchAll(pattern)]

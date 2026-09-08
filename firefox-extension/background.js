@@ -1728,6 +1728,38 @@ if (chrome.runtime.onInstalled) {
   });
 }
 
+// Toolbar icon opens the sidebar directly. The old popup was only a launcher
+// for the same queue — clicking the icon then "Open media queue" was an extra
+// hop every time the user wanted to wake the extension.
+function bindToolbarToSidePanel() {
+  if (chrome.sidePanel?.setPanelBehavior) {
+    try {
+      const maybe = chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+      if (maybe && typeof maybe.catch === "function") maybe.catch(() => {});
+    } catch (_) { /* older Chrome may not return a Promise */ }
+    return;
+  }
+  const action = chrome.action || chrome.browserAction;
+  if (!action?.onClicked) return;
+  action.onClicked.addListener((tab) => {
+    if (chrome.sidePanel?.open) {
+      const windowId = tab?.windowId;
+      if (windowId != null) {
+        chrome.sidePanel.open({ windowId }).catch(() => {});
+        return;
+      }
+      chrome.windows.getCurrent((win) => {
+        if (win?.id) chrome.sidePanel.open({ windowId: win.id }).catch(() => {});
+      });
+      return;
+    }
+    if (typeof chrome.sidebarAction?.open === "function") {
+      Promise.resolve(chrome.sidebarAction.open()).catch(() => {});
+    }
+  });
+}
+bindToolbarToSidePanel();
+
 chrome.downloads.onChanged.addListener(async (delta) => {
   // v3.10: direct (one-click) downloads are not queue items; their digest
   // waits here until the file finishes, then joins the verification history.

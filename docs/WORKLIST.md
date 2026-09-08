@@ -70,7 +70,7 @@ No manual API key / password / cookie paste. Self-hosted against the signed-in X
 | Fetch button / deep fetch | **New (v3.7), needs live-X** | In-page `.xdl-fetch-dock` (Fetch media / Stop / ×) + Side Panel `Fetch media`. Shallow pass (replay + DOM rescan + video resolve, no page movement) runs automatically on tab open and every route change; deep fetch = shallow → existing auto-scroll engine → optional silent `discoveryStart` fill of the same profile (rows land in the Remote fetch list; profiles only, never a single post). Run tokens make Stop authoritative; `scrollStop` stops both engines. |
 | Capture robustness audit (v3.7) | **Done, regression-tested** | Fixed: `safeSend` hung awaiting callers on a dead context (wedged the video resolver until a page reload), a route change dropped its 1800 ms staged scan, one failed video resolve blacklisted that post for the tab's life (now a 2-attempt budget), Stop + restart could leave two scroll loops, every replay re-cloned the whole MAIN-world buffer (now `seq`/`since` incremental), `scrollRescan` had no sender, `window.__xdl_active` dead state, `profileHandleFromUrl` threw on a non-http origin. |
 | Per-tweet action bar | Expanded (Rank A) | `Download` **and** `Add to queue` on every media post, plus toasts. Reimplemented locally, not copied. |
-| Popup DOM auto-scroll bulk | **Removed** | The popup's competing scroll+download loop is deleted; the popup is now an Open-Side-Panel launcher with a live capture status line. |
+| Popup DOM auto-scroll bulk | **Removed (v3.16: popup gone)** | The competing scroll+download loop was deleted in v3.2. v3.16 deleted the leftover launcher popup: toolbar click opens the Side Panel/sidebar directly. |
 | ZIP export (whole-batch) | **Removed — stays removed** | The multi-GB whole-batch archive path stays deleted. v3.5's per-post archive (≤4 images, offscreen-assembled) is a different, explicitly requested feature and must not grow into batch archiving. |
 | Third-party tier/license | Absent | Do not add. |
 | Skip already-downloaded (Rank S "Ignore saved") | Done, extended (v3.10) | `downloadedMediaIdsV1` (legacy ids) is kept in sync with `downloadedMediaRecordsV1` (`{id, mediaKey, url, urlKey, hash, size, filename, at}`), so a re-listed item is held back by id, mediaKey, canonical source URL **or** byte hash. Toggle in the toolbar; resettable — Reset clears both stores. |
@@ -86,7 +86,7 @@ No manual API key / password / cookie paste. Self-hosted against the signed-in X
 
 - Keep **Scroll capture** as the default Side Panel tab. It should feel like the Rank S sidebar pattern: user scrolls X normally, media appears in the side list, user reviews/selects/downloads.
 - Keep **Remote fetch** as a secondary/advanced tab. It is useful, but should not be the first impression because background crawling can trip X rate limits more easily than human scrolling.
-- The popup is no longer the ideal primary UX. Keep it as a fallback until Side Panel scroll capture proves stable, then simplify it to mostly “Open Side Panel.”
+- The popup is gone (v3.16). Click the toolbar icon to open the Side Panel queue.
 - Do not unify the two tab histories yet. The user explicitly preferred separate scroll-captured and remote-fetched lists/queues.
 - Highest-value next improvements are live-test diagnostics, clearer active-tab status, and more robust capture/listing from real X timeline responses.
 

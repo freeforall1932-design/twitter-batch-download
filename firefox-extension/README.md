@@ -26,7 +26,7 @@ Keeping separate folder avoids conditional manifest and allows `about:debugging`
 | offscreen | offscreen.html/js for ZIP/CBZ/PDF + GIF conversion | removed from manifest; background fallback builds ZIP/CBZ/PDF via lib/archive.js + data: URL (same as Chrome fallback). GIF conversion currently degrades to MP4 because offscreen video+canvas not available in background page without DOM video decoding — can be upgraded to background canvas decode. |
 | content_scripts world MAIN | manifest world: MAIN for injected.js | content.js injects injected.js via script tag using runtime.getURL |
 | scripting | chrome.scripting.executeScript | _executeScriptCompat() wrapper: scripting if available else tabs.executeScript |
-| popup | sidePanel.open() | sidebarAction.open() with fallback |
+| toolbar icon | sidePanel.setPanelBehavior(openPanelOnActionClick) | browserAction.onClicked → sidebarAction.open() |
 | permissions | host_permissions separate | hosts inside permissions (MV2) |
 | storage.sync | unlimited-ish | limited; getOutputSettings already falls back to defaults |
 
@@ -36,7 +36,7 @@ Keeping separate folder avoids conditional manifest and allows `about:debugging`
 2. Click Load Temporary Add-on
 3. Select `firefox-extension/manifest.json`
 4. Open `x.com`, sign in
-5. Open sidebar: View → Sidebar → X Media Queue, or click browser action → Open media queue (popup tries sidebarAction.open)
+5. Open sidebar: click the toolbar icon (opens the queue directly), or View → Sidebar → X Media Queue
 6. Scroll X, media lists in sidebar
 
 ## Known limitations (Firefox)
@@ -45,7 +45,7 @@ Keeping separate folder avoids conditional manifest and allows `about:debugging`
 - Archives save via data: URL, not anchor. Data URLs honor subfolders? In Firefox, downloads API does support relative subpaths like Chrome. Tested: `XMedia/<post>/001.jpg` works.
 - `chrome.downloads.search` promise vs callback: code already handles both.
 - No `chrome.offscreen` — `ensureOffscreenDocument()` returns false, triggers worker path.
-- `sidebar_action` cannot be opened programmatically in all Firefox versions without user gesture — popup handles with try/catch.
+- `sidebar_action` cannot be opened programmatically without a user gesture — the toolbar click is that gesture (`browserAction.onClicked` → `sidebarAction.open()`).
 
 ## Next steps to full parity
 
